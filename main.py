@@ -2,8 +2,11 @@
 
 import os
 
+from console_encoding import configure_utf8_console
 from brain_batch_alpha import BrainBatchAlpha
 from dataset_config import get_dataset_by_index, get_dataset_list
+
+configure_utf8_console()
 
 STORAGE_ALPHA_ID_PATH = "alpha_ids.txt"
 

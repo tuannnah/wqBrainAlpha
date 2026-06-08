@@ -3,6 +3,10 @@ import os
 import sys
 import shutil
 
+from console_encoding import configure_utf8_console
+
+configure_utf8_console()
+
 # 确保目录存在
 if not os.path.exists('dist'):
     os.makedirs('dist')
