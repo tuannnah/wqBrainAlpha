@@ -23,7 +23,9 @@ Cập nhật lần cuối: 2026-06-10
 | ✅ Phase 1 | Storage + WorldQuant metadata | Hoàn thành (38 test OK) |
 | ✅ Phase 2 | DeepSeek generation + expression validation | Hoàn thành (59 test OK) |
 | ✅ Phase 3 | Research engine + logging + stop control | Hoàn thành (75 test OK) |
-| ⬜ Phase 4 | CLI migration + packaging + docs | Chưa bắt đầu |
+| ✅ Phase 4 | CLI migration + packaging + docs | Hoàn thành (84 test OK) |
+
+**🎉 Tất cả 4 phase đã hoàn thành.**
 
 ## Phase 1 — Storage & Metadata
 
@@ -61,7 +63,15 @@ Cập nhật lần cuối: 2026-06-10
 
 ## Phase 4 — CLI & Packaging
 
-Xem [`plans/...phase-4-cli-packaging.md`](superpowers/plans/2026-06-09-alpha-research-phase-4-cli-packaging.md) — chi tiết bổ sung khi tới Phase 4.
+| Task | Mô tả | File chính | Trạng thái |
+|---|---|---|---|
+| 1 | Menu snapshot + xem review queue | `main.py` | ✅ |
+| 2 | Xóa dataset/strategy hard-code | (xóa `dataset_config.py`, `alpha_strategy.py`) | ✅ |
+| 3 | Đóng gói + quy tắc dữ liệu runtime | `build*.py`, `create_zipapp.py`, `.gitignore` | ✅ |
+| 4 | README + tài liệu vận hành | `README.md` | ✅ |
+| 5 | Kiểm chứng toàn bộ | — | ✅ |
+
+> Ghi chú: chưa chạy `build_windows.py` để tạo `.exe` thật (cần PyInstaller, tốn thời gian) và chưa smoke-test bằng tài khoản/API thật. Toàn bộ test tự động (84) đã pass.
 
 ## Nhật Ký
 
@@ -69,3 +79,4 @@ Xem [`plans/...phase-4-cli-packaging.md`](superpowers/plans/2026-06-09-alpha-res
 - **2026-06-10**: Hoàn thành Phase 1 (5 task, TDD, mỗi task 1 commit). `brain_batch_alpha.py` giờ kế thừa `WorldQuantClient`. Tổng 38 test OK, compile + pip check + diff sạch.
 - **2026-06-11**: Hoàn thành Phase 2 (7 task). Đã cài `lark`. Thêm research_store, deepseek_client, candidate_selector, expression_parser, expression_validator, qualification. Tổng 59 test OK.
 - **2026-06-11**: Hoàn thành Phase 3 (7 task). Thêm run_control, logging_setup, alpha_prompts, research_engine (state machine idea→lô→cha→biến thể, dừng theo target/quit), integration test. Tổng 75 test OK.
+- **2026-06-11**: Hoàn thành Phase 4 (5 task). main.py thành menu snapshot/engine/review; xóa dataset_config.py + alpha_strategy.py; cập nhật build/zipapp/.gitignore; viết lại README. Tổng 84 test OK, compile/pip/diff sạch. **Toàn bộ dự án hoàn tất.**
