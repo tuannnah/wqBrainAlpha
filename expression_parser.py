@@ -130,3 +130,50 @@ def fingerprint(expression, field_ids):
 
     tokens = _tokens(expression)
     return _fingerprint_from_tokens(tokens, set(field_ids))
+
+
+@dataclass(frozen=True)
+class FieldContext:
+    name: str
+    ancestors: List[str]
+    parent_operator: str
+
+
+def iter_field_contexts(expression):
+    """Liệt kê mỗi identifier kèm chuỗi operator tổ tiên và operator cha trực tiếp."""
+
+    tree = _tree(expression)
+    results = []
+    _walk_contexts(tree, [], results)
+    return results
+
+
+def _walk_contexts(node, ancestors, results):
+    if isinstance(node, Token):
+        return
+    if not isinstance(node, Tree):
+        return
+
+    if node.data == "function_call":
+        operator = str(node.children[0])
+        inner_ancestors = ancestors + [operator]
+        for child in node.children[1:]:
+            _walk_child(child, inner_ancestors, operator, results)
+        return
+
+    if node.data == "keyword_argument":
+        for child in node.children[1:]:
+            _walk_child(child, ancestors, ancestors[-1] if ancestors else None, results)
+        return
+
+    parent = ancestors[-1] if ancestors else None
+    for child in node.children:
+        _walk_child(child, ancestors, parent, results)
+
+
+def _walk_child(child, ancestors, parent_operator, results):
+    if isinstance(child, Token):
+        if child.type == "NAME":
+            results.append(FieldContext(str(child), list(ancestors), parent_operator))
+        return
+    _walk_contexts(child, ancestors, results)
