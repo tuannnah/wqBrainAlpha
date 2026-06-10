@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from research_models import Scope
+
 
 SCHEMA_VERSION = 1
 
@@ -341,6 +343,63 @@ class MetadataStore:
         params.append(limit)
         rows = self.connection.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
+
+    def dataset_catalog(self, limit=None, excluded_ids=None):
+        sql = (
+            "SELECT d.id, d.name, d.description, d.category_id,"
+            " COUNT(f.id) AS field_count FROM datasets d"
+            " LEFT JOIN data_fields f ON f.dataset_id = d.id"
+        )
+        params = []
+        if excluded_ids:
+            placeholders = ",".join("?" for _ in excluded_ids)
+            sql += f" WHERE d.id NOT IN ({placeholders})"
+            params.extend(excluded_ids)
+        sql += " GROUP BY d.id ORDER BY field_count DESC, d.id"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [dict(row) for row in self.connection.execute(sql, params).fetchall()]
+
+    def fields_in_datasets(self, dataset_ids, limit):
+        if not dataset_ids:
+            return []
+        placeholders = ",".join("?" for _ in dataset_ids)
+        rows = self.connection.execute(
+            "SELECT id, dataset_id, description, field_type FROM data_fields"
+            f" WHERE dataset_id IN ({placeholders}) ORDER BY id LIMIT ?",
+            [*dataset_ids, limit],
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def field_records(self, field_ids):
+        if not field_ids:
+            return []
+        placeholders = ",".join("?" for _ in field_ids)
+        rows = self.connection.execute(
+            "SELECT id, dataset_id, description, field_type FROM data_fields"
+            f" WHERE id IN ({placeholders})",
+            list(field_ids),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def operators_for_types(self, field_types=None):
+        rows = self.connection.execute(
+            "SELECT name, operator_scope, definition, description, level FROM operators"
+            " ORDER BY name"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def scope_for_dataset(self, dataset_id):
+        rows = self.connection.execute(
+            "SELECT s.instrument_type, s.region, s.delay, s.universe FROM scopes s"
+            " JOIN dataset_scopes ds ON ds.scope_id = s.id WHERE ds.dataset_id = ?",
+            (dataset_id,),
+        ).fetchall()
+        return [
+            Scope(row["instrument_type"], row["region"], row["delay"], row["universe"])
+            for row in rows
+        ]
 
     # -- Completion --------------------------------------------------------
 
