@@ -6,40 +6,54 @@ import sys
 
 
 def create_zipapp():
-    # 创建临时目录
+    # Tạo thư mục build tạm.
     build_dir = "build"
     if os.path.exists(build_dir):
         shutil.rmtree(build_dir)
     os.makedirs(build_dir)
 
-    # 复制源文件
+    # Sao chép file nguồn (toàn bộ module runtime của pipeline nghiên cứu).
     source_files = [
         "main.py",
+        "console_encoding.py",
         "brain_batch_alpha.py",
-        "alpha_strategy.py",
-        "dataset_config.py",
+        "worldquant_client.py",
+        "account_storage.py",
+        "research_config.py",
+        "research_models.py",
+        "metadata_store.py",
+        "metadata_sync.py",
+        "research_store.py",
+        "deepseek_client.py",
+        "candidate_selector.py",
+        "expression_parser.py",
+        "expression_validator.py",
+        "qualification.py",
+        "alpha_prompts.py",
+        "research_engine.py",
+        "run_control.py",
+        "logging_setup.py",
     ]
 
     for file in source_files:
         shutil.copy2(file, build_dir)
 
-    # 复制配置文件
+    # Sao chép file cấu hình nghiên cứu.
     config_files = [
-        "brain_credentials.txt",
-        "alpha_ids.txt",
+        "research_config.json",
     ]
 
     for file in config_files:
         if os.path.exists(file):
             shutil.copy2(file, build_dir)
         else:
-            print(f"Warning: {file} not found, will be created on first run")
+            print(f"Warning: không tìm thấy {file}, file sẽ được tạo khi chạy lần đầu")
 
-    # 创建 requirements.txt
+    # Tạo requirements.txt cho gói zipapp.
     with open(os.path.join(build_dir, "requirements.txt"), "w") as f:
-        f.write("requests>=2.31.0\npandas>=2.0.0\n")
+        f.write("requests>=2.31.0\npandas>=2.0.0\nlark>=1.1.9,<2\n")
 
-    # 创建 __main__.py
+    # Tạo __main__.py để chạy chương trình trong zipapp.
     with open(os.path.join(build_dir, "__main__.py"), "w") as f:
         f.write("""
 import sys
@@ -50,7 +64,7 @@ def install_deps():
     import subprocess
     import pkg_resources
 
-    required = {'requests>=2.31.0', 'pandas>=2.0.0'}
+    required = {'requests>=2.31.0', 'pandas>=2.0.0', 'lark>=1.1.9,<2'}
     installed = {f"{pkg.key}=={pkg.version}" for pkg in pkg_resources.working_set}
     missing = required - installed
 
@@ -59,15 +73,15 @@ def install_deps():
 
 
 if __name__ == '__main__':
-    # 安装依赖
+    # Cài dependency còn thiếu.
     install_deps()
 
-    # 导入主程序
+    # Import và chạy chương trình chính.
     from main import main
     main()
 """)
 
-    # 创建可执行文件
+    # Tạo file zipapp có thể chạy.
     output = "Alpha_Tool.pyz"
     if os.path.exists(output):
         os.remove(output)
@@ -79,8 +93,8 @@ if __name__ == '__main__':
         compressed=True
     )
 
-    print(f"\n✅ 成功创建 {output}")
-    print("使用方法：")
+    print(f"\n✅ Tạo thành công {output}")
+    print("Cách sử dụng:")
     print(f"python {output}")
 
 

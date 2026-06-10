@@ -7,52 +7,64 @@ from console_encoding import configure_utf8_console
 
 configure_utf8_console()
 
-# 确保目录存在
+# Đảm bảo thư mục dist tồn tại.
 if not os.path.exists('dist'):
     os.makedirs('dist')
 
-# 设置命令行参数
-args = [
-    'main.py',  # 主程序入口
-    '--name=Alpha_工具',  # 可执行文件名
-    '--onefile',  # 打包成单个文件
-    '--console',  # 使用控制台窗口（改为控制台模式）
-    '--add-data=dataset_config.py{0}.'.format(os.pathsep),  # 添加配置文件
-    '--add-data=alpha_strategy.py{0}.'.format(os.pathsep),  # 添加策略文件
-    '--add-data=brain_batch_alpha.py{0}.'.format(os.pathsep),  # 添加核心处理文件
-    '--clean',  # 清理临时文件
-    '--noconfirm',  # 不确认覆盖
+# Các module runtime của pipeline nghiên cứu Alpha tự động.
+RUNTIME_MODULES = [
+    'worldquant_client.py',
+    'account_storage.py',
+    'research_config.py',
+    'research_models.py',
+    'metadata_store.py',
+    'metadata_sync.py',
+    'research_store.py',
+    'deepseek_client.py',
+    'candidate_selector.py',
+    'expression_parser.py',
+    'expression_validator.py',
+    'qualification.py',
+    'alpha_prompts.py',
+    'research_engine.py',
+    'run_control.py',
+    'logging_setup.py',
+    'brain_batch_alpha.py',
+    'console_encoding.py',
 ]
 
-# 如果有图标文件，添加图标
+# Tham số dòng lệnh cho PyInstaller.
+args = [
+    'main.py',  # Entry point chính.
+    '--name=Alpha_Tool',  # Tên file thực thi.
+    '--onefile',  # Đóng gói thành một file duy nhất.
+    '--console',  # Chạy với cửa sổ console.
+    '--add-data=research_config.json{0}.'.format(os.pathsep),  # Cấu hình nghiên cứu.
+    '--collect-all=lark',  # Thu thập toàn bộ grammar/data của lark.
+    '--clean',  # Dọn file tạm của PyInstaller.
+    '--noconfirm',  # Ghi đè không hỏi lại.
+]
+args[5:5] = [
+    '--add-data={0}{1}.'.format(module, os.pathsep) for module in RUNTIME_MODULES
+]
+
+# Thêm icon nếu file tồn tại.
 if os.path.exists('icon.ico'):
     args.append('--icon=icon.ico')
 
-# 运行打包命令
+# Chạy lệnh đóng gói.
 PyInstaller.__main__.run(args)
 
-# 打包完成后，复制或创建配置文件到dist目录
-print("\n正在处理配置文件...")
+# Sau khi đóng gói, sao chép hoặc tạo file cấu hình trong thư mục dist.
+print("\nĐang xử lý file cấu hình...")
 try:
-    # 处理认证文件
-    if os.path.exists('brain_credentials.txt'):
-        shutil.copy2('brain_credentials.txt', 'dist/')
-        print("✅ brain_credentials.txt 复制成功")
-    else:
-        # 创建示例认证文件
-        with open('dist/brain_credentials.txt', 'w') as f:
-            f.write('["your_email@example.com","your_password"]')
-        print("✅ 创建了示例 brain_credentials.txt")
-
-    # 处理Alpha ID文件
     if os.path.exists('alpha_ids.txt'):
         shutil.copy2('alpha_ids.txt', 'dist/')
-        print("✅ alpha_ids.txt 复制成功")
+        print("✅ Sao chép alpha_ids.txt thành công")
     else:
-        # 创建空的alpha_ids.txt
         with open('dist/alpha_ids.txt', 'w') as f:
             ...
-        print("✅ 创建了空的 alpha_ids.txt")
+        print("✅ Đã tạo file alpha_ids.txt rỗng")
 
 except Exception as e:
-    print(f"❌ 处理配置文件时出错: {str(e)}")
+    print(f"❌ Lỗi khi xử lý file cấu hình: {str(e)}")

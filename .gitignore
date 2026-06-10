@@ -32,10 +32,12 @@ brain_credentials.txt
 # Generated files
 alpha_ids.txt
 
-# Mac
-.DS_Store
-mac/dist/
-mac/build/
+# Runtime research data (per-account DBs, snapshots, logs)
+data/
+*.sqlite
+*.sqlite.tmp
+*.failed.sqlite
+logs/
 
 # Windows
 dist/
