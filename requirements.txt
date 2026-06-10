@@ -1,4 +1,5 @@
 requests>=2.31.0
 pandas>=2.0.0
+lark>=1.1.9,<2
 pyinstaller>=5.13.2
 pillow>=10.0.0

@@ -11,17 +11,18 @@ setup(
     install_requires=[
         "requests>=2.31.0",
         "pandas>=2.0.0",
+        "lark>=1.1.9,<2",
     ],
     entry_points={
         'console_scripts': [
             'alpha_tool=main:main',
         ],
     },
-    # 包含非Python文件
+    # Bao gồm các file không phải Python.
     package_data={
         '': ['*.txt', '*.json', '*.ico', '*.png'],
     },
-    # 额外信息
+    # Thông tin bổ sung cho package.
     classifiers=[
         "Programming Language :: Python :: 3",
         "Operating System :: OS Independent",
