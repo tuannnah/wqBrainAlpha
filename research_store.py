@@ -303,6 +303,29 @@ class ResearchStore:
         ).fetchone()
         return dict(row) if row else None
 
+    def list_alphas(self, run_id=None):
+        if run_id is None:
+            rows = self.connection.execute(
+                "SELECT * FROM alphas ORDER BY id"
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                "SELECT * FROM alphas WHERE run_id=? ORDER BY id", (run_id,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_idea(self, idea_id):
+        row = self.connection.execute(
+            "SELECT * FROM ideas WHERE id=?", (idea_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_ideas(self, run_id):
+        rows = self.connection.execute(
+            "SELECT * FROM ideas WHERE run_id=? ORDER BY id", (run_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def set_alpha_validation(self, alpha_id, status):
         self.connection.execute(
             "UPDATE alphas SET validation_status=? WHERE id=?", (status, alpha_id)
