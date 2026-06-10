@@ -409,6 +409,12 @@ class ResearchStore:
         )
         self.connection.commit()
 
+    def list_events(self, run_id):
+        rows = self.connection.execute(
+            "SELECT * FROM run_events WHERE run_id=? ORDER BY id", (run_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def add_lesson(self, lesson_type, content, source_alpha_id=None):
         self.connection.execute(
             "INSERT INTO research_lessons(lesson_type, content, source_alpha_id, created_at)"
