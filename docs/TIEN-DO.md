@@ -21,7 +21,7 @@ Cập nhật lần cuối: 2026-06-10
 |---|---|---|
 | ✅ Đăng nhập tương tác | getpass + xác thực QR (tính năng riêng) | Hoàn thành (đã commit) |
 | ✅ Phase 1 | Storage + WorldQuant metadata | Hoàn thành (38 test OK) |
-| ⬜ Phase 2 | DeepSeek generation + expression validation | Chưa bắt đầu |
+| ✅ Phase 2 | DeepSeek generation + expression validation | Hoàn thành (59 test OK) |
 | ⬜ Phase 3 | Research engine + logging + stop control | Chưa bắt đầu |
 | ⬜ Phase 4 | CLI migration + packaging + docs | Chưa bắt đầu |
 
@@ -39,13 +39,13 @@ Cập nhật lần cuối: 2026-06-10
 
 | Task | Mô tả | File chính | Trạng thái |
 |---|---|---|---|
-| 1 | Research DB + audit trail | `research_store.py` | ⬜ |
-| 2 | DeepSeek JSON client | `deepseek_client.py` | ⬜ |
-| 3 | Candidate selection cục bộ | `candidate_selector.py` | ⬜ |
-| 4 | FASTEXPR parser + fingerprint | `expression_parser.py` | ⬜ |
-| 5 | Validation theo metadata | `expression_validator.py` | ⬜ |
-| 6 | Qualification + quality gate | `qualification.py` | ⬜ |
-| 7 | Kiểm chứng Phase 2 | — | ⬜ |
+| 1 | Research DB + audit trail | `research_store.py` | ✅ |
+| 2 | DeepSeek JSON client | `deepseek_client.py` | ✅ |
+| 3 | Candidate selection cục bộ | `candidate_selector.py` | ✅ |
+| 4 | FASTEXPR parser + fingerprint | `expression_parser.py` | ✅ |
+| 5 | Validation theo metadata | `expression_validator.py` | ✅ |
+| 6 | Qualification + quality gate | `qualification.py` | ✅ |
+| 7 | Kiểm chứng Phase 2 | — | ✅ |
 
 ## Phase 3 — Engine & Control
 
@@ -59,3 +59,4 @@ Xem [`plans/...phase-4-cli-packaging.md`](superpowers/plans/2026-06-09-alpha-res
 
 - **2026-06-10**: Brainstorm xong, chốt giữ nguyên thiết kế. Bắt đầu Phase 1. Baseline: 18 test cũ pass, `pip check` sạch.
 - **2026-06-10**: Hoàn thành Phase 1 (5 task, TDD, mỗi task 1 commit). `brain_batch_alpha.py` giờ kế thừa `WorldQuantClient`. Tổng 38 test OK, compile + pip check + diff sạch.
+- **2026-06-11**: Hoàn thành Phase 2 (7 task). Đã cài `lark`. Thêm research_store, deepseek_client, candidate_selector, expression_parser, expression_validator, qualification. Tổng 59 test OK.
