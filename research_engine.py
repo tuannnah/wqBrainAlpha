@@ -301,7 +301,8 @@ class ResearchEngine:
 
     def run(self):
         from dataclasses import asdict
-        self.run_id = self.store.start_run(self.snapshot_id, asdict(self.config))
+        if self.run_id is None:
+            self.run_id = self.store.start_run(self.snapshot_id, asdict(self.config))
         try:
             while not self.control.stop_requested():
                 if self.store.count_qualified_for_run(self.run_id) >= (
