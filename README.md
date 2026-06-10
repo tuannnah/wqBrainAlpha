@@ -1,142 +1,132 @@
-# 🚀 WorldQuant Brain Alpha Generator
+# WorldQuant Brain Alpha Generator
 
-<div align="center">
+Tool Python CLI **nghiên cứu Alpha tự động** cho WorldQuant Brain: đồng bộ
+metadata tài khoản, dùng DeepSeek sinh ý tưởng và biểu thức Alpha, mô phỏng,
+đánh giá và đưa Alpha đạt chuẩn vào hàng chờ duyệt thủ công. Tool **không tự
+submit** Alpha.
 
-![GitHub stars](https://img.shields.io/github/stars/YHYYDS666/WorldQuant-Brain-Alpha?style=social)
-![GitHub forks](https://img.shields.io/github/forks/YHYYDS666/WorldQuant-Brain-Alpha?style=social)
-![GitHub watchers](https://img.shields.io/github/watchers/YHYYDS666/WorldQuant-Brain-Alpha?style=social)
+## Tổng Quan Quy Trình
 
-```txt
-  ____    _____   _____    ____   _   _   _____ 
- |  _ \  |_   _| |  ___|  / ___| | | | | |_   _|
- | |_) |   | |   | |_    | |  _  | |_| |   | |  
- |  _ <    | |   |  _|   | |_| | |  _  |   | |  
- |_| \_\   |_|   |_|      \____| |_| |_|   |_|  
+1. Nhập email và mật khẩu WorldQuant BRAIN trong console.
+2. Tạo một snapshot metadata mới (kéo toàn bộ dataset/field/operator từ BRAIN)
+   hoặc chọn snapshot cũ.
+3. Engine tự chọn dữ liệu, tạo ý tưởng và biểu thức Alpha bằng DeepSeek.
+4. Mỗi Alpha được kiểm tra cục bộ trước khi gửi mô phỏng.
+5. Đánh giá kết quả; nếu Alpha đủ tiềm năng sẽ tạo biến thể có mục tiêu.
+6. Alpha đạt chuẩn được lưu vào hàng chờ với trạng thái `PENDING_REVIEW`.
+7. Lượt chạy dừng khi đủ 10 Alpha mới đạt chuẩn hoặc khi người dùng gõ `quit`.
+
+## Cấu Hình DeepSeek
+
+Tool đọc API key **chỉ** từ biến môi trường `DEEPSEEK_API_KEY`. Thiếu biến này
+là lỗi cấu hình và engine sẽ không bắt đầu.
+
+Đặt key trên Windows (PowerShell):
+
+```powershell
+[Environment]::SetEnvironmentVariable("DEEPSEEK_API_KEY", "your-key", "User")
 ```
 
-</div>
+Mở lại terminal để biến môi trường có hiệu lực. Model và các giới hạn nghiên
+cứu nằm trong `research_config.json` và có thể chỉnh mà không sửa code.
 
-## 📖 项目介绍
+## Cài Đặt Trên Windows
 
-这是一个用于自动生成和提交 WorldQuant Brain Alpha 表达式的工具。它可以帮助用户自动化测试和提交 Alpha 策略。
-
-## 🗂️ 目录结构
-
-```txt
-WorldQuant-Brain-Alpha/
-├── 📜 main.py                # 主程序入口
-├── 🧠 brain_batch_alpha.py   # 核心处理模块
-├── 📊 alpha_strategy.py      # 策略生成模块
-├── ⚙️ dataset_config.py      # 数据集配置
-├── 📋 requirements.txt       # 依赖列表
-├── 🔨 build.py              # 通用构建脚本
-├── 🪟 build_windows.py      # Windows构建脚本
-├── 📦 setup.py              # 打包配置
-├── 🗜️ create_zipapp.py      # ZIP打包脚本
-└── 🍎 mac/                  # Mac相关文件
-    ├── build_mac.py         # Mac构建脚本
-    ├── create_icns.py       # 图标生成
-    └── icon.png             # 图标源文件
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-## ✨ 功能特点
+Chạy từ source:
 
-- 🤖 自动生成 Alpha 策略
-- 📈 自动测试性能指标
-- 🚀 自动提交合格策略
-- 💾 保存策略 ID
-- 🔄 支持多种运行模式
-
-## 🛠️ 安装方法
-
-上传文件出问题了，所有就分开放了两个版本。之后会合并成一个版本。
-
-### Windows 用户
-
-```bash
-# 下载发布版本
-✨ 从 Releases选择Alpha_Tool_v1.0版本 下载 Alpha_.zip
-
-# 从源码构建
-🔨 pip install -r requirements.txt
-🚀 python build_windows.py
+```powershell
+.\.venv\Scripts\python.exe main.py
 ```
 
-### Mac 用户
+Build file `.exe`:
 
-```bash
-# 下载发布版本
-✨ 从 Releases选择最新版 下载 Alpha_Tool_Mac.zip
-
-  # 解压文件
-  unzip Alpha_Tool_Mac.zip
-
-  # 进入解压目录
-  cd Alpha_Tool_Mac
-
-  # 添加执行权限
-  chmod +x Alpha_Tool
-
-  # 运行程序
-  ./Alpha_Tool
-
-# 从源码构建
-🔨 pip install -r requirements.txt
-🚀 cd mac && python build_mac.py
+```powershell
+.\.venv\Scripts\python.exe build_windows.py
 ```
 
-## 📊 数据集支持
+File build nằm trong `dist/Alpha_Tool.exe`.
 
-| 数据集 | 描述 | 股票范围 |
-|--------|------|----------|
-| 📈 fundamental6 | 基础财务数据 | TOP3000 |
-| 📊 analyst4 | 分析师预测 | TOP1000 |
-| 📉 pv1 | 成交量数据 | TOP1000 |
+## Đăng Nhập WorldQuant BRAIN
 
-## 👍 性能要求
+Mỗi lần chạy, chương trình yêu cầu nhập:
 
-```txt
-     ___________
-    |  METRICS  |
-    |-----------|
-    | ✓ Sharpe  | > 1.5
-    | ✓ Fitness | > 1.0
-    | ✓ Turnover| 0.1-0.9
-    | ✓ IC Mean | > 0.02
-    |___________|
+- Email WorldQuant BRAIN.
+- Mật khẩu. Mật khẩu không hiển thị trong console khi nhập (dùng `getpass`).
+
+Email và mật khẩu không được lưu xuống ổ đĩa.
+
+Nếu WorldQuant yêu cầu xác thực QR:
+
+1. Chương trình tự mở trang xác thực trong trình duyệt mặc định.
+2. Quét mã QR và hoàn tất bước xác thực.
+3. Quay lại console và nhấn Enter để chương trình kiểm tra đăng nhập.
+
+Nếu trình duyệt không tự mở, chương trình vẫn in đường dẫn để mở thủ công.
+
+## Menu Chính
+
+Sau khi đăng nhập, chương trình hiển thị:
+
+1. **Tạo Metadata DB mới**: đồng bộ toàn bộ dataset, data field, operator và
+   scope mà tài khoản có quyền vào một snapshot SQLite có nhãn.
+2. **Chọn Metadata DB cũ**: liệt kê các snapshot `READY` thuộc đúng email đang
+   đăng nhập để tái sử dụng.
+3. **Xem Alpha chờ duyệt**: in các Alpha `PENDING_REVIEW` kèm WorldQuant Alpha
+   ID và biểu thức, không chạy nghiên cứu.
+
+Mỗi email có nhiều Metadata DB nhưng chỉ một Research DB; dữ liệu được phân
+vùng theo email (đường dẫn dùng mã băm, không chứa email thô).
+
+## Lượt Nghiên Cứu
+
+- Người dùng **không** phải chọn dataset, field hay nhập ý tưởng — engine tự
+  làm dựa trên metadata đã đồng bộ.
+- Mỗi ý tưởng có tối đa 3 lô, mỗi lô tối đa 5 Alpha gốc với hypothesis khác
+  nhau.
+- Chỉ khi có Alpha qua quality gate, engine mới tạo tối đa 5 biến thể có mục
+  tiêu cho mỗi Alpha cha (không tạo biến thể của biến thể).
+- Lượt chạy kết thúc khi đạt mục tiêu 10 Alpha mới đạt chuẩn hoặc khi gõ
+  `quit` rồi Enter (dừng an toàn: hoàn tất việc đang chạy rồi lưu lại).
+
+## Vị Trí Dữ Liệu
+
+Toàn bộ DB và log runtime nằm trong thư mục dữ liệu người dùng:
+
+```text
+%LOCALAPPDATA%\WorldQuantBrainAlpha\
+└── accounts\<account_hash>\
+    ├── metadata\<snapshot_id>.sqlite
+    ├── research.sqlite
+    └── logs\<run_id>.log
 ```
 
-## 🎯 使用流程
+Các thư mục này không được đóng gói vào executable và không được commit vào Git.
 
-1. 📝 配置账号信息
-2. 🎲 选择数据集
-3. 🔄 选择运行模式
-4. 📊 等待结果生成
-5. 🚀 自动提交策略
+## Kiểm Tra Alpha Thủ Công
 
-## 🤝 贡献指南
+Alpha đạt chuẩn vào hàng chờ `PENDING_REVIEW`. Tool **không tự submit**; người
+dùng tự xem lại và quyết định submit trên nền tảng WorldQuant.
 
-欢迎提交 Issue 和 Pull Request！
+## Kiểm Thử
 
-## 📄 许可证
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m pip check
+```
+
+## Lưu Ý Bảo Mật
+
+- Mật khẩu, API key và Authorization header không bao giờ được ghi vào log
+  hoặc DB.
+- Raw response của DeepSeek và WorldQuant chỉ được lưu sau khi lọc thông tin
+  nhạy cảm.
+
+## Giấy Phép
 
 MIT License
-
-## 👨‍💻 联系方式
-
-- 📧 Email: <666@woaiys.filegear-sg.me>
-- 🌟 GitHub: [YHYYDS666](https://github.com/YHYYDS666)
-
----
-
-⭐ 如果这个项目帮助到你，请给一个 star! ⭐
-
-## Star History
-
-<a href="https://star-history.com/#WorldQuant-Brain-AlphaP/WorldQuant-Brain-AlphaP&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=WorldQuant-Brain-AlphaP/WorldQuant-Brain-AlphaP&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=WorldQuant-Brain-AlphaP/WorldQuant-Brain-AlphaP&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=WorldQuant-Brain-AlphaP/WorldQuant-Brain-AlphaP&type=Date" />
- </picture>
-</a>
