@@ -1,49 +1,25 @@
-"""WorldQuant Brain API 批量处理模块"""
+"""Module xử lý hàng loạt WorldQuant Brain API (adapter tương thích menu cũ).
 
-import json
-import os
+Lớp `BrainBatchAlpha` kế thừa `WorldQuantClient` để dùng chung phần xác thực
+và session. Các method sinh/simulate/submit theo template cũ được giữ lại cho
+menu legacy cho tới khi Phase 4 chuyển toàn bộ caller sang pipeline mới.
+"""
+
 from datetime import datetime
-from os.path import expanduser
 from time import sleep
 
-import pandas as pd
-import requests
-from requests.auth import HTTPBasicAuth
-
 from alpha_strategy import AlphaStrategy
-from dataset_config import get_api_settings, get_dataset_config
+from dataset_config import get_dataset_config
+from worldquant_client import AuthenticationError, WorldQuantClient
+
+__all__ = ["AuthenticationError", "BrainBatchAlpha"]
 
 
-class BrainBatchAlpha:
-    API_BASE_URL = 'https://api.worldquantbrain.com'
-
-    def __init__(self, credentials_file='brain_credentials.txt'):
-        """初始化 API 客户端"""
-
-        self.session = requests.Session()
-        self._setup_authentication(credentials_file)
-
-    def _setup_authentication(self, credentials_file):
-        """设置认证"""
-
-        try:
-            with open(expanduser(credentials_file)) as f:
-                credentials = json.load(f)
-            username, password = credentials
-            self.session.auth = HTTPBasicAuth(username, password)
-
-            response = self.session.post(f"{self.API_BASE_URL}/authentication")
-            if response.status_code not in [200, 201]:
-                raise Exception(f"认证失败: HTTP {response.status_code}")
-
-            print("✅ 认证成功!")
-
-        except Exception as e:
-            print(f"❌ 认证错误: {str(e)}")
-            raise
+class BrainBatchAlpha(WorldQuantClient):
+    """Compatibility adapter cho menu legacy cho tới Phase 4."""
 
     def simulate_alphas(self, datafields=None, strategy_mode=1, dataset_name=None):
-        """模拟 Alpha 列表"""
+        """Mô phỏng danh sách Alpha."""
 
         try:
             datafields = self._get_datafields_if_none(datafields, dataset_name)
@@ -54,11 +30,11 @@ class BrainBatchAlpha:
             if not alpha_list:
                 return []
 
-            print(f"\n🚀 开始模拟 {len(alpha_list)} 个 Alpha 表达式...")
+            print(f"\n🚀 Bắt đầu mô phỏng {len(alpha_list)} biểu thức Alpha...")
 
             results = []
             for i, alpha in enumerate(alpha_list, 1):
-                print(f"\n[{i}/{len(alpha_list)}] 正在模拟 Alpha...")
+                print(f"\n[{i}/{len(alpha_list)}] Đang mô phỏng Alpha...")
                 result = self._simulate_single_alpha(alpha)
                 if result and result.get('passed_all_checks'):
                     results.append(result)
@@ -70,23 +46,23 @@ class BrainBatchAlpha:
             return results
 
         except Exception as e:
-            print(f"❌ 模拟过程出错: {str(e)}")
+            print(f"❌ Lỗi trong quá trình mô phỏng: {str(e)}")
             return []
 
     def _simulate_single_alpha(self, alpha):
-        """模拟单个 Alpha"""
+        """Mô phỏng một Alpha."""
 
         try:
-            print(f"表达式: {alpha.get('regular', 'Unknown')}")
+            print(f"Biểu thức: {alpha.get('regular', 'Unknown')}")
 
-            # 发送模拟请求
+            # Gửi yêu cầu mô phỏng.
             sim_resp = self.session.post(
                 f"{self.API_BASE_URL}/simulations",
                 json=alpha
             )
 
             if sim_resp.status_code != 201:
-                print(f"❌ 模拟请求失败 (状态码: {sim_resp.status_code})")
+                print(f"❌ Yêu cầu mô phỏng thất bại (mã trạng thái: {sim_resp.status_code})")
                 return None
 
             try:
@@ -98,21 +74,21 @@ class BrainBatchAlpha:
                     sim_progress_resp = self.session.get(sim_progress_url)
                     retry_after_sec = float(sim_progress_resp.headers.get("Retry-After", 0))
 
-                    if retry_after_sec == 0:  # simulation done!
+                    if retry_after_sec == 0:
                         alpha_id = sim_progress_resp.json()['alpha']
-                        print(f"✅ 获得 Alpha ID: {alpha_id}")
+                        print(f"✅ Nhận được Alpha ID: {alpha_id}")
 
-                        # 等待一下让指标计算完成
+                        # Chờ thêm một chút để các chỉ số được tính xong.
                         sleep(3)
 
-                        # 获取 Alpha 详情
+                        # Lấy chi tiết Alpha.
                         alpha_url = f"{self.API_BASE_URL}/alphas/{alpha_id}"
                         alpha_detail = self.session.get(alpha_url)
                         alpha_data = alpha_detail.json()
 
-                        # 检查是否有 is 字段
+                        # API cần trả về field 'is' để đọc các chỉ số kiểm tra.
                         if 'is' not in alpha_data:
-                            print("❌ 无法获取指标数据")
+                            print("❌ Không lấy được dữ liệu chỉ số")
                             return None
 
                         is_qualified = self.check_alpha_qualification(alpha_data)
@@ -125,39 +101,35 @@ class BrainBatchAlpha:
                             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         }
 
-                    # 更新等待时间和进度
                     total_wait += retry_after_sec
                     elapsed = (datetime.now() - start_time).total_seconds()
-                    progress = min(95, (elapsed / 30) * 100)  # 假设通常需要 30 秒完成
+                    progress = min(95, (elapsed / 30) * 100)
 
-                    print(f"⏳ 等待模拟结果... ({elapsed:.1f} 秒 | 进度约 {progress:.0f}%)")
+                    print(f"⏳ Đang chờ kết quả mô phỏng... ({elapsed:.1f} giây | tiến độ khoảng {progress:.0f}%)")
                     sleep(retry_after_sec)
 
             except KeyError:
-                print("❌ 无法获取模拟进度 URL")
+                print("❌ Không lấy được URL tiến độ mô phỏng")
                 return None
 
         except Exception as e:
-            print(f"⚠️ Alpha 模拟失败: {str(e)}")
+            print(f"⚠️ Mô phỏng Alpha thất bại: {str(e)}")
             return None
 
     def check_alpha_qualification(self, alpha_data):
-        """检查 Alpha 是否满足所有提交条件"""
+        """Kiểm tra Alpha có đạt toàn bộ điều kiện submit hay không."""
 
         try:
-            # 从 'is' 字段获取指标
             is_data = alpha_data.get('is', {})
             if not is_data:
-                print("❌ 无法获取指标数据")
+                print("❌ Không lấy được dữ liệu chỉ số")
                 return False
 
-            # 获取指标值
             sharpe = float(is_data.get('sharpe', 0))
             fitness = float(is_data.get('fitness', 0))
             turnover = float(is_data.get('turnover', 0))
-            ic_mean = float(is_data.get('margin', 0))  # margin 对应 IC Mean
+            ic_mean = float(is_data.get('margin', 0))
 
-            # 获取子宇宙 Sharpe
             sub_universe_check = next(
                 (
                     check for check in is_data.get('checks', [])
@@ -168,50 +140,48 @@ class BrainBatchAlpha:
             subuniverse_sharpe = float(sub_universe_check.get('value', 0))
             required_subuniverse_sharpe = float(sub_universe_check.get('limit', 0))
 
-            # 打印指标
-            print("\n📊 Alpha 指标详情:")
+            print("\n📊 Chi tiết chỉ số Alpha:")
             print(f"  Sharpe: {sharpe:.3f} (>1.5)")
             print(f"  Fitness: {fitness:.3f} (>1.0)")
             print(f"  Turnover: {turnover:.3f} (0.1-0.9)")
             print(f"  IC Mean: {ic_mean:.3f} (>0.02)")
-            print(f"  子宇宙 Sharpe: {subuniverse_sharpe:.3f} (>{required_subuniverse_sharpe:.3f})")
+            print(f"  Sub-universe Sharpe: {subuniverse_sharpe:.3f} (>{required_subuniverse_sharpe:.3f})")
 
-            print("\n📝 指标评估结果:")
+            print("\n📝 Kết quả đánh giá chỉ số:")
 
-            # 检查每个指标并输出结果
             is_qualified = True
 
             if sharpe < 1.5:
-                print("❌ Sharpe ratio 不达标")
+                print("❌ Sharpe ratio chưa đạt chuẩn")
                 is_qualified = False
             else:
-                print("✅ Sharpe ratio 达标")
+                print("✅ Sharpe ratio đạt chuẩn")
 
             if fitness < 1.0:
-                print("❌ Fitness 不达标")
+                print("❌ Fitness chưa đạt chuẩn")
                 is_qualified = False
             else:
-                print("✅ Fitness 达标")
+                print("✅ Fitness đạt chuẩn")
 
             if turnover < 0.1 or turnover > 0.9:
-                print("❌ Turnover 不在合理范围")
+                print("❌ Turnover nằm ngoài khoảng hợp lý")
                 is_qualified = False
             else:
-                print("✅ Turnover 达标")
+                print("✅ Turnover đạt chuẩn")
 
             if ic_mean < 0.02:
-                print("❌ IC Mean 不达标")
+                print("❌ IC Mean chưa đạt chuẩn")
                 is_qualified = False
             else:
-                print("✅ IC Mean 达标")
+                print("✅ IC Mean đạt chuẩn")
 
             if subuniverse_sharpe < required_subuniverse_sharpe:
-                print(f"❌ 子宇宙 Sharpe 不达标 ({subuniverse_sharpe:.3f} < {required_subuniverse_sharpe:.3f})")
+                print(f"❌ Sub-universe Sharpe chưa đạt chuẩn ({subuniverse_sharpe:.3f} < {required_subuniverse_sharpe:.3f})")
                 is_qualified = False
             else:
-                print(f"✅ 子宇宙 Sharpe 达标 ({subuniverse_sharpe:.3f} > {required_subuniverse_sharpe:.3f})")
+                print(f"✅ Sub-universe Sharpe đạt chuẩn ({subuniverse_sharpe:.3f} > {required_subuniverse_sharpe:.3f})")
 
-            print("\n🔍 检查项结果:")
+            print("\n🔍 Kết quả từng kiểm tra:")
             checks = is_data.get('checks', [])
             for check in checks:
                 name = check.get('name')
@@ -220,53 +190,60 @@ class BrainBatchAlpha:
                 limit = check.get('limit', 'N/A')
 
                 if result == 'PASS':
-                    print(f"✅ {name}: {value} (限制: {limit})")
+                    print(f"✅ {name}: {value} (giới hạn: {limit})")
                 elif result == 'FAIL':
-                    print(f"❌ {name}: {value} (限制: {limit})")
+                    print(f"❌ {name}: {value} (giới hạn: {limit})")
                     is_qualified = False
                 elif result == 'PENDING':
-                    print(f"⚠️ {name}: 检查尚未完成")
+                    print(f"⚠️ {name}: kiểm tra chưa hoàn tất")
                     is_qualified = False
 
-            print("\n📋 最终评判:")
+            print("\n📋 Đánh giá cuối cùng:")
             if is_qualified:
-                print("✅ Alpha 满足所有条件，可以提交!")
+                print("✅ Alpha đạt toàn bộ điều kiện, có thể submit!")
             else:
-                print("❌ Alpha 未达到提交标准")
+                print("❌ Alpha chưa đạt tiêu chuẩn submit")
 
             return is_qualified
 
         except Exception as e:
-            print(f"❌ 检查 Alpha 资格时出错: {str(e)}")
+            print(f"❌ Lỗi khi kiểm tra điều kiện Alpha: {str(e)}")
             return False
 
+    def _save_alpha_id(self, alpha_id, result, storage_path="alpha_ids.txt"):
+        """Lưu Alpha ID đạt chuẩn vào file."""
+
+        try:
+            with open(storage_path, "a", encoding="utf-8") as f:
+                f.write(f"{alpha_id}\n")
+        except Exception as e:
+            print(f"⚠️ Không lưu được Alpha ID: {str(e)}")
+
     def submit_alpha(self, alpha_id):
-        """提交单个 Alpha"""
+        """Submit một Alpha."""
 
         submit_url = f"{self.API_BASE_URL}/alphas/{alpha_id}/submit"
 
         for attempt in range(5):
-            print(f"🔄 第 {attempt + 1} 次尝试提交 Alpha {alpha_id}")
+            print(f"🔄 Lần thử submit Alpha {alpha_id}: {attempt + 1}")
 
-            # POST 请求
             res = self.session.post(submit_url)
             if res.status_code == 201:
-                print("✅ POST: 成功，等待提交完成...")
+                print("✅ POST thành công, đang chờ quá trình submit hoàn tất...")
             elif res.status_code in [400, 403]:
-                print(f"❌ 提交被拒绝 ({res.status_code})")
+                print(f"❌ Submit bị từ chối ({res.status_code})")
                 return False
             else:
                 sleep(3)
                 continue
 
-            # 检查提交状态
             while True:
                 res = self.session.get(submit_url)
                 retry = float(res.headers.get('Retry-After', 0))
 
                 if retry == 0:
                     if res.status_code == 200:
-                        print("✅ 提交成功!")
+                        print("✅ Submit thành công!")
                         return True
                     return False
 
@@ -275,7 +252,7 @@ class BrainBatchAlpha:
         return False
 
     def submit_multiple_alphas(self, alpha_ids):
-        """批量提交 Alpha"""
+        """Submit nhiều Alpha."""
         successful = []
         failed = []
 
@@ -291,22 +268,21 @@ class BrainBatchAlpha:
         return successful, failed
 
     def _get_datafields_if_none(self, datafields=None, dataset_name=None):
-        """获取数据字段列表"""
+        """Lấy danh sách data field nếu caller chưa truyền sẵn."""
 
         try:
             if datafields is not None:
                 return datafields
 
             if dataset_name is None:
-                print("❌ 未指定数据集")
+                print("❌ Chưa chỉ định dataset")
                 return None
 
             config = get_dataset_config(dataset_name)
             if not config:
-                print(f"❌ 无效的数据集: {dataset_name}")
+                print(f"❌ Dataset không hợp lệ: {dataset_name}")
                 return None
 
-            # 获取数据字段
             search_scope = {
                 'instrumentType': 'EQUITY',
                 'region': 'USA',
@@ -324,15 +300,13 @@ class BrainBatchAlpha:
                 "&limit=50&offset={offset}"
             )
 
-            # 获取总数
             initial_resp = self.session.get(url_template.format(offset=0))
             if initial_resp.status_code != 200:
-                print("❌ 获取数据字段失败")
+                print("❌ Lấy data field thất bại")
                 return None
 
             total_count = initial_resp.json()['count']
 
-            # 获取所有数据字段
             all_fields = []
             for offset in range(0, total_count, 50):
                 resp = self.session.get(url_template.format(offset=offset))
@@ -340,35 +314,31 @@ class BrainBatchAlpha:
                     continue
                 all_fields.extend(resp.json()['results'])
 
-            # 过滤矩阵类型字段
             matrix_fields = [
                 field['id'] for field in all_fields
                 if field.get('type') == 'MATRIX'
             ]
 
             if not matrix_fields:
-                print("❌ 未找到可用的数据字段")
+                print("❌ Không tìm thấy data field phù hợp")
                 return None
 
-            print(f"✅ 获取到 {len(matrix_fields)} 个数据字段")
+            print(f"✅ Lấy được {len(matrix_fields)} data field")
             return matrix_fields
 
         except Exception as e:
-            print(f"❌ 获取数据字段时出错: {str(e)}")
+            print(f"❌ Lỗi khi lấy data field: {str(e)}")
             return None
 
     def _generate_alpha_list(self, datafields, strategy_mode):
-        """生成 Alpha 表达式列表"""
+        """Sinh danh sách biểu thức Alpha."""
         try:
-            # 初始化策略生成器
             strategy_generator = AlphaStrategy()
 
-            # 生成策略列表
             strategies = strategy_generator.get_simulation_data(datafields, strategy_mode)
 
-            print(f"生成了 {len(strategies)} 个Alpha表达式")
+            print(f"Đã sinh {len(strategies)} biểu thức Alpha")
 
-            # 转换为 API 所需的格式
             alpha_list = []
             for strategy in strategies:
                 simulation_data = {
@@ -394,5 +364,5 @@ class BrainBatchAlpha:
             return alpha_list
 
         except Exception as e:
-            print(f"❌ 生成 Alpha 列表失败: {str(e)}")
+            print(f"❌ Sinh danh sách Alpha thất bại: {str(e)}")
             return []
