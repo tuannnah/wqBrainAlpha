@@ -216,6 +216,23 @@ class MetadataStore:
             )
         self.connection.commit()
 
+    def ensure_dataset_stub(self, dataset_id, payload=None):
+        """Chèn dataset tối thiểu nếu chưa tồn tại (không ghi đè bản đầy đủ)."""
+
+        payload = payload or {"id": dataset_id}
+        self.connection.execute(
+            "INSERT OR IGNORE INTO datasets(id, name, description, category_id, raw_json)"
+            " VALUES(?, ?, ?, ?, ?)",
+            (
+                dataset_id,
+                payload.get("name"),
+                payload.get("description"),
+                None,
+                _canonical(payload),
+            ),
+        )
+        self.connection.commit()
+
     def upsert_data_field(self, payload, scope_id=None):
         dataset = payload.get("dataset")
         dataset_id = dataset.get("id") if isinstance(dataset, dict) else payload.get("datasetId")
