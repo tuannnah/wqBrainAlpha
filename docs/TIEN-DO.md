@@ -22,7 +22,7 @@ Cập nhật lần cuối: 2026-06-10
 | ✅ Đăng nhập tương tác | getpass + xác thực QR (tính năng riêng) | Hoàn thành (đã commit) |
 | ✅ Phase 1 | Storage + WorldQuant metadata | Hoàn thành (38 test OK) |
 | ✅ Phase 2 | DeepSeek generation + expression validation | Hoàn thành (59 test OK) |
-| ⬜ Phase 3 | Research engine + logging + stop control | Chưa bắt đầu |
+| ✅ Phase 3 | Research engine + logging + stop control | Hoàn thành (75 test OK) |
 | ⬜ Phase 4 | CLI migration + packaging + docs | Chưa bắt đầu |
 
 ## Phase 1 — Storage & Metadata
@@ -49,7 +49,15 @@ Cập nhật lần cuối: 2026-06-10
 
 ## Phase 3 — Engine & Control
 
-Xem [`plans/...phase-3-engine-control.md`](superpowers/plans/2026-06-09-alpha-research-phase-3-engine-control.md) — chi tiết bổ sung khi tới Phase 3.
+| Task | Mô tả | File chính | Trạng thái |
+|---|---|---|---|
+| 1 | Lệnh `quit` (luồng nền) | `run_control.py` | ✅ |
+| 2 | Logging console+file+DB | `logging_setup.py` | ✅ |
+| 3 | Hợp đồng prompt + mapping | `alpha_prompts.py` | ✅ |
+| 4 | Vòng Alpha gốc + xoay ý tưởng | `research_engine.py` | ✅ |
+| 5 | Sinh biến thể có mục tiêu | `research_engine.py` | ✅ |
+| 6 | Review queue + dừng theo target/quit | `research_engine.py` | ✅ |
+| 7 | Integration test end-to-end | `tests/test_research_pipeline_integration.py` | ✅ |
 
 ## Phase 4 — CLI & Packaging
 
@@ -60,3 +68,4 @@ Xem [`plans/...phase-4-cli-packaging.md`](superpowers/plans/2026-06-09-alpha-res
 - **2026-06-10**: Brainstorm xong, chốt giữ nguyên thiết kế. Bắt đầu Phase 1. Baseline: 18 test cũ pass, `pip check` sạch.
 - **2026-06-10**: Hoàn thành Phase 1 (5 task, TDD, mỗi task 1 commit). `brain_batch_alpha.py` giờ kế thừa `WorldQuantClient`. Tổng 38 test OK, compile + pip check + diff sạch.
 - **2026-06-11**: Hoàn thành Phase 2 (7 task). Đã cài `lark`. Thêm research_store, deepseek_client, candidate_selector, expression_parser, expression_validator, qualification. Tổng 59 test OK.
+- **2026-06-11**: Hoàn thành Phase 3 (7 task). Thêm run_control, logging_setup, alpha_prompts, research_engine (state machine idea→lô→cha→biến thể, dừng theo target/quit), integration test. Tổng 75 test OK.
