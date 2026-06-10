@@ -175,6 +175,20 @@ class ResearchStore:
     def open(cls, path, max_chars=DEFAULT_MAX_CHARS):
         return cls(cls._connect(path), max_chars)
 
+    @classmethod
+    def open_or_create(cls, path, max_chars=DEFAULT_MAX_CHARS):
+        path = Path(path)
+        if not path.exists():
+            return cls.create(path, max_chars)
+        connection = cls._connect(path)
+        has_tables = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='research_runs'"
+        ).fetchone()
+        if not has_tables:
+            connection.executescript(cls.SCHEMA)
+            connection.commit()
+        return cls(connection, max_chars)
+
     def close(self):
         self.connection.close()
 
