@@ -153,6 +153,49 @@ def fetch_operators() -> None:
     console.print(f"[green]Đã lưu {len(operators)} operators[/green]")
 
 
+@app.command("list-fields")
+def list_fields(
+    region: str = typer.Option(settings.default_region),
+    universe: str = typer.Option(settings.default_universe),
+    delay: int = typer.Option(settings.default_delay),
+    dataset: str = typer.Option(None, help="Lọc theo dataset id"),
+    search: str = typer.Option(None, help="Tìm trong id/mô tả"),
+    limit: int = typer.Option(50, help="Số dòng hiển thị"),
+) -> None:
+    """Xem các data field đã tải về (trong DB), có lọc/tìm kiếm."""
+    _setup_logging()
+    from src.storage.models import DataFieldModel
+
+    engine = init_db(make_engine())
+    session = make_session_factory(engine)()
+    try:
+        query = session.query(DataFieldModel).filter_by(
+            region=region, universe=universe, delay=delay
+        )
+        if dataset:
+            query = query.filter(DataFieldModel.dataset_id == dataset)
+        if search:
+            like = f"%{search}%"
+            query = query.filter(
+                DataFieldModel.id.like(like) | DataFieldModel.description.like(like)
+            )
+        total = query.count()
+        rows = query.order_by(DataFieldModel.id).limit(limit).all()
+    finally:
+        session.close()
+
+    table = Table(title=f"Fields {region}/{universe}/delay={delay} — {total} field (hiện {len(rows)})")
+    table.add_column("ID")
+    table.add_column("Type")
+    table.add_column("Dataset")
+    table.add_column("Mô tả", overflow="fold")
+    for r in rows:
+        table.add_row(r.id, r.type or "-", r.dataset_id or "-", (r.description or "")[:90])
+    console.print(table)
+    if total > len(rows):
+        console.print(f"[dim]... còn {total - len(rows)} field. Dùng --limit/--search/--dataset để lọc.[/dim]")
+
+
 @app.command()
 def simulate(
     expr: str = typer.Option(..., help="Biểu thức FASTEXPR"),
@@ -555,6 +598,37 @@ def _wizard_run_ga(state: _WizardState) -> None:
     console.print(f"[green]GA xong — best: {opt.history[-1].best_expression}[/green]")
 
 
+def _wizard_list_fields(state: _WizardState) -> None:
+    from src.storage.models import DataFieldModel
+
+    search = _ask("Tìm (Enter=tất cả): ")
+    session = state.session_factory()
+    try:
+        query = session.query(DataFieldModel).filter_by(
+            region=state.region, universe=state.universe, delay=state.delay
+        )
+        if search:
+            like = f"%{search}%"
+            query = query.filter(
+                DataFieldModel.id.like(like) | DataFieldModel.description.like(like)
+            )
+        total = query.count()
+        rows = query.order_by(DataFieldModel.id).limit(50).all()
+    finally:
+        session.close()
+
+    table = Table(title=f"Fields {state.region}/{state.universe}/delay={state.delay} — {total} (hiện {len(rows)})")
+    table.add_column("ID")
+    table.add_column("Type")
+    table.add_column("Dataset")
+    table.add_column("Mô tả", overflow="fold")
+    for r in rows:
+        table.add_row(r.id, r.type or "-", r.dataset_id or "-", (r.description or "")[:90])
+    console.print(table)
+    if total > len(rows):
+        console.print(f"[dim]... còn {total - len(rows)} field, gõ từ khóa để lọc.[/dim]")
+
+
 def _wizard_scope(state: _WizardState) -> None:
     state.region = _ask(f"Region (Enter={state.region}): ", state.region)
     state.universe = _ask(f"Universe (Enter={state.universe}): ", state.universe)
@@ -584,7 +658,8 @@ def _wizard_menu(state: _WizardState) -> None:
     console.print(f" 4) Mô phỏng một biểu thức{lock(state.logged_in)}")
     console.print(f" 5) Sinh alpha (template){lock(fields_ok)}")
     console.print(f" 6) Chạy Genetic Algorithm{lock(state.logged_in and fields_ok)}")
-    console.print(" 7) Đổi scope (region/universe/delay)")
+    console.print(f" 7) Xem fields đã tải{lock(fields_ok)}")
+    console.print(" 8) Đổi scope (region/universe/delay)")
     console.print(" 0) Thoát")
 
 
@@ -603,8 +678,13 @@ def start() -> None:
                 _wizard_login(state)
             elif choice == "0":
                 break
-            elif choice == "7":
+            elif choice == "8":
                 _wizard_scope(state)
+            elif choice == "7":
+                if state.fields_count() == 0:
+                    console.print("[yellow]Chưa có field nào — tải ở bước 2 trước.[/yellow]")
+                else:
+                    _wizard_list_fields(state)
             elif choice in {"2", "3", "4"} and not state.logged_in:
                 console.print("[yellow]Hãy đăng nhập (1) trước.[/yellow]")
             elif choice == "2":
