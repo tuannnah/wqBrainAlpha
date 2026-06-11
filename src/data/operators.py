@@ -11,6 +11,10 @@ from src.data.client import WQBrainClient
 from src.storage.models import OperatorModel
 
 
+class OperatorFetchError(RuntimeError):
+    """Lỗi khi tải operators từ WorldQuant."""
+
+
 @dataclass
 class Operator:
     name: str
@@ -48,7 +52,9 @@ class OperatorRepository:
 
     def fetch_all(self) -> list[Operator]:
         resp = self.client.get("/operators")
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            logger.error("GET /operators lỗi {}: {}", resp.status_code, resp.text[:500])
+            raise OperatorFetchError(f"Không tải được operators (HTTP {resp.status_code}).")
         payload = resp.json()
         # /operators có thể trả list trực tiếp hoặc {"results": [...]}.
         results = payload.get("results", payload) if isinstance(payload, dict) else payload
@@ -56,6 +62,19 @@ class OperatorRepository:
         self._cache(operators)
         logger.info("Đã lấy {} operators", len(operators))
         return operators
+
+    def cached_count(self) -> int:
+        session: Session = self.session_factory()
+        try:
+            return session.query(OperatorModel).count()
+        finally:
+            session.close()
+
+    def ensure(self, force: bool = False) -> tuple[list[Operator], bool]:
+        """Trả (operators, đã_tải_mới). Dùng cache nếu có và không force."""
+        if not force and self.cached_count() > 0:
+            return self.load_cached(), False
+        return self.fetch_all(), True
 
     def _cache(self, operators: list[Operator]) -> None:
         session: Session = self.session_factory()

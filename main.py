@@ -355,5 +355,229 @@ def submit(
     console.print(table)
 
 
+class _WizardState:
+    """Giữ phiên đăng nhập + DB cho luồng wizard chạy theo từng bước."""
+
+    def __init__(self):
+        engine = init_db(make_engine())
+        self.session_factory = make_session_factory(engine)
+        self.client: WQBrainClient | None = None
+        self.region = settings.default_region
+        self.universe = settings.default_universe
+        self.delay = settings.default_delay
+
+    @property
+    def logged_in(self) -> bool:
+        return self.client is not None and self.client.authenticated
+
+    def fields_count(self) -> int:
+        return FieldRepository(None, self.session_factory).cached_count(
+            self.region, self.universe, self.delay
+        )
+
+    def operators_count(self) -> int:
+        return OperatorRepository(None, self.session_factory).cached_count()
+
+
+def _ask(prompt: str, default: str = "") -> str:
+    raw = input(prompt).strip()
+    return raw or default
+
+
+def _wizard_login(state: _WizardState) -> None:
+    client = _make_client()  # tự nhập email/mật khẩu nếu .env trống
+    client.authenticate()  # tự xử lý QR nếu cần
+    state.client = client
+
+
+def _wizard_fields(state: _WizardState) -> None:
+    from src.data.fields import FieldFetchError
+
+    repo = FieldRepository(state.client, state.session_factory)
+    scope = f"{state.region}/{state.universe}/delay={state.delay}"
+    cached = repo.cached_count(state.region, state.universe, state.delay)
+    force = False
+    if cached > 0:
+        choice = _ask(f"Đã có {cached} field ({scope}). [1] Dùng lại  [2] Tải mới (Enter=1): ", "1")
+        if choice != "2":
+            console.print(f"[green]Dùng lại {cached} field đã lưu.[/green]")
+            return
+        force = True
+    try:
+        fields, fetched = repo.ensure(state.region, state.universe, state.delay, force=force)
+    except FieldFetchError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return
+    console.print(f"[green]{'Đã tải mới' if fetched else 'Dùng cache'}: {len(fields)} field[/green]")
+
+
+def _wizard_operators(state: _WizardState) -> None:
+    from src.data.operators import OperatorFetchError
+
+    repo = OperatorRepository(state.client, state.session_factory)
+    cached = repo.cached_count()
+    force = False
+    if cached > 0:
+        choice = _ask(f"Đã có {cached} operator. [1] Dùng lại  [2] Tải mới (Enter=1): ", "1")
+        if choice != "2":
+            console.print(f"[green]Dùng lại {cached} operator đã lưu.[/green]")
+            return
+        force = True
+    try:
+        operators, fetched = repo.ensure(force=force)
+    except OperatorFetchError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return
+    console.print(
+        f"[green]{'Đã tải mới' if fetched else 'Dùng cache'}: {len(operators)} operator[/green]"
+    )
+
+
+def _wizard_simulate(state: _WizardState) -> None:
+    expr = _ask("Biểu thức FASTEXPR (vd rank(close)): ")
+    if not expr:
+        return
+    sim = Simulator(state.client)
+    result = sim.simulate(
+        expr, settings={"region": state.region, "universe": state.universe, "delay": state.delay}
+    )
+    AlphaRepository(state.session_factory).save_simulation(
+        result, region=state.region, universe=state.universe
+    )
+    table = Table(title=f"Simulation: {expr}")
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("status", result.status)
+    for key, value in result.metrics().items():
+        table.add_row(key, "—" if value is None else f"{value:.4f}")
+    console.print(table)
+
+
+def _wizard_generate(state: _WizardState, count: int) -> None:
+    from src.generation.template import TemplateGenerator
+    from src.simulation.pre_filter import PreFilter
+
+    fields, operators = _cached_symbols(state.session_factory)
+    pf = PreFilter(known_operators=operators or None, known_fields=set(fields))
+    gen = TemplateGenerator(fields, pf)
+    alphas = gen.generate(count)
+    repo = AlphaRepository(state.session_factory)
+    for expr in alphas:
+        repo.save_alpha(expr, source="template")
+    console.print(f"[green]Đã sinh {len(alphas)} alpha.[/green]")
+
+
+def _wizard_run_ga(state: _WizardState) -> None:
+    import random
+
+    from src.generation.ast_utils import to_expression
+    from src.generation.template import TemplateGenerator
+    from src.optimization.evolution import GeneticOptimizer
+    from src.simulation.pre_filter import PreFilter
+
+    pop = _ask("Population (Enter=30): ", "30")
+    gens = _ask("Generations (Enter=10): ", "10")
+    fields, operators = _cached_symbols(state.session_factory)
+    pf = PreFilter(known_operators=operators or None, known_fields=set(fields))
+    tgen = TemplateGenerator(fields, pf, rng=random.Random())
+    sim = Simulator(state.client)
+
+    def seed_factory():
+        exprs = tgen.generate(1)
+        return GeneticOptimizer.expr_to_node(exprs[0] if exprs else f"rank({fields[0]})")
+
+    opt = GeneticOptimizer(
+        simulator=sim,
+        prefilter=pf,
+        seed_factory=seed_factory,
+        fields=fields,
+        population_size=int(pop) if pop.isdigit() else 30,
+        generations=int(gens) if gens.isdigit() else 10,
+    )
+    best = opt.run()
+    repo = AlphaRepository(state.session_factory)
+    for node in best[:10]:
+        repo.save_alpha(to_expression(node), source="ga")
+    console.print(f"[green]GA xong — best: {opt.history[-1].best_expression}[/green]")
+
+
+def _wizard_scope(state: _WizardState) -> None:
+    state.region = _ask(f"Region (Enter={state.region}): ", state.region)
+    state.universe = _ask(f"Universe (Enter={state.universe}): ", state.universe)
+    delay_raw = _ask(f"Delay (Enter={state.delay}): ", str(state.delay))
+    try:
+        state.delay = int(delay_raw)
+    except ValueError:
+        console.print("[yellow]Delay không hợp lệ, giữ nguyên.[/yellow]")
+    console.print(f"[cyan]Scope: {state.region}/{state.universe}/delay={state.delay}[/cyan]")
+
+
+def _wizard_menu(state: _WizardState) -> None:
+    def lock(ok: bool) -> str:
+        return "" if ok else " [dim](khóa: cần bước trước)[/dim]"
+
+    fields_ok = state.fields_count() > 0
+    console.print("\n[bold cyan]=== WQ Auto-Alpha — Chạy theo từng bước ===[/bold cyan]")
+    console.print(f"Scope: [cyan]{state.region}/{state.universe}/delay={state.delay}[/cyan]")
+    status = "[green]✓ đã đăng nhập[/green]" if state.logged_in else "[red]✗ chưa đăng nhập[/red]"
+    console.print(
+        f"Trạng thái: {status} | fields: {state.fields_count()} | "
+        f"operators: {state.operators_count()}"
+    )
+    console.print(" 1) Đăng nhập")
+    console.print(f" 2) Tải data fields{lock(state.logged_in)}")
+    console.print(f" 3) Tải operators{lock(state.logged_in)}")
+    console.print(f" 4) Mô phỏng một biểu thức{lock(state.logged_in)}")
+    console.print(f" 5) Sinh alpha (template){lock(fields_ok)}")
+    console.print(f" 6) Chạy Genetic Algorithm{lock(state.logged_in and fields_ok)}")
+    console.print(" 7) Đổi scope (region/universe/delay)")
+    console.print(" 0) Thoát")
+
+
+@app.command()
+def start() -> None:
+    """Chạy theo từng bước (wizard): đăng nhập → tải fields → ... giữ phiên đăng nhập."""
+    _setup_logging()
+    from src.data.client import AuthError
+
+    state = _WizardState()
+    while True:
+        _wizard_menu(state)
+        choice = _ask("\nChọn: ")
+        try:
+            if choice == "1":
+                _wizard_login(state)
+            elif choice == "0":
+                break
+            elif choice == "7":
+                _wizard_scope(state)
+            elif choice in {"2", "3", "4"} and not state.logged_in:
+                console.print("[yellow]Hãy đăng nhập (1) trước.[/yellow]")
+            elif choice == "2":
+                _wizard_fields(state)
+            elif choice == "3":
+                _wizard_operators(state)
+            elif choice == "4":
+                _wizard_simulate(state)
+            elif choice == "5":
+                if state.fields_count() == 0:
+                    console.print("[yellow]Cần tải data fields (2) trước khi sinh alpha.[/yellow]")
+                else:
+                    count = _ask("Số lượng (Enter=100): ", "100")
+                    _wizard_generate(state, int(count) if count.isdigit() else 100)
+            elif choice == "6":
+                if not (state.logged_in and state.fields_count() > 0):
+                    console.print("[yellow]Cần đăng nhập và tải fields trước.[/yellow]")
+                else:
+                    _wizard_run_ga(state)
+            else:
+                console.print("[red]Lựa chọn không hợp lệ.[/red]")
+        except AuthError as exc:
+            console.print(f"[red]Lỗi đăng nhập: {exc}[/red]")
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Đã hủy bước hiện tại.[/yellow]")
+    console.print("[cyan]Kết thúc.[/cyan]")
+
+
 if __name__ == "__main__":
     app()

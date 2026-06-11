@@ -11,6 +11,10 @@ from src.data.client import WQBrainClient
 from src.storage.models import DataFieldModel
 
 
+class FieldFetchError(RuntimeError):
+    """Lỗi khi tải data-fields từ WorldQuant."""
+
+
 @dataclass
 class DataField:
     id: str
@@ -44,7 +48,12 @@ class FieldRepository:
         self.session_factory = session_factory
 
     def fetch_all(
-        self, region: str, universe: str, delay: int, page_size: int | None = None
+        self,
+        region: str,
+        universe: str,
+        delay: int,
+        instrument_type: str = "EQUITY",
+        page_size: int | None = None,
     ) -> list[DataField]:
         """Phân trang qua offset/limit, cache toàn bộ vào bảng data_fields."""
         limit = page_size or self.PAGE_SIZE
@@ -55,6 +64,7 @@ class FieldRepository:
             resp = self.client.get(
                 "/data-fields",
                 params={
+                    "instrumentType": instrument_type,
                     "region": region,
                     "delay": delay,
                     "universe": universe,
@@ -62,7 +72,12 @@ class FieldRepository:
                     "offset": offset,
                 },
             )
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                logger.error("GET /data-fields lỗi {}: {}", resp.status_code, resp.text[:500])
+                raise FieldFetchError(
+                    f"Không tải được data-fields (HTTP {resp.status_code}). "
+                    "Kiểm tra region/universe/delay hợp lệ và tài khoản có quyền."
+                )
             payload = resp.json()
             results = payload.get("results", [])
             if not results:
@@ -79,6 +94,35 @@ class FieldRepository:
         self._cache(fields)
         logger.info("Đã lấy {} data-fields ({}/{}/delay={})", len(fields), region, universe, delay)
         return fields
+
+    def cached_count(self, region: str | None = None, universe: str | None = None,
+                     delay: int | None = None) -> int:
+        """Số field đã cache (lọc theo scope nếu truyền)."""
+        session: Session = self.session_factory()
+        try:
+            query = session.query(DataFieldModel)
+            if region is not None:
+                query = query.filter(DataFieldModel.region == region)
+            if universe is not None:
+                query = query.filter(DataFieldModel.universe == universe)
+            if delay is not None:
+                query = query.filter(DataFieldModel.delay == delay)
+            return query.count()
+        finally:
+            session.close()
+
+    def ensure(
+        self,
+        region: str,
+        universe: str,
+        delay: int,
+        instrument_type: str = "EQUITY",
+        force: bool = False,
+    ) -> tuple[list[DataField], bool]:
+        """Trả (fields, đã_tải_mới). Dùng cache nếu có và không force."""
+        if not force and self.cached_count(region, universe, delay) > 0:
+            return self.load_cached(), False
+        return self.fetch_all(region, universe, delay, instrument_type), True
 
     def fetch_datasets(self) -> list[dict]:
         """GET /data-sets — danh sách dataset categories."""

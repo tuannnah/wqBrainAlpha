@@ -29,8 +29,17 @@ bạn quét QR xong thì quay lại console nhấn Enter (thử lại tối đa 
 ## Cách dùng nhanh (khuyến nghị)
 
 Double-click **`run.bat`** (hoặc chuột phải `run.ps1` > Run with PowerShell).
-Script sẽ tự tạo venv, cài dependencies, tạo `.env` lần đầu, rồi hiện menu
-chọn số để chạy từng chức năng (login, fetch, generate, GA, submit, dashboard).
+Script tự tạo venv, cài dependencies, tạo `.env` lần đầu, rồi mở **wizard chạy
+theo từng bước** (một phiên duy nhất giữ đăng nhập):
+
+1. **Đăng nhập** — nhập email/mật khẩu ngay trong console (mật khẩu ẩn); tự
+   mở trình duyệt nếu cần quét QR.
+2. **Tải data fields** — chỉ mở sau khi đăng nhập. Lần đầu tải về và lưu DB;
+   lần sau hỏi *Dùng lại* (khỏi tải) hay *Tải mới*.
+3. **Tải operators** — tương tự, cache vào DB.
+4. **Mô phỏng / Sinh alpha / GA** — mở dần khi đủ điều kiện bước trước.
+
+Tương đương: `python main.py start`.
 
 ## Dùng bằng dòng lệnh
 
