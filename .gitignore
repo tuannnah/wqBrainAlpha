@@ -1,4 +1,5 @@
 .env
+.wq_session
 venv/
 .venv/
 *.db

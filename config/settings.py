@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     database_url: str = "sqlite:///wq_alpha.db"
+    cache_ttl_days: int = 30
     default_region: str = "USA"
     default_universe: str = "TOP3000"
     default_delay: int = 1

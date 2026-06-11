@@ -61,12 +61,37 @@ def _make_client() -> WQBrainClient:
 
 
 @app.command()
-def login() -> None:
-    """Kiểm tra đăng nhập WQ Brain."""
+def login(force: bool = typer.Option(False, help="Đăng nhập lại dù session còn hạn")) -> None:
+    """Đăng nhập (dùng session cũ nếu còn hạn)."""
+    _setup_logging()
+    client = _make_client()
+    client.authenticate(force=force)
+    console.print("[green]OK[/green]")
+
+
+@app.command("probe-fields")
+def probe_fields(
+    region: str = typer.Option(settings.default_region),
+    universe: str = typer.Option(settings.default_universe),
+    delay: int = typer.Option(settings.default_delay),
+) -> None:
+    """Gọi /data-fields THẬT và in nguyên JSON 1 trang để kiểm tra format."""
     _setup_logging()
     client = _make_client()
     client.authenticate()
-    console.print("[green]OK[/green] - đăng nhập thành công")
+    resp = client.get(
+        "/data-fields",
+        params={
+            "instrumentType": "EQUITY",
+            "region": region,
+            "universe": universe,
+            "delay": delay,
+            "limit": 5,
+            "offset": 0,
+        },
+    )
+    console.print(f"[dim]HTTP {resp.status_code}[/dim]")
+    console.print_json(resp.text)
 
 
 @app.command("fetch-fields")
@@ -74,16 +99,45 @@ def fetch_fields(
     region: str = typer.Option(settings.default_region),
     universe: str = typer.Option(settings.default_universe),
     delay: int = typer.Option(settings.default_delay),
+    reload: bool = typer.Option(False, "--reload", help="Ép tải lại từ API (ghi đè cache)"),
 ) -> None:
-    """Lấy & cache data fields."""
+    """Fetch một lần (bỏ qua nếu đã cache). --reload để ép tải lại."""
     _setup_logging()
+    from src.data.fields import FieldFetchError
+
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
     client = _make_client()
     client.authenticate()
     repo = FieldRepository(client, session_factory)
-    fields = repo.fetch_all(region, universe, delay)
-    console.print(f"[green]Đã lưu {len(fields)} fields[/green] ({region}/{universe}/delay={delay})")
+    try:
+        fields = repo.get_fields(region, universe, delay, force_reload=reload)
+    except FieldFetchError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    console.print(f"[green]{len(fields)} fields[/green] cho {region}/{universe}/delay={delay}")
+
+
+@app.command("cache-status")
+def cache_status() -> None:
+    """Xem trạng thái cache (các tổ hợp đã fetch)."""
+    _setup_logging()
+    engine = init_db(make_engine())
+    session_factory = make_session_factory(engine)
+    states = FieldRepository(None, session_factory).all_states()
+    table = Table(title="Trạng thái cache")
+    table.add_column("Tổ hợp")
+    table.add_column("Số field", justify="right")
+    table.add_column("Cập nhật")
+    table.add_column("Trạng thái")
+    for s in states:
+        table.add_row(
+            f"{s.region}/{s.universe}/delay={s.delay}",
+            str(s.total_count or 0),
+            s.fetched_at.strftime("%Y-%m-%d %H:%M") if s.fetched_at else "-",
+            s.status or "-",
+        )
+    console.print(table)
 
 
 @app.command("fetch-operators")

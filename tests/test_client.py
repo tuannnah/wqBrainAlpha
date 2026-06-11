@@ -2,16 +2,67 @@
 
 from __future__ import annotations
 
+import tempfile
+import uuid
+from pathlib import Path
+
 import httpx
 import pytest
 
 from src.data.client import AuthError, WQBrainClient
 
 
+def _tmp_session() -> Path:
+    return Path(tempfile.gettempdir()) / f"wq_session_test_{uuid.uuid4().hex}"
+
+
 def _client_with(handler, **kwargs) -> WQBrainClient:
     transport = httpx.MockTransport(handler)
     http = httpx.Client(base_url=WQBrainClient.BASE_URL, transport=transport)
+    kwargs.setdefault("session_file", _tmp_session())
     return WQBrainClient("user@example.com", "secret", client=http, **kwargs)
+
+
+def test_session_con_han_bo_qua_dang_nhap():
+    import json
+
+    state = {"auth_calls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authentication":
+            state["auth_calls"] += 1
+            return httpx.Response(201)
+        if request.url.path == "/users/self/":
+            return httpx.Response(200, json={"id": "u1"})
+        return httpx.Response(404)
+
+    # Session file có sẵn cookie -> client coi như đã có phiên.
+    session_file = _tmp_session()
+    session_file.write_text(json.dumps({"JSESSIONID": "abc"}), encoding="utf-8")
+
+    client = _client_with(handler, session_file=session_file)
+    client.authenticate()
+    assert client.authenticated is True
+    assert state["auth_calls"] == 0  # KHÔNG gọi /authentication vì session còn hạn
+
+
+def test_session_luu_va_nap_lai():
+    import json
+
+    sf = _tmp_session()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
+
+    c1 = _client_with(handler, session_file=sf)
+    c1.client.cookies.set("JSESSIONID", "xyz")
+    c1._save_session()
+
+    saved = json.loads(sf.read_text(encoding="utf-8"))
+    assert saved.get("JSESSIONID") == "xyz"
+
+    c2 = _client_with(handler, session_file=sf)  # nạp lại từ file
+    assert c2._has_session() is True
 
 
 def test_authenticate_thanh_cong_status_201():

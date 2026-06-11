@@ -25,14 +25,30 @@ def _utcnow() -> datetime:
 class DataFieldModel(Base):
     __tablename__ = "data_fields"
 
+    # Khóa kép: cùng field id nhưng khác tổ hợp scope = dòng khác nhau.
     id = Column(String, primary_key=True)
+    region = Column(String, primary_key=True)
+    universe = Column(String, primary_key=True)
+    delay = Column(Integer, primary_key=True)
     description = Column(Text)
     type = Column(String)
     dataset_id = Column(String)
+    cached_at = Column(DateTime, default=_utcnow)
+
+
+class FetchStateModel(Base):
+    """Trạng thái fetch theo từng tổ hợp scope (phục vụ cache-once + TTL)."""
+
+    __tablename__ = "fetch_state"
+
+    key = Column(String, primary_key=True)  # "data_fields:USA:TOP3000:1"
+    entity = Column(String)  # "data_fields" | "operators"
     region = Column(String)
     universe = Column(String)
     delay = Column(Integer)
-    cached_at = Column(DateTime, default=_utcnow)
+    total_count = Column(Integer)
+    fetched_at = Column(DateTime)
+    status = Column(String)  # "complete" | "partial"
 
 
 class OperatorModel(Base):

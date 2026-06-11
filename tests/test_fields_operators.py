@@ -108,6 +108,79 @@ def test_fetch_all_loi_http_raise():
         pass
 
 
+def test_reload_ghi_de_khong_nhan_doi():
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+
+    seed = FakeClient()
+    seed.queue_get(
+        FakeResponse(200, json_data={"count": 2, "results": [{"id": "close"}, {"id": "open"}]})
+    )
+    FieldRepository(seed, sf).fetch_all("USA", "TOP3000", 1, page_size=10)
+
+    refetch = FakeClient()  # lần reload trả ít field hơn
+    refetch.queue_get(FakeResponse(200, json_data={"count": 1, "results": [{"id": "close"}]}))
+    repo = FieldRepository(refetch, sf)
+    repo.get_fields("USA", "TOP3000", 1, force_reload=True)
+    # Ghi đè: chỉ còn 1 field cho scope đó, không phải 3.
+    assert repo.cached_count("USA", "TOP3000", 1) == 1
+
+
+def test_ttl_het_han_trigger_fetch():
+    from datetime import timedelta
+
+    from src.storage.models import FetchStateModel
+
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    seed = FakeClient()
+    seed.queue_get(FakeResponse(200, json_data={"count": 1, "results": [{"id": "close"}]}))
+    FieldRepository(seed, sf).fetch_all("USA", "TOP3000", 1, page_size=10)
+
+    # Đẩy fetched_at lùi quá TTL (mặc định 30 ngày).
+    session = sf()
+    state = session.get(FetchStateModel, "data_fields:USA:TOP3000:1")
+    state.fetched_at = state.fetched_at - timedelta(days=40)
+    session.merge(state)
+    session.commit()
+    session.close()
+
+    refetch = FakeClient()
+    refetch.queue_get(FakeResponse(200, json_data={"count": 1, "results": [{"id": "open"}]}))
+    repo = FieldRepository(refetch, sf)
+    repo.get_fields("USA", "TOP3000", 1)  # phải fetch lại vì cache hết hạn
+    assert len(refetch.calls) == 1
+
+
+def test_scope_khac_nhau_khong_de_len_nhau():
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    c1 = FakeClient()
+    c1.queue_get(FakeResponse(200, json_data={"count": 1, "results": [{"id": "close"}]}))
+    FieldRepository(c1, sf).fetch_all("USA", "TOP3000", 1, page_size=10)
+    c2 = FakeClient()
+    c2.queue_get(FakeResponse(200, json_data={"count": 1, "results": [{"id": "close"}]}))
+    FieldRepository(c2, sf).fetch_all("EUR", "TOP1000", 0, page_size=10)
+    # Cùng id 'close' nhưng khác scope -> 2 dòng riêng (khóa kép).
+    repo = FieldRepository(None, sf)
+    assert repo.cached_count("USA", "TOP3000", 1) == 1
+    assert repo.cached_count("EUR", "TOP1000", 0) == 1
+    assert repo.cached_count() == 2
+
+
+def test_get_state_va_all_states():
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    c = FakeClient()
+    c.queue_get(FakeResponse(200, json_data={"count": 1, "results": [{"id": "close"}]}))
+    FieldRepository(c, sf).fetch_all("USA", "TOP3000", 1, page_size=10)
+    repo = FieldRepository(None, sf)
+    state = repo.get_state("USA", "TOP3000", 1)
+    assert state.status == "complete"
+    assert state.total_count == 1
+    assert len(repo.all_states()) == 1
+
+
 def test_count_arity():
     assert _count_arity("ts_mean(x, d)") == 2
     assert _count_arity("rank(x)") == 1

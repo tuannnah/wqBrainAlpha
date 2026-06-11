@@ -44,8 +44,12 @@ Tương đương: `python main.py start`.
 ## Dùng bằng dòng lệnh
 
 ```powershell
-python main.py login                          # Kiểm tra đăng nhập
-python main.py fetch-fields                   # Lấy & cache data fields
+python main.py login                          # Đăng nhập (dùng session cũ nếu còn hạn)
+python main.py login --force                  # Ép đăng nhập lại
+python main.py probe-fields                   # In JSON thật của /data-fields (kiểm format)
+python main.py fetch-fields                   # Tải 1 lần -> lưu DB; lần sau load từ DB
+python main.py fetch-fields --reload          # Ép tải lại (ghi đè cache)
+python main.py cache-status                   # Xem các tổ hợp đã cache
 python main.py fetch-operators                # Lấy & cache operators
 python main.py simulate --expr "rank(close)"  # Chạy một simulation
 python main.py generate --count 100           # Sinh alpha (Phase 2)

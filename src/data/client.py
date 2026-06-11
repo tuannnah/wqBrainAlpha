@@ -11,11 +11,15 @@ Cơ chế:
 
 from __future__ import annotations
 
+import json
 import webbrowser
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import httpx
 from loguru import logger
+
+DEFAULT_SESSION_FILE = Path(".wq_session")
 
 
 class AuthError(RuntimeError):
@@ -48,32 +52,78 @@ class WQBrainClient:
         browser_open=None,
         confirmation_input=None,
         sleep_func=None,
+        session_file: Path | None = DEFAULT_SESSION_FILE,
     ):
         import time
 
         self.email = email
         self.password = password
         self.client = client or httpx.Client(base_url=self.BASE_URL, timeout=self.AUTH_TIMEOUT)
-        self.client.auth = httpx.BasicAuth(email, password)
         self.browser_open = browser_open or webbrowser.open
         self.confirmation_input = confirmation_input or input
         self._sleep = sleep_func or time.sleep
+        self.session_file = session_file
         self._authenticated = False
+        self._load_session()
+
+    # ------------------------------------------------------- session on disk
+    def _load_session(self) -> None:
+        if not self.session_file or not self.session_file.exists():
+            return
+        try:
+            data = json.loads(self.session_file.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            return
+        for name, value in data.items():
+            self.client.cookies.set(name, value)
+        logger.info("Đã nạp session từ {}", self.session_file)
+
+    def _save_session(self) -> None:
+        if not self.session_file:
+            return
+        data = {c.name: c.value for c in self.client.cookies.jar}
+        try:
+            self.session_file.write_text(json.dumps(data), encoding="utf-8")
+            try:
+                self.session_file.chmod(0o600)
+            except (OSError, NotImplementedError):
+                pass  # Windows có thể bỏ qua chmod
+        except OSError as exc:
+            logger.warning("Không lưu được session: {}", exc)
+
+    def _has_session(self) -> bool:
+        return len(self.client.cookies.jar) > 0
+
+    def is_session_valid(self) -> bool:
+        """Kiểm tra session cookie còn dùng được qua GET /users/self/."""
+        try:
+            resp = self.client.get("/users/self/")
+        except httpx.RequestError:
+            return False
+        return resp.status_code == 200
 
     # ------------------------------------------------------------------ auth
     def _request_authentication(self) -> httpx.Response:
         try:
-            return self.client.post("/authentication")
+            return self.client.post("/authentication", auth=(self.email, self.password))
         except httpx.RequestError as exc:
             raise AuthError(
                 "Không thể kết nối đến WorldQuant BRAIN. Kiểm tra mạng và thử lại."
             ) from exc
 
-    def authenticate(self) -> None:
+    def authenticate(self, force: bool = False) -> None:
+        # Tái dùng session đã lưu nếu còn hạn (khỏi đăng nhập lại).
+        if not force and self._has_session() and self.is_session_valid():
+            self._authenticated = True
+            logger.success("Session còn hạn, bỏ qua đăng nhập")
+            print("✅ Dùng lại phiên đăng nhập trước.")
+            return
+
         resp = self._request_authentication()
 
         if resp.status_code in (200, 201):
             self._authenticated = True
+            self._save_session()
             logger.success("Đăng nhập WQ Brain thành công")
             print("✅ Xác thực thành công!")
             return
@@ -82,6 +132,7 @@ class WQBrainClient:
         if resp.status_code in self.VERIFICATION_STATUS_CODES or self._extract_verification_url(resp):
             self._complete_additional_verification(resp)
             self._authenticated = True
+            self._save_session()
             logger.success("Đăng nhập WQ Brain thành công (sau xác thực QR)")
             print("✅ Xác thực thành công!")
             return

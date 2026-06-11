@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 from sqlalchemy.orm import Session
 
+from config.settings import settings
 from src.data.client import WQBrainClient
-from src.storage.models import DataFieldModel
+from src.storage.models import DataFieldModel, FetchStateModel
+
+
+def _now() -> datetime:
+    """UTC dạng naive (nhất quán với DateTime trong SQLite)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class FieldFetchError(RuntimeError):
@@ -47,6 +54,35 @@ class FieldRepository:
         self.client = client
         self.session_factory = session_factory
 
+    # ----------------------------------------------------------- public API
+    def get_fields(
+        self,
+        region: str,
+        universe: str,
+        delay: int,
+        force_reload: bool = False,
+        instrument_type: str = "EQUITY",
+    ) -> list[DataField]:
+        """Load từ DB nếu đã cache (và còn hạn); ngược lại fetch từ API một lần."""
+        if not force_reload and self._is_cached(region, universe, delay):
+            logger.info("Load data fields từ DB (không gọi API) — {}", self._key(region, universe, delay))
+            return self._load_from_db(region, universe, delay)
+        logger.info("Fetch data fields từ WQ API — {}", self._key(region, universe, delay))
+        return self._fetch_and_store(region, universe, delay, instrument_type)
+
+    def ensure(
+        self,
+        region: str,
+        universe: str,
+        delay: int,
+        instrument_type: str = "EQUITY",
+        force: bool = False,
+    ) -> tuple[list[DataField], bool]:
+        """Trả (fields, đã_tải_mới). Wrapper quanh get_fields cho wizard/CLI."""
+        was_cached = self._is_cached(region, universe, delay)
+        fields = self.get_fields(region, universe, delay, force_reload=force, instrument_type=instrument_type)
+        return fields, (force or not was_cached)
+
     def fetch_all(
         self,
         region: str,
@@ -55,50 +91,32 @@ class FieldRepository:
         instrument_type: str = "EQUITY",
         page_size: int | None = None,
     ) -> list[DataField]:
-        """Phân trang qua offset/limit, cache toàn bộ vào bảng data_fields."""
-        limit = page_size or self.PAGE_SIZE
-        offset = 0
-        fields: list[DataField] = []
+        """Ép fetch từ API và ghi đè cache (giữ tương thích tên cũ)."""
+        return self._fetch_and_store(region, universe, delay, instrument_type, page_size)
 
-        while True:
-            resp = self.client.get(
-                "/data-fields",
-                params={
-                    "instrumentType": instrument_type,
-                    "region": region,
-                    "delay": delay,
-                    "universe": universe,
-                    "limit": limit,
-                    "offset": offset,
-                },
-            )
-            if resp.status_code >= 400:
-                logger.error("GET /data-fields lỗi {}: {}", resp.status_code, resp.text[:500])
-                if resp.status_code == 429:
-                    raise FieldFetchError(
-                        "Bị giới hạn tần suất (429) sau nhiều lần thử. "
-                        "Hãy chờ vài phút rồi tải lại."
-                    )
-                raise FieldFetchError(
-                    f"Không tải được data-fields (HTTP {resp.status_code}). "
-                    "Kiểm tra region/universe/delay hợp lệ và tài khoản có quyền."
-                )
-            payload = resp.json()
-            results = payload.get("results", [])
-            if not results:
-                break
+    def fetch_datasets(self) -> list[dict]:
+        """GET /data-sets — danh sách dataset categories."""
+        resp = self.client.get("/data-sets")
+        resp.raise_for_status()
+        return resp.json().get("results", [])
 
-            for raw in results:
-                fields.append(_parse_field(raw, region, universe, delay))
+    # ------------------------------------------------------------- cache state
+    def _key(self, region: str, universe: str, delay: int) -> str:
+        return f"data_fields:{region}:{universe}:{delay}"
 
-            offset += limit
-            total = payload.get("count")
-            if total is not None and offset >= total:
-                break
-
-        self._cache(fields)
-        logger.info("Đã lấy {} data-fields ({}/{}/delay={})", len(fields), region, universe, delay)
-        return fields
+    def _is_cached(self, region: str, universe: str, delay: int) -> bool:
+        session: Session = self.session_factory()
+        try:
+            state = session.get(FetchStateModel, self._key(region, universe, delay))
+            if state is None or state.status != "complete" or state.fetched_at is None:
+                return False
+            age = _now() - state.fetched_at
+            if age > timedelta(days=settings.cache_ttl_days):
+                logger.info("Cache quá hạn ({} ngày) — sẽ tải lại", age.days)
+                return False
+            return True
+        finally:
+            session.close()
 
     def cached_count(self, region: str | None = None, universe: str | None = None,
                      delay: int | None = None) -> int:
@@ -116,48 +134,124 @@ class FieldRepository:
         finally:
             session.close()
 
-    def ensure(
-        self,
-        region: str,
-        universe: str,
-        delay: int,
-        instrument_type: str = "EQUITY",
-        force: bool = False,
-    ) -> tuple[list[DataField], bool]:
-        """Trả (fields, đã_tải_mới). Dùng cache nếu có và không force."""
-        if not force and self.cached_count(region, universe, delay) > 0:
-            return self.load_cached(), False
-        return self.fetch_all(region, universe, delay, instrument_type), True
-
-    def fetch_datasets(self) -> list[dict]:
-        """GET /data-sets — danh sách dataset categories."""
-        resp = self.client.get("/data-sets")
-        resp.raise_for_status()
-        return resp.json().get("results", [])
-
-    def _cache(self, fields: list[DataField]) -> None:
+    def get_state(self, region: str, universe: str, delay: int) -> FetchStateModel | None:
         session: Session = self.session_factory()
         try:
+            return session.get(FetchStateModel, self._key(region, universe, delay))
+        finally:
+            session.close()
+
+    def all_states(self) -> list[FetchStateModel]:
+        session: Session = self.session_factory()
+        try:
+            return session.query(FetchStateModel).all()
+        finally:
+            session.close()
+
+    # ------------------------------------------------------------- fetch/store
+    def _fetch_and_store(
+        self, region: str, universe: str, delay: int,
+        instrument_type: str = "EQUITY", page_size: int | None = None,
+    ) -> list[DataField]:
+        fields = self._fetch_all_pages(region, universe, delay, instrument_type, page_size)
+        self._replace_in_db(fields, region, universe, delay)
+        self._update_state(region, universe, delay, len(fields))
+        logger.success("Đã lưu {} fields vào DB ({}/{}/delay={})", len(fields), region, universe, delay)
+        return fields
+
+    def _fetch_all_pages(
+        self, region: str, universe: str, delay: int,
+        instrument_type: str = "EQUITY", page_size: int | None = None,
+    ) -> list[DataField]:
+        limit = page_size or self.PAGE_SIZE
+        offset = 0
+        fields: list[DataField] = []
+        while True:
+            resp = self.client.get(
+                "/data-fields",
+                params={
+                    "instrumentType": instrument_type,
+                    "region": region,
+                    "delay": delay,
+                    "universe": universe,
+                    "limit": limit,
+                    "offset": offset,
+                },
+            )
+            if resp.status_code >= 400:
+                logger.error("GET /data-fields lỗi {}: {}", resp.status_code, resp.text[:500])
+                if resp.status_code == 429:
+                    raise FieldFetchError(
+                        "Bị giới hạn tần suất (429) sau nhiều lần thử. Hãy chờ vài phút rồi tải lại."
+                    )
+                raise FieldFetchError(
+                    f"Không tải được data-fields (HTTP {resp.status_code}). "
+                    "Kiểm tra region/universe/delay hợp lệ và tài khoản có quyền."
+                )
+            payload = resp.json()
+            results = payload.get("results", [])
+            if not results:
+                break
+            for raw in results:
+                fields.append(_parse_field(raw, region, universe, delay))
+            offset += limit
+            total = payload.get("count")
+            if total is not None and offset >= total:
+                break
+        return fields
+
+    def _replace_in_db(self, fields: list[DataField], region: str, universe: str, delay: int) -> None:
+        """Xóa cache cũ của đúng tổ hợp rồi ghi mới (replace, không append)."""
+        session: Session = self.session_factory()
+        try:
+            session.query(DataFieldModel).filter_by(
+                region=region, universe=universe, delay=delay
+            ).delete()
             for f in fields:
-                session.merge(
+                session.add(
                     DataFieldModel(
                         id=f.id,
+                        region=region,
+                        universe=universe,
+                        delay=delay,
                         description=f.description,
                         type=f.type,
                         dataset_id=f.dataset_id,
-                        region=f.region,
-                        universe=f.universe,
-                        delay=f.delay,
+                        cached_at=_now(),
                     )
                 )
             session.commit()
         finally:
             session.close()
 
-    def load_cached(self) -> list[DataField]:
+    def _update_state(self, region: str, universe: str, delay: int, count: int) -> None:
         session: Session = self.session_factory()
         try:
-            rows = session.query(DataFieldModel).all()
+            key = self._key(region, universe, delay)
+            state = session.get(FetchStateModel, key) or FetchStateModel(key=key)
+            state.entity = "data_fields"
+            state.region, state.universe, state.delay = region, universe, delay
+            state.total_count = count
+            state.fetched_at = _now()
+            state.status = "complete"
+            session.merge(state)
+            session.commit()
+        finally:
+            session.close()
+
+    # ---------------------------------------------------------------- loaders
+    def _load_from_db(self, region: str, universe: str, delay: int) -> list[DataField]:
+        return self._rows_to_fields(
+            lambda q: q.filter_by(region=region, universe=universe, delay=delay)
+        )
+
+    def load_cached(self) -> list[DataField]:
+        return self._rows_to_fields(lambda q: q)
+
+    def _rows_to_fields(self, refine) -> list[DataField]:
+        session: Session = self.session_factory()
+        try:
+            rows = refine(session.query(DataFieldModel)).all()
             return [
                 DataField(
                     id=r.id,
