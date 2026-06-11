@@ -8,3 +8,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 logs/
+
+# Repo gốc ignore "data/" — re-include package src/data của tool này.
+!src/data/
+!src/data/**
