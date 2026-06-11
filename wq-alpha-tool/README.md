@@ -21,6 +21,11 @@ copy .env.example .env             # rồi điền credentials thật
 
 Sửa `.env` (không commit) — xem `.env.example` cho danh sách biến.
 
+**Đăng nhập:** để trống `WQ_EMAIL`/`WQ_PASSWORD` trong `.env` → tool sẽ hỏi
+email/mật khẩu ngay trong PowerShell mỗi lần chạy (mật khẩu ẩn). Nếu tài khoản
+cần **xác thực QR/biometric**, tool tự mở trình duyệt tới đường dẫn xác thực;
+bạn quét QR xong thì quay lại console nhấn Enter (thử lại tối đa 3 lần).
+
 ## Cách dùng nhanh (khuyến nghị)
 
 Double-click **`run.bat`** (hoặc chuột phải `run.ps1` > Run with PowerShell).

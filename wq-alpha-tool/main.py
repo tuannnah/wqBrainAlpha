@@ -38,11 +38,26 @@ def _setup_logging() -> None:
     logger.add(LOG_DIR / "wq_alpha_{time:YYYY-MM-DD}.log", rotation="10 MB", retention="14 days")
 
 
+def prompt_credentials(input_func=input, password_func=None):
+    """Nhập email/mật khẩu trực tiếp trong console (mật khẩu ẩn)."""
+    import getpass
+
+    password_func = password_func or getpass.getpass
+    while True:
+        email = input_func("\nEmail WorldQuant BRAIN: ").strip()
+        password = password_func("Mật khẩu (ẩn): ")
+        if email and password:
+            return email, password
+        console.print("[red]❌ Email và mật khẩu không được để trống[/red]")
+
+
 def _make_client() -> WQBrainClient:
-    if not settings.wq_email or not settings.wq_password:
-        console.print("[red]Thiếu WQ_EMAIL / WQ_PASSWORD trong .env[/red]")
-        raise typer.Exit(code=1)
-    return WQBrainClient(settings.wq_email, settings.wq_password)
+    # Ưu tiên .env nếu đã điền; nếu trống thì nhập tương tác trong PowerShell.
+    email = settings.wq_email
+    password = settings.wq_password
+    if not email or not password:
+        email, password = prompt_credentials()
+    return WQBrainClient(email, password)
 
 
 @app.command()
