@@ -155,6 +155,7 @@ def run_ga(
     generations: int = typer.Option(10),
     region: str = typer.Option(settings.default_region),
     universe: str = typer.Option(settings.default_universe),
+    seed_llm: bool = typer.Option(False, "--seed-llm", help="Trộn 50% seed từ DeepSeek"),
 ) -> None:
     """Chạy Genetic Algorithm tối ưu alpha."""
     _setup_logging()
@@ -177,7 +178,17 @@ def run_ga(
     pf = PreFilter(known_operators=operators or None, known_fields=set(fields))
     tgen = TemplateGenerator(fields, pf, rng=random.Random())
 
+    llm_pool: list[str] = []
+    if seed_llm:
+        llm_gen = _make_llm_generator(session_factory, pf)
+        ideas = llm_gen.generate_ideas(5)
+        for idea in ideas:
+            llm_pool.extend(llm_gen.generate(idea, n=2))
+        console.print(f"[cyan]LLM seed pool: {len(llm_pool)} alpha[/cyan]")
+
     def seed_factory():
+        if llm_pool and random.random() < 0.5:
+            return GeneticOptimizer.expr_to_node(random.choice(llm_pool))
         exprs = tgen.generate(1)
         return GeneticOptimizer.expr_to_node(exprs[0] if exprs else f"rank({fields[0]})")
 
@@ -197,6 +208,60 @@ def run_ga(
     for node in best[:10]:
         repo.save_alpha(to_expression(node), source="ga")
     console.print(f"[green]GA xong[/green] — best: {opt.history[-1].best_expression}")
+
+
+def _make_llm_generator(session_factory, prefilter):
+    from src.llm.deepseek_client import DeepSeekClient
+    from src.llm.generator import LLMAlphaGenerator
+
+    if not settings.deepseek_api_key:
+        console.print("[red]Thiếu DEEPSEEK_API_KEY trong .env[/red]")
+        raise typer.Exit(code=1)
+    deepseek = DeepSeekClient(settings.deepseek_api_key, settings.deepseek_base_url)
+    field_repo = FieldRepository(None, session_factory)
+    op_repo = OperatorRepository(None, session_factory)
+    return LLMAlphaGenerator(deepseek, field_repo, op_repo, prefilter)
+
+
+@app.command("llm-generate")
+def llm_generate(
+    idea: str = typer.Option(..., help="Ý tưởng alpha bằng ngôn ngữ tự nhiên"),
+    count: int = typer.Option(5),
+) -> None:
+    """Sinh alpha từ một ý tưởng bằng DeepSeek."""
+    _setup_logging()
+    from src.simulation.pre_filter import PreFilter
+
+    engine = init_db(make_engine())
+    session_factory = make_session_factory(engine)
+    fields, operators = _cached_symbols(session_factory)
+    pf = PreFilter(known_operators=operators or None, known_fields=set(fields) or None)
+    llm_gen = _make_llm_generator(session_factory, pf)
+
+    alphas = llm_gen.generate(idea, n=count)
+    repo = AlphaRepository(session_factory)
+    for expr in alphas:
+        repo.save_alpha(expr, source="llm")
+    console.print(f"[green]Đã sinh {len(alphas)} alpha[/green] từ ý tưởng: {idea}")
+    for expr in alphas:
+        console.print(f"  • {expr}")
+    console.print(f"[dim]Token usage: {llm_gen.deepseek.usage.total_tokens} "
+                  f"(~${llm_gen.deepseek.usage.estimated_cost():.4f})[/dim]")
+
+
+@app.command("llm-ideas")
+def llm_ideas(count: int = typer.Option(10)) -> None:
+    """Cho DeepSeek brainstorm các ý tưởng alpha."""
+    _setup_logging()
+    from src.simulation.pre_filter import PreFilter
+
+    engine = init_db(make_engine())
+    session_factory = make_session_factory(engine)
+    pf = PreFilter()
+    llm_gen = _make_llm_generator(session_factory, pf)
+    ideas = llm_gen.generate_ideas(count)
+    for i, idea in enumerate(ideas, 1):
+        console.print(f"  {i}. {idea}")
 
 
 @app.command()
