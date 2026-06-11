@@ -21,13 +21,25 @@ copy .env.example .env             # rồi điền credentials thật
 
 Sửa `.env` (không commit) — xem `.env.example` cho danh sách biến.
 
-## Sử dụng (Phase 1)
+## Cách dùng nhanh (khuyến nghị)
+
+Double-click **`run.bat`** (hoặc chuột phải `run.ps1` > Run with PowerShell).
+Script sẽ tự tạo venv, cài dependencies, tạo `.env` lần đầu, rồi hiện menu
+chọn số để chạy từng chức năng (login, fetch, generate, GA, submit, dashboard).
+
+## Dùng bằng dòng lệnh
 
 ```powershell
 python main.py login                          # Kiểm tra đăng nhập
 python main.py fetch-fields                   # Lấy & cache data fields
 python main.py fetch-operators                # Lấy & cache operators
 python main.py simulate --expr "rank(close)"  # Chạy một simulation
+python main.py generate --count 100           # Sinh alpha (Phase 2)
+python main.py run-ga --population 30 --generations 10
+python main.py top --n 20                      # Xem alpha tốt nhất
+python main.py llm-ideas --count 10            # DeepSeek (Phase 3)
+python main.py submit --dry-run                # Nộp alpha (Phase 4)
+streamlit run dashboard/app.py                 # Dashboard
 ```
 
 ## Test
