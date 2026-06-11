@@ -12,3 +12,5 @@ logs/
 # Repo gốc ignore "data/" — re-include package src/data của tool này.
 !src/data/
 !src/data/**
+# ...nhưng vẫn bỏ qua bytecode trong src/data.
+src/data/__pycache__/
