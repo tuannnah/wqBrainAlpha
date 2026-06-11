@@ -61,11 +61,20 @@ class GeneticOptimizer:
     tournament_size: int = 3
     max_depth: int = 6
     max_nodes: int = 30
+    max_simulations: int | None = None  # trần số lần simulate thật (None = không giới hạn)
     rng: random.Random = field(default_factory=random.Random)
 
     def __post_init__(self):
         self._cache: dict[str, float] = {}
         self.history: list[GenerationStats] = []
+        self._sim_count = 0
+
+    @property
+    def simulations_used(self) -> int:
+        return self._sim_count
+
+    def _budget_exhausted(self) -> bool:
+        return self.max_simulations is not None and self._sim_count >= self.max_simulations
 
     # ----------------------------------------------------------- evaluation
     def evaluate(self, ind: Node) -> float:
@@ -79,7 +88,11 @@ class GeneticOptimizer:
         if not ok:
             self._cache[expr] = NEG_INF
             return NEG_INF
+        if self._budget_exhausted():
+            # Hết ngân sách simulate — không gọi WQ thêm, coi như chưa đánh giá.
+            return NEG_INF
         result = self.simulator.simulate(expr)
+        self._sim_count += 1
         value = self.scorer(result)
         self._cache[expr] = value
         return value
@@ -176,6 +189,12 @@ class GeneticOptimizer:
                 avg,
                 stats.best_expression,
             )
+
+            if self._budget_exhausted():
+                logger.info(
+                    "Đã đạt giới hạn {} simulation — dừng tiến hóa.", self.max_simulations
+                )
+                break
 
             elites = [ind.copy() for ind, _ in scored[: self.elite_size]]
             new_pop = elites

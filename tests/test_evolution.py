@@ -25,7 +25,7 @@ def _expr_scorer(expr: str) -> float:
     return float(expr.count("rank"))
 
 
-def _make_optimizer(fields, seeds, rng):
+def _make_optimizer(fields, seeds, rng, max_simulations=None):
     pf = PreFilter(known_operators=None, known_fields=None)
     sim = FakeSimulator()
 
@@ -42,9 +42,20 @@ def _make_optimizer(fields, seeds, rng):
         population_size=6,
         generations=3,
         elite_size=2,
+        max_simulations=max_simulations,
         rng=rng,
     )
     return opt, sim
+
+
+def test_max_simulations_gioi_han_so_lan_mo_phong():
+    rng = random.Random(5)
+    seeds = [f"rank(f{i})" for i in range(30)]  # nhiều biểu thức khác nhau
+    opt, sim = _make_optimizer([f"f{i}" for i in range(30)], seeds, rng, max_simulations=4)
+    opt.run()
+    # Không bao giờ gọi simulate quá trần đã đặt.
+    assert len(sim.calls) <= 4
+    assert opt.simulations_used <= 4
 
 
 def test_crossover_tao_cay_hop_le():

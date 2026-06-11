@@ -268,6 +268,7 @@ def run_ga(
     region: str = typer.Option(settings.default_region),
     universe: str = typer.Option(settings.default_universe),
     seed_llm: bool = typer.Option(False, "--seed-llm", help="Trộn 50% seed từ DeepSeek"),
+    max_sims: int = typer.Option(0, "--max-sims", help="Trần số alpha mô phỏng (0 = không giới hạn, để test pipeline)"),
 ) -> None:
     """Chạy Genetic Algorithm tối ưu alpha."""
     _setup_logging()
@@ -311,6 +312,7 @@ def run_ga(
         fields=fields,
         population_size=population,
         generations=generations,
+        max_simulations=max_sims or None,
     )
     best = opt.run()
 
@@ -319,7 +321,10 @@ def run_ga(
 
     for node in best[:10]:
         repo.save_alpha(to_expression(node), source="ga")
-    console.print(f"[green]GA xong[/green] — best: {opt.history[-1].best_expression}")
+    console.print(
+        f"[green]GA xong[/green] — {opt.simulations_used} lần mô phỏng — "
+        f"best: {opt.history[-1].best_expression}"
+    )
 
 
 def _make_llm_generator(session_factory, prefilter):
@@ -572,6 +577,17 @@ def _wizard_run_ga(state: _WizardState) -> None:
     from src.optimization.evolution import GeneticOptimizer
     from src.simulation.pre_filter import PreFilter
 
+    mode = _ask(
+        "Chế độ GA: [1] Auto (chạy đủ pop×gen)  [2] Test - giới hạn số alpha mô phỏng (Enter=1): ",
+        "1",
+    )
+    max_sims = None
+    if mode == "2":
+        n = _ask("Số alpha tối đa được mô phỏng: ")
+        max_sims = int(n) if n.isdigit() and int(n) > 0 else None
+        if max_sims:
+            console.print(f"[cyan]Sẽ dừng sau tối đa {max_sims} lần mô phỏng.[/cyan]")
+
     pop = _ask("Population (Enter=30): ", "30")
     gens = _ask("Generations (Enter=10): ", "10")
     fields, operators = _cached_symbols(state.session_factory)
@@ -590,12 +606,16 @@ def _wizard_run_ga(state: _WizardState) -> None:
         fields=fields,
         population_size=int(pop) if pop.isdigit() else 30,
         generations=int(gens) if gens.isdigit() else 10,
+        max_simulations=max_sims,
     )
     best = opt.run()
     repo = AlphaRepository(state.session_factory)
     for node in best[:10]:
         repo.save_alpha(to_expression(node), source="ga")
-    console.print(f"[green]GA xong — best: {opt.history[-1].best_expression}[/green]")
+    console.print(
+        f"[green]GA xong — {opt.simulations_used} lần mô phỏng — "
+        f"best: {opt.history[-1].best_expression}[/green]"
+    )
 
 
 def _wizard_list_fields(state: _WizardState) -> None:
