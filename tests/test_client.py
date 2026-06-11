@@ -66,6 +66,25 @@ def test_extract_verification_url_tu_header():
     assert url == "https://api.worldquantbrain.com/authentication/verify/abc"
 
 
+def test_get_tu_backoff_khi_429():
+    state = {"data_calls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authentication":
+            return httpx.Response(201)
+        state["data_calls"] += 1
+        if state["data_calls"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "2"}, json={"message": "rate limit"})
+        return httpx.Response(200, json={"results": []})
+
+    slept = []
+    client = _client_with(handler, sleep_func=lambda s: slept.append(s))
+    resp = client.get("/data-fields")
+    assert resp.status_code == 200
+    assert slept == [2.0]  # đã chờ đúng Retry-After rồi thử lại
+    assert state["data_calls"] == 2
+
+
 def test_get_tu_reauth_khi_session_het_han():
     state = {"auth_count": 0, "data_calls": 0}
 

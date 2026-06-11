@@ -36,6 +36,10 @@ class WQBrainClient:
         "verificationurl",
     }
 
+    RATE_LIMIT_STATUS = 429
+    MAX_RATE_LIMIT_RETRIES = 5
+    DEFAULT_RETRY_AFTER = 5.0
+
     def __init__(
         self,
         email: str,
@@ -43,13 +47,17 @@ class WQBrainClient:
         client: httpx.Client | None = None,
         browser_open=None,
         confirmation_input=None,
+        sleep_func=None,
     ):
+        import time
+
         self.email = email
         self.password = password
         self.client = client or httpx.Client(base_url=self.BASE_URL, timeout=self.AUTH_TIMEOUT)
         self.client.auth = httpx.BasicAuth(email, password)
         self.browser_open = browser_open or webbrowser.open
         self.confirmation_input = confirmation_input or input
+        self._sleep = sleep_func or time.sleep
         self._authenticated = False
 
     # ------------------------------------------------------------------ auth
@@ -178,14 +186,37 @@ class WQBrainClient:
         if not self._authenticated:
             self.authenticate()
 
+    def _retry_after(self, resp: httpx.Response) -> float:
+        try:
+            return float(resp.headers.get("Retry-After", self.DEFAULT_RETRY_AFTER))
+        except (TypeError, ValueError):
+            return self.DEFAULT_RETRY_AFTER
+
+    def _send_with_rate_limit(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """Gửi request, tự chờ Retry-After và thử lại khi gặp 429."""
+        for attempt in range(self.MAX_RATE_LIMIT_RETRIES + 1):
+            resp = self.client.request(method, path, **kwargs)
+            if resp.status_code == self.RATE_LIMIT_STATUS and attempt < self.MAX_RATE_LIMIT_RETRIES:
+                wait = self._retry_after(resp)
+                logger.warning(
+                    "Bị giới hạn tần suất (429) — chờ {}s rồi thử lại ({}/{})",
+                    wait,
+                    attempt + 1,
+                    self.MAX_RATE_LIMIT_RETRIES,
+                )
+                self._sleep(wait)
+                continue
+            return resp
+        return resp
+
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         self._ensure_auth()
-        resp = self.client.request(method, path, **kwargs)
+        resp = self._send_with_rate_limit(method, path, **kwargs)
         if resp.status_code == 401:
             logger.warning("Session hết hạn (401), thử re-authenticate")
             self._authenticated = False
             self.authenticate()
-            resp = self.client.request(method, path, **kwargs)
+            resp = self._send_with_rate_limit(method, path, **kwargs)
         return resp
 
     def get(self, path: str, **kwargs) -> httpx.Response:

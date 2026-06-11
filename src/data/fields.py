@@ -74,6 +74,11 @@ class FieldRepository:
             )
             if resp.status_code >= 400:
                 logger.error("GET /data-fields lỗi {}: {}", resp.status_code, resp.text[:500])
+                if resp.status_code == 429:
+                    raise FieldFetchError(
+                        "Bị giới hạn tần suất (429) sau nhiều lần thử. "
+                        "Hãy chờ vài phút rồi tải lại."
+                    )
                 raise FieldFetchError(
                     f"Không tải được data-fields (HTTP {resp.status_code}). "
                     "Kiểm tra region/universe/delay hợp lệ và tài khoản có quyền."
