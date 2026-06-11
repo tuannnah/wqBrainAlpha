@@ -307,5 +307,38 @@ def top(
     console.print(table)
 
 
+@app.command()
+def submit(
+    dry_run: bool = typer.Option(True, help="Chỉ liệt kê, không nộp thật"),
+) -> None:
+    """Chọn và nộp alpha đạt ngưỡng (mặc định dry-run)."""
+    _setup_logging()
+    from src.submission.correlation import CorrelationChecker
+    from src.submission.manager import SubmissionManager
+
+    engine = init_db(make_engine())
+    session_factory = make_session_factory(engine)
+    client = _make_client()
+    client.authenticate()
+
+    manager = SubmissionManager(client, session_factory, CorrelationChecker(client))
+    selected = manager.run_daily(dry_run=dry_run)
+
+    title = "Sẽ nộp (dry-run)" if dry_run else "Đã nộp"
+    table = Table(title=f"{title} — {len(selected)} alpha")
+    table.add_column("WQ Alpha")
+    table.add_column("Expression", overflow="fold")
+    table.add_column("Sharpe", justify="right")
+    table.add_column("Score", justify="right")
+    for c in selected:
+        table.add_row(
+            c.wq_alpha_id,
+            c.expression,
+            f"{c.sharpe:.3f}" if c.sharpe is not None else "—",
+            f"{c.score:.3f}" if c.score is not None else "—",
+        )
+    console.print(table)
+
+
 if __name__ == "__main__":
     app()

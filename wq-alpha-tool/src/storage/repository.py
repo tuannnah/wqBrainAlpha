@@ -42,6 +42,7 @@ class AlphaRepository:
                 SimulationModel(
                     id=sim_id,
                     alpha_id=alpha_id,
+                    wq_alpha_id=result.alpha_id,
                     region=region,
                     universe=universe,
                     sharpe=result.sharpe,

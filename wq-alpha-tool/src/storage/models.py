@@ -60,6 +60,7 @@ class SimulationModel(Base):
 
     id = Column(String, primary_key=True)
     alpha_id = Column(String, ForeignKey("alphas.id"))
+    wq_alpha_id = Column(String)  # id alpha trên nền tảng WQ (phục vụ submit/correlation)
     region = Column(String)
     universe = Column(String)
     sharpe = Column(Float)
