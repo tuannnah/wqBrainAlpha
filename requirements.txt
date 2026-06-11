@@ -1,5 +1,22 @@
-requests>=2.31.0
-pandas>=2.0.0
-lark>=1.1.9,<2
-pyinstaller>=5.13.2
-pillow>=10.0.0
+httpx>=0.27
+websockets>=12.0
+pydantic>=2.7
+pydantic-settings>=2.3
+sqlalchemy>=2.0
+loguru>=0.7
+typer>=0.12
+rich>=13.7
+python-dotenv>=1.0
+tenacity>=8.3
+pyyaml>=6.0
+pytest>=8.2
+pytest-asyncio>=0.23
+# Phase 2+
+deap>=1.4
+optuna>=3.6
+# Phase 3 (DeepSeek dùng chuẩn OpenAI-compatible)
+openai>=1.30
+# Dashboard
+streamlit>=1.35
+pandas>=2.2
+plotly>=5.22

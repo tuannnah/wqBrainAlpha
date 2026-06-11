@@ -1,44 +1,15 @@
-# Python
+.env
+venv/
 .venv/
+*.db
+*.db-wal
+*.db-shm
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# PyInstaller
-*.manifest
-*.spec
-WorldQuant_Brain_Alpha_Generator.spec
-
-# Credentials
-brain_credentials.txt
-
-# Generated files
-alpha_ids.txt
-
-# Runtime research data (per-account DBs, snapshots, logs)
-data/
-*.sqlite
-*.sqlite.tmp
-*.failed.sqlite
+*.pyc
+.pytest_cache/
 logs/
 
-# Windows
-dist/
+# Build artifacts
 build/
+dist/
+*.spec
