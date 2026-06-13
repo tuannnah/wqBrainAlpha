@@ -107,3 +107,37 @@ def test_run_history_ghi_best_score():
     opt, _ = _make_optimizer(["close"], seeds, rng)
     opt.run()
     assert all(s.best_score >= s.avg_score for s in opt.history if s.avg_score != float("-inf"))
+
+
+def test_on_generation_goi_moi_the_he():
+    rng = random.Random(13)
+    seeds = ["rank(close)", "rank(rank(open))"]
+    opt, _ = _make_optimizer(["close", "open"], seeds, rng)
+    seen = []
+    opt.run(on_generation=seen.append)
+    # Callback nhận đúng các GenerationStats theo thứ tự, khớp với history.
+    assert [s.generation for s in seen] == [s.generation for s in opt.history]
+    assert all(isinstance(s.best_expression, str) for s in seen)
+
+
+def test_on_simulation_goi_moi_lan_mo_phong_that():
+    rng = random.Random(17)
+    seeds = [f"rank(f{i})" for i in range(20)]
+    opt, sim = _make_optimizer([f"f{i}" for i in range(20)], seeds, rng)
+    sims = []
+    opt.run(on_simulation=lambda n, expr, score: sims.append((n, expr, score)))
+    # Số lần callback bằng số simulate thật; bộ đếm tăng dần 1,2,3...
+    assert [n for n, _, _ in sims] == list(range(1, len(sims) + 1))
+    assert len(sims) == len(sim.calls) == opt.simulations_used
+
+
+def test_on_simulation_ton_trong_max_simulations():
+    rng = random.Random(19)
+    seeds = [f"rank(f{i})" for i in range(20)]
+    opt, _ = _make_optimizer(
+        [f"f{i}" for i in range(20)], seeds, rng, max_simulations=2
+    )
+    sims = []
+    opt.run(on_simulation=lambda n, expr, score: sims.append(n))
+    assert opt.simulations_used <= 2
+    assert sims == list(range(1, opt.simulations_used + 1))

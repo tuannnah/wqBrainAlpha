@@ -68,6 +68,7 @@ class GeneticOptimizer:
         self._cache: dict[str, float] = {}
         self.history: list[GenerationStats] = []
         self._sim_count = 0
+        self._on_simulation = None  # callback(n, expr, score) mỗi lần simulate thật
 
     @property
     def simulations_used(self) -> int:
@@ -95,6 +96,8 @@ class GeneticOptimizer:
         self._sim_count += 1
         value = self.scorer(result)
         self._cache[expr] = value
+        if self._on_simulation is not None:
+            self._on_simulation(self._sim_count, expr, value)
         return value
 
     # ----------------------------------------------------- genetic operators
@@ -170,7 +173,13 @@ class GeneticOptimizer:
             pop.append(self.seed_factory())
         return pop
 
-    def run(self) -> list[Node]:
+    def run(self, on_generation=None, on_simulation=None) -> list[Node]:
+        """Chạy tiến hóa.
+
+        on_generation(stats): gọi sau khi tổng kết mỗi thế hệ.
+        on_simulation(n, expr, score): gọi mỗi lần simulate thật (qua evaluate).
+        """
+        self._on_simulation = on_simulation
         population = self._seed_population()
 
         for gen in range(self.generations):
@@ -189,6 +198,8 @@ class GeneticOptimizer:
                 avg,
                 stats.best_expression,
             )
+            if on_generation is not None:
+                on_generation(stats)
 
             if self._budget_exhausted():
                 logger.info(

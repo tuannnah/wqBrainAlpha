@@ -567,6 +567,14 @@ def _wizard_generate(state: _WizardState, count: int) -> None:
     for expr in alphas:
         repo.save_alpha(expr, source="template")
     console.print(f"[green]Đã sinh {len(alphas)} alpha.[/green]")
+    if alphas:
+        table = Table(title="Alpha vừa sinh")
+        table.add_column("#", justify="right")
+        table.add_column("Expression", overflow="fold")
+        for i, expr in enumerate(alphas, 1):
+            table.add_row(str(i), expr)
+        console.print(table)
+        console.print("[dim]Đã lưu vào DB — xem lại bằng lệnh 'top' hoặc chạy GA (6).[/dim]")
 
 
 def _wizard_run_ga(state: _WizardState) -> None:
@@ -599,16 +607,50 @@ def _wizard_run_ga(state: _WizardState) -> None:
         exprs = tgen.generate(1)
         return GeneticOptimizer.expr_to_node(exprs[0] if exprs else f"rank({fields[0]})")
 
+    gens_int = int(gens) if gens.isdigit() else 10
     opt = GeneticOptimizer(
         simulator=sim,
         prefilter=pf,
         seed_factory=seed_factory,
         fields=fields,
         population_size=int(pop) if pop.isdigit() else 30,
-        generations=int(gens) if gens.isdigit() else 10,
+        generations=gens_int,
         max_simulations=max_sims,
     )
-    best = opt.run()
+
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+
+    sim_budget = f"/{max_sims}" if max_sims else ""
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("gen {task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Khởi tạo quần thể...", total=gens_int)
+
+        def on_simulation(n, expr, score):
+            progress.update(
+                task, description=f"Mô phỏng #{n}{sim_budget} — điểm gần nhất {score:.3f}"
+            )
+
+        def on_generation(stats):
+            progress.update(
+                task,
+                advance=1,
+                description=f"Gen {stats.generation}: best={stats.best_score:.3f} avg={stats.avg_score:.3f}",
+            )
+
+        best = opt.run(on_generation=on_generation, on_simulation=on_simulation)
+
     repo = AlphaRepository(state.session_factory)
     for node in best[:10]:
         repo.save_alpha(to_expression(node), source="ga")
@@ -616,6 +658,17 @@ def _wizard_run_ga(state: _WizardState) -> None:
         f"[green]GA xong — {opt.simulations_used} lần mô phỏng — "
         f"best: {opt.history[-1].best_expression}[/green]"
     )
+    if opt.history:
+        table = Table(title="Tiến độ qua các thế hệ")
+        table.add_column("Gen", justify="right")
+        table.add_column("Best", justify="right")
+        table.add_column("Avg", justify="right")
+        table.add_column("Best expression", overflow="fold")
+        for s in opt.history:
+            avg = "—" if s.avg_score == float("-inf") else f"{s.avg_score:.3f}"
+            best_v = "—" if s.best_score == float("-inf") else f"{s.best_score:.3f}"
+            table.add_row(str(s.generation), best_v, avg, s.best_expression)
+        console.print(table)
 
 
 def _wizard_list_fields(state: _WizardState) -> None:
