@@ -68,12 +68,22 @@ class _Symbol:
 
 
 class FakeSymbolRepo:
-    """Repo giả cho fields/operators: load_cached() trả danh sách có .id/.name."""
+    """Repo giả cho fields/operators: load_cached() trả danh sách có .id/.name.
 
-    def __init__(self, values):
-        self._items = [_Symbol(v) for v in values]
+    Nếu khởi tạo với `by_scope` (dict (region,universe,delay)->values), load_cached
+    lọc theo scope kwargs — mô phỏng FieldRepository đa region (T6.4)."""
 
-    def load_cached(self):
+    def __init__(self, values=None, by_scope=None):
+        self._items = [_Symbol(v) for v in (values or [])]
+        self._by_scope = {
+            k: [_Symbol(v) for v in vs] for k, vs in (by_scope or {}).items()
+        }
+        self.scope_calls = []
+
+    def load_cached(self, region=None, universe=None, delay=None):
+        self.scope_calls.append((region, universe, delay))
+        if self._by_scope and region is not None:
+            return self._by_scope.get((region, universe, delay), [])
         return self._items
 
 

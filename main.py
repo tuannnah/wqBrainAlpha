@@ -429,6 +429,8 @@ def _make_research_loop(
     field_repo = FieldRepository(None, session_factory)
     op_repo = OperatorRepository(None, session_factory)
     translator = AlphaTranslator(deepseek, field_repo, op_repo, pf)
+    # T6.4: giới hạn fields trong prompt theo đúng region/universe/delay (đa region).
+    translator.set_scope(region=region, universe=universe, delay=delay)
     refiner = AlphaRefiner(deepseek, translator)
     repo = AlphaRepository(session_factory)
     # Zoo tham chiếu = Alpha101 + các alpha đã pass trong DB (T3.4/T3.5).

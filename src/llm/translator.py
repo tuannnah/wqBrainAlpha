@@ -39,10 +39,15 @@ class AlphaTranslator:
         self.operator_repo = operator_repo
         self.prefilter = prefilter
         self.avoid_subtrees: list[str] = []
+        self._scope: dict | None = None  # (region,universe,delay) để lọc fields đúng region (T6.4)
 
     def set_avoid_subtrees(self, canons) -> None:
         """Đặt danh sách canon subtree LLM nên tránh dùng lại (T3.6)."""
         self.avoid_subtrees = list(canons or [])
+
+    def set_scope(self, region: str, universe: str, delay: int) -> None:
+        """Giới hạn fields đưa vào prompt theo đúng tổ hợp scope (T6.4 đa region)."""
+        self._scope = {"region": region, "universe": universe, "delay": delay}
 
     def _avoid_context(self) -> str:
         if not self.avoid_subtrees:
@@ -56,7 +61,8 @@ class AlphaTranslator:
     # ----------------------------------------------------------- context
     def _symbol_context(self) -> str:
         operators = [o.name for o in self.operator_repo.load_cached() if getattr(o, "name", None)]
-        fields = [f.id for f in self.field_repo.load_cached() if getattr(f, "id", None)]
+        cached_fields = self.field_repo.load_cached(**self._scope) if self._scope else self.field_repo.load_cached()
+        fields = [f.id for f in cached_fields if getattr(f, "id", None)]
         op_line = ", ".join(operators[:80]) or "rank, ts_delta, ts_mean, group_neutralize, ts_corr"
         field_line = ", ".join(fields[:MAX_FIELDS_IN_PROMPT]) or "close, open, high, low, volume, vwap, returns"
         examples = "\n".join(f"- {e}" for e in FEWSHOT_EXAMPLES)

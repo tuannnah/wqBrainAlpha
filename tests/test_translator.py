@@ -88,3 +88,34 @@ def test_khong_avoid_subtrees_thi_prompt_khong_co_muc_tranh():
     tr.translate(_hyp())
     expr_system = ds.calls[1][0]
     assert "tránh" not in expr_system.lower() or "F,N" not in expr_system
+
+
+# ------------------------------------------------- T6.4 lọc fields theo scope
+def test_set_scope_chi_dung_fields_dung_region():
+    """Đặt scope -> prompt chỉ chứa fields của region đó, không trộn region khác."""
+    pf = PreFilter(known_operators={"rank"}, known_fields={"close", "eur_only", "volume"})
+    fields = FakeSymbolRepo(by_scope={
+        ("USA", "TOP3000", 1): ["close", "volume"],
+        ("EUR", "TOP1000", 0): ["eur_only"],
+    })
+    ops = FakeSymbolRepo(["rank"])
+    tr = AlphaTranslator(
+        FakeDeepSeek([json.dumps({"description": "d"}), json.dumps({"expression": "rank(close)"})]),
+        fields, ops, pf,
+    )
+    tr.set_scope(region="USA", universe="TOP3000", delay=1)
+    tr.translate(_hyp())
+    expr_system = tr.deepseek.calls[1][0]
+    assert "close" in expr_system
+    assert "eur_only" not in expr_system  # không trộn fields của EUR
+
+
+def test_khong_set_scope_thi_load_tat_ca_tuong_thich_nguoc():
+    """Không đặt scope -> load_cached() không tham số (tương thích ngược)."""
+    fields = FakeSymbolRepo(["close", "volume"])
+    tr = _translator(
+        FakeDeepSeek([json.dumps({"description": "d"}), json.dumps({"expression": "rank(close)"})])
+    )
+    tr.field_repo = fields
+    tr.translate(_hyp())
+    assert fields.scope_calls == [(None, None, None)]
