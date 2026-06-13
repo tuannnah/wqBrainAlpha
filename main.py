@@ -569,6 +569,38 @@ def top(
 
 
 @app.command()
+def originality(
+    expr: str = typer.Option(..., "--expr", help="Biểu thức FASTEXPR cần đo độ độc đáo"),
+) -> None:
+    """GĐ3: đo độ độc đáo của một alpha so với zoo tham chiếu (Alpha101 + alpha đã pass)."""
+    _setup_logging()
+    from src.decorrelation.zoo import ReferenceZoo
+    from src.storage.repository import AlphaRepository
+
+    engine = init_db(make_engine())
+    session_factory = make_session_factory(engine)
+    repo = AlphaRepository(session_factory)
+    zoo = ReferenceZoo.default(extra=[a.expression for a in repo.zoo(200)])
+
+    score = zoo.originality(expr)
+    nearest, ratio = zoo.most_similar(expr)
+
+    table = Table(title="Độ độc đáo (AST vs zoo)")
+    table.add_column("", style="cyan")
+    table.add_column("", overflow="fold")
+    table.add_row("Biểu thức", f"[bold]{expr}[/bold]")
+    table.add_row("Kích thước zoo", str(len(zoo)))
+    table.add_row("Độ độc đáo", f"[bold]{score:.3f}[/bold]  (1.0 = hoàn toàn độc đáo)")
+    table.add_row("Tương đồng cao nhất", f"{ratio:.3f}")
+    table.add_row("Alpha gần nhất", nearest or "—")
+    console.print(table)
+    console.print(
+        "[dim]Lưu ý: AST-similarity KHÁC return-correlation thật của WQ — đây chỉ là "
+        "bộ lọc rẻ chạy local. Correlation thật kiểm ở bước nộp (GĐ7).[/dim]"
+    )
+
+
+@app.command()
 def submit(
     dry_run: bool = typer.Option(True, help="Chỉ liệt kê, không nộp thật"),
 ) -> None:
