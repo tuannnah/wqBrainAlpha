@@ -327,17 +327,150 @@ def run_ga(
     )
 
 
-def _make_llm_generator(session_factory, prefilter):
+def _make_deepseek():
     from src.llm.deepseek_client import DeepSeekClient
-    from src.llm.generator import LLMAlphaGenerator
 
     if not settings.deepseek_api_key:
         console.print("[red]Thiếu DEEPSEEK_API_KEY trong .env[/red]")
         raise typer.Exit(code=1)
-    deepseek = DeepSeekClient(settings.deepseek_api_key, settings.deepseek_base_url)
+    return DeepSeekClient(settings.deepseek_api_key, settings.deepseek_base_url)
+
+
+def _make_llm_generator(session_factory, prefilter):
+    from src.llm.generator import LLMAlphaGenerator
+
+    deepseek = _make_deepseek()
     field_repo = FieldRepository(None, session_factory)
     op_repo = OperatorRepository(None, session_factory)
     return LLMAlphaGenerator(deepseek, field_repo, op_repo, prefilter)
+
+
+def _make_research_loop(session_factory, client, region, universe, delay, max_sims, patience):
+    """Lắp RefinementLoop GĐ2 với DeepSeek + Simulator thật. Trả (loop, deepseek)."""
+    from src.llm.hypothesis import HypothesisGenerator
+    from src.llm.loop import RefinementLoop
+    from src.llm.refiner import AlphaRefiner
+    from src.llm.translator import AlphaTranslator
+    from src.simulation.pre_filter import PreFilter
+
+    deepseek = _make_deepseek()
+    fields, operators = _cached_symbols(session_factory)
+    pf = PreFilter(known_operators=operators or None, known_fields=set(fields) or None)
+    field_repo = FieldRepository(None, session_factory)
+    op_repo = OperatorRepository(None, session_factory)
+    translator = AlphaTranslator(deepseek, field_repo, op_repo, pf)
+    refiner = AlphaRefiner(deepseek, translator)
+    loop = RefinementLoop(
+        hypothesis_gen=HypothesisGenerator(deepseek),
+        translator=translator,
+        refiner=refiner,
+        simulator=Simulator(client),
+        prefilter=pf,
+        repo=AlphaRepository(session_factory),
+        region=region,
+        universe=universe,
+        delay=delay,
+        max_simulations=max_sims,
+        no_improve_patience=patience,
+    )
+    return loop, deepseek
+
+
+def _render_research_result(result, deepseek) -> None:
+    """In kết quả vòng nghiên cứu: giả thuyết, mô tả, biểu thức, điểm, zoo."""
+    if result.best_candidate is None:
+        console.print("[red]Không sinh được alpha nào (xem failure/log).[/red]")
+        return
+    cand = result.best_candidate
+    vec = result.best_vector
+    h = cand.hypothesis
+
+    console.print("\n[bold green]=== Alpha tốt nhất ===[/bold green]")
+    htab = Table(show_header=False)
+    htab.add_column("", style="cyan")
+    htab.add_column("", overflow="fold")
+    htab.add_row("Quan sát", h.observation)
+    htab.add_row("Nền tảng", h.background)
+    htab.add_row("Lý giải KT", h.economic_rationale)
+    htab.add_row("Triển khai", h.implementation_spec)
+    htab.add_row("Mô tả", cand.description)
+    htab.add_row("Biểu thức", f"[bold]{cand.expression}[/bold]")
+    console.print(htab)
+
+    stab = Table(title="Điểm đa chiều (chuẩn hoá)")
+    for name in ("sharpe", "fitness", "turnover_fit", "drawdown_fit"):
+        stab.add_column(name, justify="right")
+    stab.add_column("total", justify="right")
+    d = vec.dimensions()
+    stab.add_row(
+        f"{d['sharpe']:.2f}", f"{d['fitness']:.2f}", f"{d['turnover_fit']:.2f}",
+        f"{d['drawdown_fit']:.2f}", f"[bold]{vec.total:.3f}[/bold]",
+    )
+    console.print(stab)
+
+    console.print(
+        f"[cyan]{result.sims_used} lần mô phỏng[/cyan] | "
+        f"[green]+{result.zoo_added} vào zoo[/green] | "
+        f"[yellow]{len(result.failures)} thất bại ghi nhận[/yellow]"
+    )
+    console.print(
+        f"[dim]Token: {deepseek.usage.total_tokens} "
+        f"(~${deepseek.usage.estimated_cost():.4f})[/dim]"
+    )
+
+
+@app.command()
+def research(
+    direction: str = typer.Option(..., "--direction", help="Hướng nghiên cứu (ngôn ngữ tự nhiên)"),
+    region: str = typer.Option(settings.default_region),
+    universe: str = typer.Option(settings.default_universe),
+    delay: int = typer.Option(settings.default_delay),
+    max_sims: int = typer.Option(20, "--max-sims", help="Trần số simulation cho cả vòng"),
+    no_improve: int = typer.Option(3, "--no-improve", help="Dừng sau N vòng không cải thiện"),
+) -> None:
+    """GĐ2: vòng lặp AI — sinh giả thuyết → mô phỏng → tinh chỉnh tham lam."""
+    _setup_logging()
+    engine = init_db(make_engine())
+    session_factory = make_session_factory(engine)
+    if not _cached_symbols(session_factory)[0]:
+        console.print("[red]Chưa có fields — chạy fetch-fields trước.[/red]")
+        raise typer.Exit(code=1)
+    client = _make_client()
+    client.authenticate()
+    loop, deepseek = _make_research_loop(
+        session_factory, client, region, universe, delay, max_sims, no_improve
+    )
+    result = _run_research_with_progress(loop, direction, max_sims)
+    _render_research_result(result, deepseek)
+
+
+def _run_research_with_progress(loop, direction, max_sims):
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("sim {task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Sinh giả thuyết...", total=max_sims)
+
+        def on_progress(ev):
+            progress.update(
+                task,
+                completed=min(ev.sims_used, max_sims),
+                description=f"[{ev.phase}] best={ev.best_total:.3f} {ev.detail}"[:70],
+            )
+
+        return loop.run(direction, on_progress=on_progress)
 
 
 @app.command("llm-generate")
@@ -671,6 +804,23 @@ def _wizard_run_ga(state: _WizardState) -> None:
         console.print(table)
 
 
+def _wizard_research(state: _WizardState) -> None:
+    direction = _ask("Hướng nghiên cứu (vd: mean-reversion theo thanh khoản): ")
+    if not direction:
+        console.print("[yellow]Cần một hướng nghiên cứu.[/yellow]")
+        return
+    ms = _ask("Trần số mô phỏng (Enter=20): ", "20")
+    ni = _ask("Dừng sau N vòng không cải thiện (Enter=3): ", "3")
+    max_sims = int(ms) if ms.isdigit() and int(ms) > 0 else 20
+    patience = int(ni) if ni.isdigit() and int(ni) > 0 else 3
+    loop, deepseek = _make_research_loop(
+        state.session_factory, state.client, state.region, state.universe,
+        state.delay, max_sims, patience,
+    )
+    result = _run_research_with_progress(loop, direction, max_sims)
+    _render_research_result(result, deepseek)
+
+
 def _wizard_list_fields(state: _WizardState) -> None:
     from src.storage.models import DataFieldModel
 
@@ -731,8 +881,9 @@ def _wizard_menu(state: _WizardState) -> None:
     console.print(f" 4) Mô phỏng một biểu thức{lock(state.logged_in)}")
     console.print(f" 5) Sinh alpha (template){lock(fields_ok)}")
     console.print(f" 6) Chạy Genetic Algorithm{lock(state.logged_in and fields_ok)}")
-    console.print(f" 7) Xem fields đã tải{lock(fields_ok)}")
-    console.print(" 8) Đổi scope (region/universe/delay)")
+    console.print(f" 7) Nghiên cứu alpha bằng AI (giả thuyết + tinh chỉnh){lock(state.logged_in and fields_ok)}")
+    console.print(f" 8) Xem fields đã tải{lock(fields_ok)}")
+    console.print(" 9) Đổi scope (region/universe/delay)")
     console.print(" 0) Thoát")
 
 
@@ -751,13 +902,18 @@ def start() -> None:
                 _wizard_login(state)
             elif choice == "0":
                 break
-            elif choice == "8":
+            elif choice == "9":
                 _wizard_scope(state)
-            elif choice == "7":
+            elif choice == "8":
                 if state.fields_count() == 0:
                     console.print("[yellow]Chưa có field nào — tải ở bước 2 trước.[/yellow]")
                 else:
                     _wizard_list_fields(state)
+            elif choice == "7":
+                if not (state.logged_in and state.fields_count() > 0):
+                    console.print("[yellow]Cần đăng nhập và tải fields trước.[/yellow]")
+                else:
+                    _wizard_research(state)
             elif choice in {"2", "3", "4"} and not state.logged_in:
                 console.print("[yellow]Hãy đăng nhập (1) trước.[/yellow]")
             elif choice == "2":

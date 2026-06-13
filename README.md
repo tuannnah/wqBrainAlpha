@@ -54,6 +54,7 @@ python main.py fetch-operators                # Lấy & cache operators
 python main.py simulate --expr "rank(close)"  # Chạy một simulation
 python main.py generate --count 100           # Sinh alpha (Phase 2)
 python main.py run-ga --population 30 --generations 10
+python main.py research --direction "mean-reversion theo thanh khoản" --max-sims 20
 python main.py top --n 20                      # Xem alpha tốt nhất
 python main.py llm-ideas --count 10            # DeepSeek (Phase 3)
 python main.py submit --dry-run                # Nộp alpha (Phase 4)
