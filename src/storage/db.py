@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -26,9 +26,35 @@ def make_engine(database_url: str | None = None) -> Engine:
     return engine
 
 
+# Kiểu cột SQLite cho ALTER TABLE ADD COLUMN (chỉ cần với cột thêm sau).
+_SQLITE_TYPE = {"INTEGER": "INTEGER", "FLOAT": "FLOAT", "DATETIME": "DATETIME"}
+
+
+def _migrate_add_columns(engine: Engine) -> None:
+    """Thêm cột còn thiếu cho bảng đã tồn tại (DB cũ) — idempotent, chỉ ADD COLUMN."""
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    with engine.begin() as conn:
+        for table in Base.metadata.tables.values():
+            if table.name not in existing_tables:
+                continue  # create_all đã tạo mới với đủ cột
+            have = {c["name"] for c in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in have:
+                    continue
+                col_type = _SQLITE_TYPE.get(
+                    column.type.__class__.__name__.upper(), "TEXT"
+                )
+                conn.execute(
+                    text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {col_type}')
+                )
+
+
 def init_db(engine: Engine | None = None) -> Engine:
     engine = engine or make_engine()
     Base.metadata.create_all(engine)
+    if engine.url.get_backend_name() == "sqlite":
+        _migrate_add_columns(engine)
     return engine
 
 

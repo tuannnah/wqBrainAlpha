@@ -68,6 +68,9 @@ class AlphaModel(Base):
     id = Column(String, primary_key=True)
     expression = Column(Text, nullable=False)
     source = Column(String)  # template/ga/llm/random
+    hypothesis = Column(Text)  # JSON giả thuyết 4 phần (GĐ2)
+    description = Column(Text)  # mô tả bằng lời (GĐ2)
+    parent_id = Column(String, ForeignKey("alphas.id"), nullable=True)  # lineage tinh chỉnh
     created_at = Column(DateTime, default=_utcnow)
 
 
@@ -76,6 +79,7 @@ class SimulationModel(Base):
 
     id = Column(String, primary_key=True)
     alpha_id = Column(String, ForeignKey("alphas.id"))
+    expr_hash = Column(String, index=True)  # hash biểu thức để cache sim (T1.15)
     wq_alpha_id = Column(String)  # id alpha trên nền tảng WQ (phục vụ submit/correlation)
     region = Column(String)
     universe = Column(String)
@@ -89,6 +93,19 @@ class SimulationModel(Base):
     status = Column(String)  # passed/failed/error
     raw_result = Column(Text)  # full JSON
     sim_at = Column(DateTime, default=_utcnow)
+
+
+class FailureModel(Base):
+    """Bộ nhớ thất bại: alpha bị loại + lý do, để lần sau tránh lặp lại (T2.13)."""
+
+    __tablename__ = "failures"
+
+    id = Column(String, primary_key=True)
+    expression = Column(Text)
+    category = Column(String)  # syntax | low_score | hypothesis_mismatch
+    reason = Column(Text)
+    source = Column(String)
+    created_at = Column(DateTime, default=_utcnow)
 
 
 class SubmissionModel(Base):
