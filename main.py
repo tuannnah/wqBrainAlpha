@@ -392,6 +392,11 @@ def run_ga(
 
 
 def _make_deepseek(model: str | None = None):
+    if settings.llm_backend == "agent":
+        from src.llm.agent_bridge import AgentBridgeClient
+
+        return AgentBridgeClient(settings.llm_bridge_dir)
+
     from src.llm.deepseek_client import DeepSeekClient
 
     if not settings.deepseek_api_key:
