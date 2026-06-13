@@ -40,6 +40,8 @@ class SubmissionManager:
         min_sharpe: float | None = None,
         min_fitness: float | None = None,
         daily_quota: int | None = None,
+        diversify: bool = False,
+        max_struct_similarity: float = 0.9,
     ):
         self.client = client
         self.session_factory = session_factory
@@ -47,6 +49,9 @@ class SubmissionManager:
         self.min_sharpe = min_sharpe if min_sharpe is not None else self.MIN_SHARPE
         self.min_fitness = min_fitness if min_fitness is not None else self.MIN_FITNESS
         self.daily_quota = daily_quota if daily_quota is not None else self.DAILY_QUOTA
+        # T7.1: loại alpha trùng cấu trúc (AST) với alpha đã chọn trong cùng tập nộp.
+        self.diversify = diversify
+        self.max_struct_similarity = max_struct_similarity
 
     # --------------------------------------------------------------- selection
     def select_candidates(self) -> list[Candidate]:
@@ -116,10 +121,25 @@ class SubmissionManager:
             if not self.correlation.is_acceptable(cand.wq_alpha_id):
                 logger.info("Bỏ {} vì self-correlation cao", cand.wq_alpha_id)
                 continue
+            if self.diversify and self._too_similar(cand, selected):
+                logger.info("Bỏ {} vì trùng cấu trúc với alpha đã chọn", cand.wq_alpha_id)
+                continue
             selected.append(cand)
             if not dry_run:
                 self.submit(cand.wq_alpha_id)
         return selected
+
+    def _too_similar(self, cand: Candidate, selected: list[Candidate]) -> bool:
+        """True nếu cand trùng cấu trúc AST quá ngưỡng với một alpha đã chọn (T7.1)."""
+        from src.decorrelation.similarity import similarity_ratio
+
+        for chosen in selected:
+            try:
+                if similarity_ratio(cand.expression, chosen.expression) >= self.max_struct_similarity:
+                    return True
+            except ValueError:
+                continue  # parse lỗi -> không chặn vì lý do cấu trúc
+        return False
 
     # ------------------------------------------------------------------ record
     def _record(self, result: SubmissionResult) -> None:

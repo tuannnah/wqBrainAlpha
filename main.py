@@ -680,6 +680,10 @@ def originality(
 @app.command()
 def submit(
     dry_run: bool = typer.Option(True, help="Chỉ liệt kê, không nộp thật"),
+    diversify: bool = typer.Option(
+        True, "--diversify/--no-diversify",
+        help="Loại alpha trùng cấu trúc (AST) với alpha đã chọn trong tập nộp (T7.1)",
+    ),
 ) -> None:
     """Chọn và nộp alpha đạt ngưỡng (mặc định dry-run)."""
     _setup_logging()
@@ -691,7 +695,9 @@ def submit(
     client = _make_client()
     client.authenticate()
 
-    manager = SubmissionManager(client, session_factory, CorrelationChecker(client))
+    manager = SubmissionManager(
+        client, session_factory, CorrelationChecker(client), diversify=diversify
+    )
     selected = manager.run_daily(dry_run=dry_run)
 
     title = "Sẽ nộp (dry-run)" if dry_run else "Đã nộp"
