@@ -42,3 +42,42 @@ class FakeClient:
     def post(self, path, **kwargs):
         self.calls.append(("POST", path, kwargs))
         return self._post_queue.pop(0)
+
+
+class FakeDeepSeek:
+    """LLM giả: trả lần lượt nội dung trong hàng đợi cho mỗi complete()."""
+
+    def __init__(self, responses=None):
+        self._responses = list(responses or [])
+        self.calls = []  # [(system, user)]
+
+    def queue(self, content):
+        self._responses.append(content)
+
+    def complete(self, system, user, json_mode=True):
+        self.calls.append((system, user))
+        if not self._responses:
+            return "{}"
+        return self._responses.pop(0)
+
+
+class FakeSimulator:
+    """Simulator giả: map biểu thức -> SimulationResult, đếm số lần gọi."""
+
+    def __init__(self, results=None, default=None):
+        # results: dict expr -> SimulationResult, hoặc callable(expr)->result
+        self._results = results or {}
+        self._default = default
+        self.calls = []
+
+    def simulate(self, expression, settings=None):
+        self.calls.append(expression)
+        if callable(self._results):
+            return self._results(expression)
+        if expression in self._results:
+            return self._results[expression]
+        if self._default is not None:
+            return self._default(expression) if callable(self._default) else self._default
+        from src.simulation.simulator import SimulationResult
+
+        return SimulationResult(expression=expression, status="error")

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
-
 from loguru import logger
+
+from src.llm.jsonutil import extract_json as _extract_json
 
 FEWSHOT_EXAMPLES = [
     "rank(ts_delta(close, 5))",
@@ -17,28 +17,6 @@ FEWSHOT_EXAMPLES = [
 
 MAX_FIELDS_IN_PROMPT = 40
 MAX_REPAIR_ATTEMPTS = 3
-
-
-def _extract_json(content: str) -> dict | list | None:
-    text = content.strip()
-    if text.startswith("```"):
-        # bỏ fences ```json ... ```
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:]
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        # cố tìm khối {...} hoặc [...] đầu tiên
-        for opener, closer in (("{", "}"), ("[", "]")):
-            start = text.find(opener)
-            end = text.rfind(closer)
-            if start != -1 and end > start:
-                try:
-                    return json.loads(text[start : end + 1])
-                except (json.JSONDecodeError, ValueError):
-                    continue
-    return None
 
 
 class LLMAlphaGenerator:
