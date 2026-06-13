@@ -31,6 +31,8 @@ SIM_DEFAULTS: dict[str, Any] = {
 
 # Các metric quan tâm trong block `is` của alpha.
 _METRIC_KEYS = ("sharpe", "fitness", "turnover", "returns", "drawdown", "margin")
+# Metric Out-of-Sample (block `os`) — trọng tài cuối chống overfit IS (T5.6).
+_OS_KEYS = ("sharpe", "fitness")
 
 
 @dataclass
@@ -44,6 +46,8 @@ class SimulationResult:
     returns: float | None = None
     drawdown: float | None = None
     margin: float | None = None
+    os_sharpe: float | None = None
+    os_fitness: float | None = None
     raw: dict = field(default_factory=dict)
 
     def metrics(self) -> dict[str, float | None]:
@@ -144,6 +148,10 @@ class Simulator:
         is_block = payload.get("is") or {}
         metrics = {k: is_block.get(k) for k in _METRIC_KEYS}
 
+        # Block `os` (Out-of-Sample) — trọng tài cuối, có thể thiếu (T5.6).
+        os_block = payload.get("os") or {}
+        os_metrics = {f"os_{k}": os_block.get(k) for k in _OS_KEYS}
+
         # Status xác định bởi checks (PASS/FAIL) nếu có, mặc định 'passed'.
         checks = is_block.get("checks") or []
         failed = any((c.get("result") == "FAIL") for c in checks if isinstance(c, dict))
@@ -155,4 +163,5 @@ class Simulator:
             status=status,
             raw=payload,
             **metrics,
+            **os_metrics,
         )
