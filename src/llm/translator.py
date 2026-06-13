@@ -38,6 +38,20 @@ class AlphaTranslator:
         self.field_repo = field_repo
         self.operator_repo = operator_repo
         self.prefilter = prefilter
+        self.avoid_subtrees: list[str] = []
+
+    def set_avoid_subtrees(self, canons) -> None:
+        """Đặt danh sách canon subtree LLM nên tránh dùng lại (T3.6)."""
+        self.avoid_subtrees = list(canons or [])
+
+    def _avoid_context(self) -> str:
+        if not self.avoid_subtrees:
+            return ""
+        joined = ", ".join(self.avoid_subtrees)
+        return (
+            "TRÁNH lặp lại các bộ khung sau (đã phổ biến trong alpha tốt, "
+            f"F=field, N=số): {joined}. Ưu tiên cấu trúc mới để giữ đa dạng.\n"
+        )
 
     # ----------------------------------------------------------- context
     def _symbol_context(self) -> str:
@@ -76,6 +90,7 @@ class AlphaTranslator:
         system = (
             "Bạn là chuyên gia viết biểu thức FASTEXPR trên WorldQuant BRAIN.\n"
             f"{self._symbol_context()}\n"
+            f"{self._avoid_context()}"
             "Dịch MÔ TẢ thành MỘT biểu thức FASTEXPR dùng đúng operators/fields được liệt kê. "
             'Trả JSON {"expression": "..."}.'
         )

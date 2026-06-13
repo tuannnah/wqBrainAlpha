@@ -135,3 +135,53 @@ def test_loop_callback_tien_do():
     loop.run("X", on_progress=events.append)
     assert events  # có phát sự kiện tiến độ
     assert all(hasattr(e, "sims_used") for e in events)
+
+
+# --------------------------------------------------- T3.5 originality pre-filter
+def test_loop_loai_alpha_trung_cau_truc_zoo_truoc_sim():
+    """Seed trùng cấu trúc zoo (originality dưới ngưỡng) -> loại, KHÔNG sim."""
+    from src.decorrelation.zoo import ReferenceZoo
+
+    sim = FakeSimulator(results=lambda e: _result(e, 1.5))
+    repo = _repo()
+    zoo = ReferenceZoo(["rank(ts_mean(close, 5))"])
+    # seed đổi field/window vẫn cùng canon -> originality ~ 0 -> bị loại.
+    refiner = _FakeRefiner([])
+    loop = _loop(
+        _FakeTranslator("rank(ts_mean(volume, 60))"), refiner, sim, repo,
+        max_simulations=10, zoo=zoo, min_originality=0.2,
+    )
+    res = loop.run("X")
+    assert len(sim.calls) == 0  # không tốn sim nào cho alpha gần-trùng
+    assert res.best_candidate is None
+    cats = {f.category for f in repo.recent_failures(10)}
+    assert "duplicate" in cats
+
+
+def test_loop_giu_alpha_doc_dao_qua_prefilter():
+    """Alpha độc đáo (operator khác hẳn zoo) vẫn được sim bình thường."""
+    from src.decorrelation.zoo import ReferenceZoo
+
+    sim = FakeSimulator(results=lambda e: _result(e, 1.8))
+    repo = _repo()
+    zoo = ReferenceZoo(["rank(ts_mean(close, 5))"])
+    refiner = _FakeRefiner([])
+    # ts_delta khác hẳn rank/ts_mean của zoo -> độc đáo; vẫn nằm trong whitelist prefilter.
+    loop = _loop(
+        _FakeTranslator("ts_delta(volume, 5)"), refiner, sim, repo,
+        max_simulations=10, zoo=zoo, min_originality=0.2,
+    )
+    res = loop.run("X")
+    assert len(sim.calls) == 1
+    assert res.best_candidate is not None
+
+
+def test_loop_khong_zoo_thi_bo_qua_prefilter_originality():
+    """Không truyền zoo -> không lọc originality (tương thích ngược)."""
+    sim = FakeSimulator(results=lambda e: _result(e, 1.5))
+    repo = _repo()
+    refiner = _FakeRefiner([])
+    loop = _loop(_FakeTranslator("rank(close)"), refiner, sim, repo, max_simulations=10)
+    res = loop.run("X")
+    assert len(sim.calls) == 1
+    assert res.best_candidate is not None

@@ -65,3 +65,26 @@ def test_translate_giu_lai_hypothesis():
     h = _hyp()
     cand = _translator(ds).translate(h)
     assert cand.hypothesis is h
+
+
+# ------------------------------------------------- T3.6 tránh nhánh con phổ biến
+def test_avoid_subtrees_chen_vao_prompt_sinh_bieu_thuc():
+    ds = FakeDeepSeek(
+        [json.dumps({"description": "mô tả"}), json.dumps({"expression": "rank(close)"})]
+    )
+    tr = _translator(ds)
+    tr.set_avoid_subtrees(["ts_mean(F,N)", "ts_corr(F,F,N)"])
+    tr.translate(_hyp())
+    expr_system = ds.calls[1][0]  # system prompt của bước sinh biểu thức
+    assert "ts_mean(F,N)" in expr_system
+    assert "ts_corr(F,F,N)" in expr_system
+
+
+def test_khong_avoid_subtrees_thi_prompt_khong_co_muc_tranh():
+    ds = FakeDeepSeek(
+        [json.dumps({"description": "mô tả"}), json.dumps({"expression": "rank(close)"})]
+    )
+    tr = _translator(ds)
+    tr.translate(_hyp())
+    expr_system = ds.calls[1][0]
+    assert "tránh" not in expr_system.lower() or "F,N" not in expr_system

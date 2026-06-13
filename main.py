@@ -347,6 +347,8 @@ def _make_llm_generator(session_factory, prefilter):
 
 def _make_research_loop(session_factory, client, region, universe, delay, max_sims, patience):
     """Lắp RefinementLoop GĐ2 với DeepSeek + Simulator thật. Trả (loop, deepseek)."""
+    from src.decorrelation.similarity import common_subtrees
+    from src.decorrelation.zoo import ReferenceZoo
     from src.llm.hypothesis import HypothesisGenerator
     from src.llm.loop import RefinementLoop
     from src.llm.refiner import AlphaRefiner
@@ -360,18 +362,27 @@ def _make_research_loop(session_factory, client, region, universe, delay, max_si
     op_repo = OperatorRepository(None, session_factory)
     translator = AlphaTranslator(deepseek, field_repo, op_repo, pf)
     refiner = AlphaRefiner(deepseek, translator)
+    repo = AlphaRepository(session_factory)
+    # Zoo tham chiếu = Alpha101 + các alpha đã pass trong DB (T3.4/T3.5).
+    passed_exprs = [a.expression for a in repo.zoo(200)]
+    zoo = ReferenceZoo.default(extra=passed_exprs)
+    # T3.6: nhánh con phổ biến trong alpha tốt -> yêu cầu LLM tránh dùng lại.
+    translator.set_avoid_subtrees(
+        c for c, _ in common_subtrees(passed_exprs, min_count=3, top_n=8)
+    )
     loop = RefinementLoop(
         hypothesis_gen=HypothesisGenerator(deepseek),
         translator=translator,
         refiner=refiner,
         simulator=Simulator(client),
         prefilter=pf,
-        repo=AlphaRepository(session_factory),
+        repo=repo,
         region=region,
         universe=universe,
         delay=delay,
         max_simulations=max_sims,
         no_improve_patience=patience,
+        zoo=zoo,
     )
     return loop, deepseek
 

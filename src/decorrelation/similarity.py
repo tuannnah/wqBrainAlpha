@@ -10,6 +10,8 @@ chạy local, để loại trùng hiển nhiên trước khi tốn quota simulat
 
 from __future__ import annotations
 
+from collections import Counter
+
 from src.generation.ast_utils import (
     Leaf,
     Node,
@@ -57,3 +59,29 @@ def similarity_ratio(a, b) -> float:
     if denom <= 0:
         return 0.0
     return largest_common_subtree(a, b) / denom
+
+
+def common_subtrees(
+    expressions, min_count: int = 2, top_n: int | None = None
+) -> list[tuple[str, int]]:
+    """Thống kê canon subtree (operator) xuất hiện ở NHIỀU alpha (T3.6).
+
+    Mỗi alpha đóng góp tối đa 1 cho mỗi canon (đếm theo số alpha chứa, không
+    theo số lần lặp trong một alpha). Chỉ giữ canon đạt `min_count`, sort giảm
+    theo số lần, cắt còn `top_n` nếu có. Biểu thức parse lỗi bị bỏ qua.
+    """
+    counter: Counter[str] = Counter()
+    for expr in expressions:
+        try:
+            tree = parse_expression(expr) if isinstance(expr, str) else expr
+        except ValueError:
+            continue
+        canons = {
+            subtree_canon(sub)
+            for sub in all_subtrees(tree)
+            if isinstance(sub, Node)
+        }
+        counter.update(canons)
+    items = [(c, n) for c, n in counter.items() if n >= min_count]
+    items.sort(key=lambda x: x[1], reverse=True)
+    return items[:top_n] if top_n is not None else items

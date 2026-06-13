@@ -58,6 +58,8 @@ class RefinementLoop:
         hard_filter_fn=default_filter,
         max_simulations: int = 20,
         no_improve_patience: int = 3,
+        zoo=None,
+        min_originality: float = 0.2,
     ):
         self.hypothesis_gen = hypothesis_gen
         self.translator = translator
@@ -72,6 +74,8 @@ class RefinementLoop:
         self.hard_filter_fn = hard_filter_fn
         self.max_simulations = max_simulations
         self.no_improve_patience = no_improve_patience
+        self.zoo = zoo
+        self.min_originality = min_originality
         self.sims_used = 0
         self.zoo_added = 0
 
@@ -82,6 +86,16 @@ class RefinementLoop:
         if not ok:
             self.repo.record_failure(expr, "syntax", reason, "llm")
             return None
+
+        if self.zoo is not None:
+            originality = self.zoo.originality(expr)
+            if originality < self.min_originality:
+                self.repo.record_failure(
+                    expr, "duplicate",
+                    f"độc đáo {originality:.2f} < ngưỡng {self.min_originality:.2f}",
+                    "llm",
+                )
+                return None
 
         cached = self.repo.get_cached_simulation(expr)
         if cached is not None:
