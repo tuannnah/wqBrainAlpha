@@ -61,6 +61,22 @@ class FakeDeepSeek:
         return self._responses.pop(0)
 
 
+class _Symbol:
+    def __init__(self, value):
+        self.id = value
+        self.name = value
+
+
+class FakeSymbolRepo:
+    """Repo giả cho fields/operators: load_cached() trả danh sách có .id/.name."""
+
+    def __init__(self, values):
+        self._items = [_Symbol(v) for v in values]
+
+    def load_cached(self):
+        return self._items
+
+
 class FakeSimulator:
     """Simulator giả: map biểu thức -> SimulationResult, đếm số lần gọi."""
 
