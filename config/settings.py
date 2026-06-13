@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     wq_password: str = ""
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-chat"  # model rẻ/nhanh, mặc định cho mọi tác vụ
+    deepseek_model_strong: str = ""  # model mạnh cho suy luận khó; rỗng = không routing (T6.3)
     database_url: str = "sqlite:///wq_alpha.db"
     cache_ttl_days: int = 30
     default_region: str = "USA"

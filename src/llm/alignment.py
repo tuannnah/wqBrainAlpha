@@ -48,7 +48,7 @@ class AlignmentScorer:
             f"Biểu thức: {candidate.expression}\n"
             "Chấm độ khớp giả thuyết–mô tả–biểu thức."
         )
-        data = extract_json(self.deepseek.complete(SYSTEM_PROMPT, user, json_mode=True))
+        data = extract_json(self.deepseek.complete(SYSTEM_PROMPT, user, json_mode=True, task="alignment"))
         if not isinstance(data, dict) or "score" not in data:
             return AlignmentScore(0.5, "không parse được điểm — coi trung lập")
         try:

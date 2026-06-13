@@ -52,7 +52,7 @@ class HypothesisGenerator:
             f'Hướng nghiên cứu: "{research_direction}". '
             "Đề xuất một giả thuyết alpha mới, cụ thể, có thể kiểm chứng. Trả JSON 4 phần."
         )
-        content = self.deepseek.complete(SYSTEM_PROMPT, user, json_mode=True)
+        content = self.deepseek.complete(SYSTEM_PROMPT, user, json_mode=True, task="hypothesis")
         data = extract_json(content)
         if not isinstance(data, dict):
             logger.warning("Hypothesis: không parse được JSON, trả rỗng.")

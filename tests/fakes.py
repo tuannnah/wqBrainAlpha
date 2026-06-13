@@ -48,14 +48,19 @@ class FakeDeepSeek:
     """LLM giả: trả lần lượt nội dung trong hàng đợi cho mỗi complete()."""
 
     def __init__(self, responses=None):
+        from src.llm.deepseek_client import Usage
+
         self._responses = list(responses or [])
         self.calls = []  # [(system, user)]
+        self.tasks = []  # task truyền vào mỗi complete() (None nếu không truyền)
+        self.usage = Usage()
 
     def queue(self, content):
         self._responses.append(content)
 
-    def complete(self, system, user, json_mode=True):
+    def complete(self, system, user, json_mode=True, task=None):
         self.calls.append((system, user))
+        self.tasks.append(task)
         if not self._responses:
             return "{}"
         return self._responses.pop(0)

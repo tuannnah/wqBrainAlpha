@@ -86,7 +86,7 @@ class AlphaTranslator:
             f"Lý giải kinh tế: {h.economic_rationale}\nGợi ý triển khai: {h.implementation_spec}\n"
             "Mô tả cách hiện thực tín hiệu."
         )
-        data = extract_json(self.deepseek.complete(system, user, json_mode=True))
+        data = extract_json(self.deepseek.complete(system, user, json_mode=True, task="describe"))
         if isinstance(data, dict) and data.get("description"):
             return str(data["description"])
         return hypothesis.implementation_spec or hypothesis.observation
@@ -102,7 +102,7 @@ class AlphaTranslator:
         )
         user = f"MÔ TẢ: {description}\nViết biểu thức FASTEXPR."
         for attempt in range(MAX_REPAIR_ATTEMPTS):
-            data = extract_json(self.deepseek.complete(system, user, json_mode=True))
+            data = extract_json(self.deepseek.complete(system, user, json_mode=True, task="translate"))
             expr = data.get("expression") if isinstance(data, dict) else None
             if not expr:
                 user = 'Trả ĐÚNG JSON {"expression": "..."}.'

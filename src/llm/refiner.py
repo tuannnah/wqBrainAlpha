@@ -51,7 +51,7 @@ class AlphaRefiner:
             f"Cần cải thiện: {hint}.\n"
             "Mô tả cách điều chỉnh tín hiệu để cải thiện đúng chiều này."
         )
-        data = extract_json(self.deepseek.complete(system, user, json_mode=True))
+        data = extract_json(self.deepseek.complete(system, user, json_mode=True, task="refine"))
         if isinstance(data, dict) and data.get("description"):
             return str(data["description"])
         # Không có mô tả mới -> giữ mô tả cũ để vẫn thử sinh biểu thức.

@@ -44,7 +44,8 @@ class DeepSeekClient:
         self.model = model
         self.usage = Usage()
 
-    def complete(self, system: str, user: str, json_mode: bool = True) -> str:
+    def complete(self, system: str, user: str, json_mode: bool = True, task: str | None = None) -> str:
+        # `task` chỉ phục vụ định tuyến ở ModelRouter; client đơn lẻ bỏ qua.
         resp = self.client.chat.completions.create(
             model=self.model,
             messages=[

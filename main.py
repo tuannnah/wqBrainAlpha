@@ -391,13 +391,28 @@ def run_ga(
     )
 
 
-def _make_deepseek():
+def _make_deepseek(model: str | None = None):
     from src.llm.deepseek_client import DeepSeekClient
 
     if not settings.deepseek_api_key:
         console.print("[red]Thiếu DEEPSEEK_API_KEY trong .env[/red]")
         raise typer.Exit(code=1)
-    return DeepSeekClient(settings.deepseek_api_key, settings.deepseek_base_url)
+    return DeepSeekClient(
+        settings.deepseek_api_key, settings.deepseek_base_url,
+        model=model or settings.deepseek_model,
+    )
+
+
+def _make_router():
+    """LLM client cho vòng nghiên cứu. Có model mạnh riêng -> ModelRouter định tuyến
+    tác vụ khó sang model mạnh (T6.3); không -> dùng một DeepSeekClient."""
+    cheap = _make_deepseek()
+    if not settings.deepseek_model_strong:
+        return cheap
+    from src.llm.router import ModelRouter
+
+    strong = _make_deepseek(settings.deepseek_model_strong)
+    return ModelRouter(cheap=cheap, strong=strong, default="strong")
 
 
 def _make_llm_generator(session_factory, prefilter):
@@ -423,7 +438,7 @@ def _make_research_loop(
     from src.llm.translator import AlphaTranslator
     from src.simulation.pre_filter import PreFilter
 
-    deepseek = _make_deepseek()
+    deepseek = _make_router()  # T6.3: routing tác vụ khó -> model mạnh (nếu cấu hình)
     fields, operators = _cached_symbols(session_factory)
     pf = PreFilter(known_operators=operators or None, known_fields=set(fields) or None)
     field_repo = FieldRepository(None, session_factory)
