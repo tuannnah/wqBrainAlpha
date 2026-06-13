@@ -345,10 +345,14 @@ def _make_llm_generator(session_factory, prefilter):
     return LLMAlphaGenerator(deepseek, field_repo, op_repo, prefilter)
 
 
-def _make_research_loop(session_factory, client, region, universe, delay, max_sims, patience):
+def _make_research_loop(
+    session_factory, client, region, universe, delay, max_sims, patience,
+    align=True, regularize=False, penalty_lambda=0.3,
+):
     """Lắp RefinementLoop GĐ2 với DeepSeek + Simulator thật. Trả (loop, deepseek)."""
     from src.decorrelation.similarity import common_subtrees
     from src.decorrelation.zoo import ReferenceZoo
+    from src.llm.alignment import AlignmentScorer
     from src.llm.hypothesis import HypothesisGenerator
     from src.llm.loop import RefinementLoop
     from src.llm.refiner import AlphaRefiner
@@ -370,6 +374,8 @@ def _make_research_loop(session_factory, client, region, universe, delay, max_si
     translator.set_avoid_subtrees(
         c for c, _ in common_subtrees(passed_exprs, min_count=3, top_n=8)
     )
+    # T4.2: bộ lọc nhất quán giả thuyết–công thức trước sim (bật/tắt qua --align).
+    aligner = AlignmentScorer(deepseek) if align else None
     loop = RefinementLoop(
         hypothesis_gen=HypothesisGenerator(deepseek),
         translator=translator,
@@ -383,6 +389,9 @@ def _make_research_loop(session_factory, client, region, universe, delay, max_si
         max_simulations=max_sims,
         no_improve_patience=patience,
         zoo=zoo,
+        aligner=aligner,
+        regularize=regularize,
+        penalty_lambda=penalty_lambda,
     )
     return loop, deepseek
 
@@ -438,6 +447,9 @@ def research(
     delay: int = typer.Option(settings.default_delay),
     max_sims: int = typer.Option(20, "--max-sims", help="Trần số simulation cho cả vòng"),
     no_improve: int = typer.Option(3, "--no-improve", help="Dừng sau N vòng không cải thiện"),
+    align: bool = typer.Option(True, "--align/--no-align", help="Bật lọc nhất quán giả thuyết–công thức trước sim (T4.2)"),
+    regularize: bool = typer.Option(False, "--regularize/--no-regularize", help="Chọn best theo điểm điều chuẩn (trừ phạt độc đáo/khớp/phức tạp) (T4.4)"),
+    penalty_lambda: float = typer.Option(0.3, "--lambda", help="Hệ số λ cho số hạng phạt điều chuẩn"),
 ) -> None:
     """GĐ2: vòng lặp AI — sinh giả thuyết → mô phỏng → tinh chỉnh tham lam."""
     _setup_logging()
@@ -449,7 +461,8 @@ def research(
     client = _make_client()
     client.authenticate()
     loop, deepseek = _make_research_loop(
-        session_factory, client, region, universe, delay, max_sims, no_improve
+        session_factory, client, region, universe, delay, max_sims, no_improve,
+        align, regularize, penalty_lambda,
     )
     result = _run_research_with_progress(loop, direction, max_sims)
     _render_research_result(result, deepseek)

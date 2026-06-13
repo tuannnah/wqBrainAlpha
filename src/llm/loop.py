@@ -11,8 +11,10 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
+from src.scoring.complexity import complexity_penalty
 from src.scoring.filter import passes as default_filter
 from src.scoring.metrics import normalize
+from src.scoring.regularized import Penalties, PenaltyWeights, regularized_score
 from src.scoring.vector import ScoreVector, score_vector, weakest_dimension
 
 
@@ -40,6 +42,7 @@ class _Eval:
     metrics: dict
     alpha_id: str | None  # None khi cache hit (không lưu lại)
     passed: bool
+    effective_total: float = 0.0  # điểm dùng để so sánh best (điều chuẩn nếu bật, else = vector.total)
 
 
 class RefinementLoop:
@@ -60,6 +63,11 @@ class RefinementLoop:
         no_improve_patience: int = 3,
         zoo=None,
         min_originality: float = 0.2,
+        aligner=None,
+        min_alignment: float = 0.5,
+        regularize: bool = False,
+        penalty_lambda: float = 0.3,
+        penalty_weights: PenaltyWeights | None = None,
     ):
         self.hypothesis_gen = hypothesis_gen
         self.translator = translator
@@ -76,10 +84,30 @@ class RefinementLoop:
         self.no_improve_patience = no_improve_patience
         self.zoo = zoo
         self.min_originality = min_originality
+        self.aligner = aligner
+        self.min_alignment = min_alignment
+        self.regularize = regularize
+        self.penalty_lambda = penalty_lambda
+        self.penalty_weights = penalty_weights or PenaltyWeights()
         self.sims_used = 0
         self.zoo_added = 0
 
     # --------------------------------------------------------------- eval
+    def _effective_total(self, vector, expr, originality, alignment) -> float:
+        """Điểm dùng để so sánh best. Bật regularize -> điểm điều chuẩn (T4.4),
+        gộp phạt độ độc đáo/khớp giả thuyết/độ phức tạp; tắt -> total thô.
+        Chiều không đo được (không zoo/aligner) coi như điểm tốt (phạt 0)."""
+        if not self.regularize:
+            return vector.total
+        pen = Penalties.from_scores(
+            originality=1.0 if originality is None else originality,
+            alignment=1.0 if alignment is None else alignment,
+            complexity=complexity_penalty(expr),
+        )
+        return regularized_score(
+            vector.total, pen, weights=self.penalty_weights, lambda_=self.penalty_lambda
+        )
+
     def _evaluate(self, candidate, parent_id: str | None) -> _Eval | None:
         expr = candidate.expression
         ok, reason = self.prefilter.check(expr)
@@ -87,6 +115,7 @@ class RefinementLoop:
             self.repo.record_failure(expr, "syntax", reason, "llm")
             return None
 
+        originality = None
         if self.zoo is not None:
             originality = self.zoo.originality(expr)
             if originality < self.min_originality:
@@ -97,10 +126,23 @@ class RefinementLoop:
                 )
                 return None
 
+        alignment = None
+        if self.aligner is not None:
+            align = self.aligner.score(candidate)
+            alignment = align.value
+            if align.value < self.min_alignment:
+                self.repo.record_failure(
+                    expr, "hypothesis_mismatch",
+                    f"nhất quán {align.value:.2f} < ngưỡng {self.min_alignment:.2f}: {align.reason}",
+                    "llm",
+                )
+                return None
+
         cached = self.repo.get_cached_simulation(expr)
         if cached is not None:
             vector = self.score_vector_fn(cached)
-            return _Eval(vector, normalize(cached), None, cached.status == "passed")
+            eff = self._effective_total(vector, expr, originality, alignment)
+            return _Eval(vector, normalize(cached), None, cached.status == "passed", eff)
 
         if self.sims_used >= self.max_simulations:
             return None  # hết trần sim, không gọi WQ thêm
@@ -127,7 +169,8 @@ class RefinementLoop:
             self.zoo_added += 1
         else:
             self.repo.record_failure(expr, "low_score", "; ".join(reasons) or result.status, "llm")
-        return _Eval(vector, normalize(result), alpha_id, passed)
+        eff = self._effective_total(vector, expr, originality, alignment)
+        return _Eval(vector, normalize(result), alpha_id, passed, eff)
 
     # ---------------------------------------------------------------- run
     def run(self, research_direction: str, on_progress=None) -> LoopResult:
@@ -168,7 +211,7 @@ class RefinementLoop:
             if ev is None:
                 break  # hết trần sim giữa chừng
             step += 1
-            improved = ev.vector.total > best_ev.vector.total + 1e-9
+            improved = ev.effective_total > best_ev.effective_total + 1e-9
             history.append(
                 {"step": step, "action": "refine", "dimension": weak, "total": ev.vector.total,
                  "expression": cand.expression, "accepted": improved}

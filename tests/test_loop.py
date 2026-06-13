@@ -185,3 +185,91 @@ def test_loop_khong_zoo_thi_bo_qua_prefilter_originality():
     res = loop.run("X")
     assert len(sim.calls) == 1
     assert res.best_candidate is not None
+
+
+# ------------------------------------------------ T4.2 alignment pre-filter
+class _FakeAligner:
+    """Trả điểm nhất quán cố định cho mọi candidate."""
+
+    def __init__(self, value):
+        from src.llm.alignment import AlignmentScore
+
+        self._score = AlignmentScore(value, "fake")
+
+    def score(self, candidate):
+        return self._score
+
+
+def test_loop_loai_alpha_lech_gia_thuyet_truoc_sim():
+    """Điểm nhất quán dưới ngưỡng -> loại, KHÔNG sim, ghi hypothesis_mismatch."""
+    sim = FakeSimulator(results=lambda e: _result(e, 1.5))
+    repo = _repo()
+    refiner = _FakeRefiner([])
+    loop = _loop(
+        _FakeTranslator("rank(close)"), refiner, sim, repo,
+        max_simulations=10, aligner=_FakeAligner(0.2), min_alignment=0.5,
+    )
+    res = loop.run("X")
+    assert len(sim.calls) == 0
+    assert res.best_candidate is None
+    cats = {f.category for f in repo.recent_failures(10)}
+    assert "hypothesis_mismatch" in cats
+
+
+def test_loop_giu_alpha_khop_gia_thuyet():
+    """Điểm nhất quán đạt ngưỡng -> vẫn được sim bình thường."""
+    sim = FakeSimulator(results=lambda e: _result(e, 1.8))
+    repo = _repo()
+    refiner = _FakeRefiner([])
+    loop = _loop(
+        _FakeTranslator("rank(close)"), refiner, sim, repo,
+        max_simulations=10, aligner=_FakeAligner(0.9), min_alignment=0.5,
+    )
+    res = loop.run("X")
+    assert len(sim.calls) == 1
+    assert res.best_candidate is not None
+
+
+def test_loop_khong_aligner_thi_bo_qua_loc_alignment():
+    """Không truyền aligner -> không lọc nhất quán (tương thích ngược)."""
+    sim = FakeSimulator(results=lambda e: _result(e, 1.5))
+    repo = _repo()
+    refiner = _FakeRefiner([])
+    loop = _loop(_FakeTranslator("rank(close)"), refiner, sim, repo, max_simulations=10)
+    res = loop.run("X")
+    assert len(sim.calls) == 1
+    assert res.best_candidate is not None
+
+
+# ----------------------------------------- T4.4 điểm điều chuẩn chọn best
+# seed đơn giản, refine phức tạp hơn nhưng raw total CAO hơn một chút.
+_REG_SEED = "rank(close)"
+_REG_COMPLEX = "rank(ts_mean(ts_delta(close, 5), 10))"
+_REG_SCORES = {_REG_SEED: 1.5, _REG_COMPLEX: 1.6}
+
+
+def test_loop_tat_regularize_thi_alpha_phuc_tap_thang():
+    """Mặc định (tắt điều chuẩn): raw total quyết định -> alpha phức tạp thắng."""
+    sim = FakeSimulator(results=lambda e: _result(e, _REG_SCORES[e]))
+    repo = _repo()
+    refiner = _FakeRefiner([_REG_COMPLEX])
+    loop = _loop(
+        _FakeTranslator(_REG_SEED), refiner, sim, repo,
+        max_simulations=10, no_improve_patience=1,
+    )
+    res = loop.run("X")
+    assert res.best_candidate.expression == _REG_COMPLEX
+
+
+def test_loop_bat_regularize_thi_phat_phuc_tap_giu_alpha_don_gian():
+    """Bật điều chuẩn: phạt độ phức tạp kéo alpha rối xuống -> seed đơn giản được giữ."""
+    sim = FakeSimulator(results=lambda e: _result(e, _REG_SCORES[e]))
+    repo = _repo()
+    refiner = _FakeRefiner([_REG_COMPLEX])
+    loop = _loop(
+        _FakeTranslator(_REG_SEED), refiner, sim, repo,
+        max_simulations=10, no_improve_patience=1,
+        regularize=True, penalty_lambda=1.0,
+    )
+    res = loop.run("X")
+    assert res.best_candidate.expression == _REG_SEED
