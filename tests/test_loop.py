@@ -39,6 +39,11 @@ class _FakeTranslator:
         return AlphaCandidate(hyp, "mô tả gốc", self.expr)
 
 
+class _FakeTranslatorNone:
+    def translate(self, hyp):
+        return None
+
+
 class _FakeRefiner:
     """Trả lần lượt các biểu thức cải tiến (None khi hết)."""
 
@@ -273,3 +278,37 @@ def test_loop_bat_regularize_thi_phat_phuc_tap_giu_alpha_don_gian():
     )
     res = loop.run("X")
     assert res.best_candidate.expression == _REG_SEED
+
+
+# --------------------------------------------------------- T6.1 MCTS
+def test_run_mcts_tim_duoc_alpha_tot_hon_seed():
+    """MCTS khám phá nhiều nhánh, trả về alpha điểm cao nhất."""
+    scores = {
+        "rank(close)": 1.0,
+        "rank(ts_mean(close, 5))": 1.6,
+        "rank(ts_mean(close, 10))": 2.0,
+    }
+    sim = FakeSimulator(results=lambda e: _result(e, scores.get(e, 1.0)))
+    repo = _repo()
+    refiner = _FakeRefiner(["rank(ts_mean(close, 5))", "rank(ts_mean(close, 10))"])
+    loop = _loop(_FakeTranslator("rank(close)"), refiner, sim, repo, max_simulations=10)
+    res = loop.run_mcts("X", iterations=2)
+    assert res.best_candidate.expression == "rank(ts_mean(close, 10))"
+
+
+def test_run_mcts_ton_trong_tran_sim():
+    sim = FakeSimulator(results=lambda e: _result(e, 1.5))
+    repo = _repo()
+    refiner = _FakeRefiner([f"rank(ts_mean(close, {d}))" for d in range(5, 80, 5)])
+    loop = _loop(_FakeTranslator("rank(close)"), refiner, sim, repo, max_simulations=3)
+    res = loop.run_mcts("X", iterations=50)
+    assert res.sims_used <= 3
+
+
+def test_run_mcts_seed_loi_tra_ket_qua_rong():
+    sim = FakeSimulator(results=lambda e: _result(e, 1.5))
+    repo = _repo()
+    # translator trả None -> không dịch được giả thuyết.
+    loop = _loop(_FakeTranslatorNone(), _FakeRefiner([]), sim, repo, max_simulations=10)
+    res = loop.run_mcts("X", iterations=5)
+    assert res.best_candidate is None

@@ -531,6 +531,7 @@ def research(
     align: bool = typer.Option(True, "--align/--no-align", help="Bật lọc nhất quán giả thuyết–công thức trước sim (T4.2)"),
     regularize: bool = typer.Option(False, "--regularize/--no-regularize", help="Chọn best theo điểm điều chuẩn (trừ phạt độc đáo/khớp/phức tạp) (T4.4)"),
     penalty_lambda: float = typer.Option(0.3, "--lambda", help="Hệ số λ cho số hạng phạt điều chuẩn"),
+    mcts: bool = typer.Option(False, "--mcts/--greedy", help="Dùng MCTS (giữ nhiều nhánh, UCB) thay vòng greedy (T6.1)"),
 ) -> None:
     """GĐ2: vòng lặp AI — sinh giả thuyết → mô phỏng → tinh chỉnh tham lam."""
     _setup_logging()
@@ -545,11 +546,11 @@ def research(
         session_factory, client, region, universe, delay, max_sims, no_improve,
         align, regularize, penalty_lambda,
     )
-    result = _run_research_with_progress(loop, direction, max_sims)
+    result = _run_research_with_progress(loop, direction, max_sims, mcts=mcts)
     _render_research_result(result, deepseek)
 
 
-def _run_research_with_progress(loop, direction, max_sims):
+def _run_research_with_progress(loop, direction, max_sims, mcts=False):
     from rich.progress import (
         BarColumn,
         Progress,
@@ -575,6 +576,8 @@ def _run_research_with_progress(loop, direction, max_sims):
                 description=f"[{ev.phase}] best={ev.best_total:.3f} {ev.detail}"[:70],
             )
 
+        if mcts:
+            return loop.run_mcts(direction, iterations=max_sims, on_progress=on_progress)
         return loop.run(direction, on_progress=on_progress)
 
 

@@ -236,3 +236,63 @@ class RefinementLoop:
             failures=self.repo.recent_failures(50),
             sims_used=self.sims_used,
         )
+
+    # ----------------------------------------------------------- MCTS (T6.1)
+    def run_mcts(self, research_direction: str, iterations: int = 20, on_progress=None) -> LoopResult:
+        """Thay vòng greedy bằng MCTS: giữ nhiều nhánh, UCB + lan ngược điểm.
+
+        Tái dùng `_evaluate` (cache + trần sim + các pre-filter GĐ3/GĐ4) làm
+        evaluate_fn, `refiner.refine` làm expand_fn, `weakest_dimension` chọn chiều
+        nhắm. Trần sim của loop vẫn là giới hạn cứng (evaluate trả None khi hết)."""
+        from src.llm.mcts import MCTSSearch
+
+        self.sims_used = 0
+        self.zoo_added = 0
+        history: list = []
+
+        def emit(phase, best_total, detail=""):
+            if on_progress:
+                on_progress(LoopProgress(self.sims_used, best_total, phase, detail))
+
+        emit("hypothesis", 0.0, research_direction)
+        hypothesis = self.hypothesis_gen.generate(research_direction)
+        seed = self.translator.translate(hypothesis)
+        if seed is None:
+            self.repo.record_failure("", "syntax", "không dịch được giả thuyết", "llm")
+            return LoopResult(None, None, history, 0, self.repo.recent_failures(50), self.sims_used)
+
+        seed_ev = self._evaluate(seed, parent_id=None)
+        if seed_ev is None:
+            return LoopResult(None, None, history, self.zoo_added, self.repo.recent_failures(50), self.sims_used)
+        emit("seed", seed_ev.vector.total, seed.expression)
+
+        def expand(candidate, metrics, weak):
+            return self.refiner.refine(candidate, metrics, weak)
+
+        def evaluate(candidate, parent_id):
+            if candidate is None or self.sims_used >= self.max_simulations:
+                return None
+            ev = self._evaluate(candidate, parent_id=parent_id)
+            if ev is not None:
+                emit("mcts", ev.vector.total, candidate.expression)
+            return ev
+
+        search = MCTSSearch(
+            expand, evaluate, weakest_dimension,
+            max_iterations=iterations, none_patience=self.no_improve_patience,
+        )
+        result = search.search(seed, seed_ev)
+
+        emit("done", result.best_eval.vector.total)
+        logger.info(
+            "MCTS xong: {} sim, best total={:.3f}, zoo+{}",
+            self.sims_used, result.best_eval.vector.total, self.zoo_added,
+        )
+        return LoopResult(
+            best_candidate=result.best_candidate,
+            best_vector=result.best_eval.vector,
+            history=result.history,
+            zoo_added=self.zoo_added,
+            failures=self.repo.recent_failures(50),
+            sims_used=self.sims_used,
+        )
