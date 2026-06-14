@@ -90,6 +90,30 @@ def test_khong_avoid_subtrees_thi_prompt_khong_co_muc_tranh():
     assert "tránh" not in expr_system.lower() or "F,N" not in expr_system
 
 
+# ----------------------------- ràng buộc cú pháp trong prompt (qua pre-filter)
+def test_prompt_neu_gioi_han_depth_node_lay_tu_prefilter():
+    ds = FakeDeepSeek(
+        [json.dumps({"description": "mô tả"}), json.dumps({"expression": "rank(close)"})]
+    )
+    tr = _translator(ds)  # PreFilter mặc định: max_depth=6, max_nodes=30
+    tr.translate(_hyp())
+    expr_system = ds.calls[1][0]
+    low = expr_system.lower()
+    assert str(tr.prefilter.max_depth) in expr_system and "độ sâu" in low
+    assert str(tr.prefilter.max_nodes) in expr_system
+
+
+def test_prompt_cam_doi_so_co_ten_keyvalue():
+    ds = FakeDeepSeek(
+        [json.dumps({"description": "mô tả"}), json.dumps({"expression": "rank(close)"})]
+    )
+    tr = _translator(ds)
+    tr.translate(_hyp())
+    low = ds.calls[1][0].lower()
+    assert "vị trí" in low  # đối số theo vị trí
+    assert "key=value" in low or "std=" in low  # cảnh báo không dùng đối số có tên
+
+
 # ------------------------------------------------- T6.4 lọc fields theo scope
 def test_set_scope_chi_dung_fields_dung_region():
     """Đặt scope -> prompt chỉ chứa fields của region đó, không trộn region khác."""

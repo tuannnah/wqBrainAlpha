@@ -92,11 +92,25 @@ class AlphaTranslator:
         return hypothesis.implementation_spec or hypothesis.observation
 
     # ----------------------------------------------------------- step 2
+    def _syntax_constraints(self) -> str:
+        """Ràng buộc cú pháp suy ra từ pre-filter để biểu thức qua lọc ngay."""
+        max_depth = getattr(self.prefilter, "max_depth", 6)
+        max_nodes = getattr(self.prefilter, "max_nodes", 30)
+        return (
+            "RÀNG BUỘC bắt buộc để qua bộ lọc cú pháp:\n"
+            f"- Độ sâu lồng nhau TỐI ĐA {max_depth}; tổng số node TỐI ĐA {max_nodes}. "
+            "Ưu tiên biểu thức GỌN và NÔNG, tránh lồng quá nhiều tầng.\n"
+            "- CHỈ dùng đối số theo VỊ TRÍ. TUYỆT ĐỐI không dùng đối số có tên kiểu "
+            "key=value (vd viết winsorize(x, 3) chứ KHÔNG viết winsorize(x, std=3)).\n"
+            "- Đối số chỉ là field/group đã liệt kê, biểu thức con, hoặc SỐ NGUYÊN.\n"
+        )
+
     def _to_expression(self, description: str) -> str | None:
         system = (
             "Bạn là chuyên gia viết biểu thức FASTEXPR trên WorldQuant BRAIN.\n"
             f"{self._symbol_context()}\n"
             f"{self._avoid_context()}"
+            f"{self._syntax_constraints()}"
             "Dịch MÔ TẢ thành MỘT biểu thức FASTEXPR dùng đúng operators/fields được liệt kê. "
             'Trả JSON {"expression": "..."}.'
         )
