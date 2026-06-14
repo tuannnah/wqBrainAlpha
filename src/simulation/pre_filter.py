@@ -20,7 +20,7 @@ class PreFilter:
         known_operators: set[str] | None = None,
         known_fields: set[str] | None = None,
         known_groups: set[str] | None = None,
-        max_depth: int = 6,
+        max_depth: int = 7,
         max_nodes: int = 30,
     ):
         self.known_operators = known_operators

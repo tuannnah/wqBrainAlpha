@@ -45,3 +45,24 @@ def test_qua_sau():
     ok, reason = pf.check("rank(ts_delta(close, 5))")
     assert not ok
     assert "sâu" in reason.lower()
+
+
+# Biểu thức residual-momentum thật (độ sâu 7) từng bị loại khi max_depth=6.
+_DEPTH7 = (
+    "group_neutralize(ts_delay(divide(rank(ts_delay(ts_sum(returns, 210), 21)), "
+    "rank(ts_std_dev(returns, 60))), 1), subindustry)"
+)
+_DEPTH7_OPS = {"group_neutralize", "ts_delay", "divide", "rank", "ts_sum", "ts_std_dev"}
+
+
+def test_default_cho_phep_do_sau_7():
+    pf = PreFilter(known_operators=_DEPTH7_OPS, known_fields={"returns"})
+    ok, reason = pf.check(_DEPTH7)
+    assert ok, reason
+
+
+def test_default_van_chan_do_sau_8():
+    pf = PreFilter(known_operators=_DEPTH7_OPS, known_fields={"returns"})
+    ok, reason = pf.check(f"rank({_DEPTH7})")  # bọc thêm 1 tầng -> độ sâu 8
+    assert not ok
+    assert "sâu" in reason.lower()
