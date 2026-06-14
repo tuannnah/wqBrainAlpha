@@ -66,23 +66,63 @@ class AutoPipeline:
         directions_run = 0
         stop_reason = "hết_hướng"
 
-        self.prepare()
-        directions = self.propose_directions(self.max_directions)
+        info = self.prepare()
+        self._emit(
+            "prepare",
+            f"✓ đăng nhập | fields={info.fields} | operators={info.operators}",
+            fields=info.fields,
+            operators=info.operators,
+        )
 
-        for direction in directions:
+        directions = self.propose_directions(self.max_directions)
+        self._emit(
+            "directions",
+            f"Sẽ thử {len(directions)} hướng",
+            directions=list(directions),
+        )
+
+        total = len(directions)
+        for i, direction in enumerate(directions, start=1):
             if len(passed) >= self.target_passes:
                 stop_reason = "đủ_K_pass"
                 break
             if total_sims >= self.max_total_sims:
                 stop_reason = "chạm_trần_sim"
                 break
+
+            self._emit(
+                "direction_start",
+                f"[Hướng {i}/{total}] {direction!r}",
+                index=i,
+                total=total,
+                direction=direction,
+            )
             outcome = self.run_direction(direction)
             passed.extend(outcome.passed)
             total_sims += outcome.sims_used
             directions_run += 1
+            self._emit(
+                "direction_done",
+                f"+{len(outcome.passed)} alpha đạt | sim lượt={outcome.sims_used} "
+                f"| tổng pass={len(passed)}/{self.target_passes} | tổng sim={total_sims}",
+                index=i,
+                added=len(outcome.passed),
+                sims_used=outcome.sims_used,
+                total_passed=len(passed),
+                total_sims=total_sims,
+            )
 
         if len(passed) >= self.target_passes:
             stop_reason = "đủ_K_pass"
+
+        self._emit(
+            "stop",
+            f"Dừng: {stop_reason} — pass={len(passed)}, sim={total_sims}, hướng đã chạy={directions_run}",
+            stop_reason=stop_reason,
+            total_passed=len(passed),
+            total_sims=total_sims,
+            directions_run=directions_run,
+        )
 
         return AutoResult(
             passed_alphas=passed,

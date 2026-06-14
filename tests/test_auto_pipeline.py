@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from src.pipeline.auto import (
     AutoPipeline,
     DirectionOutcome,
@@ -110,3 +112,58 @@ def test_dung_khi_cham_tran_sim():
     assert calls["run"] == 3
     assert result.total_sims == 75
     assert result.stop_reason == "chạm_trần_sim"
+
+
+def test_phat_du_su_kien():
+    events = []
+
+    pipe = AutoPipeline(
+        prepare=lambda: PrepareInfo(10, 5),
+        propose_directions=lambda n: ["h1", "h2"],
+        run_direction=lambda d: DirectionOutcome(passed=[], sims_used=1),
+        target_passes=99,
+        max_total_sims=999,
+        max_directions=5,
+        on_event=lambda ev: events.append(ev),
+    )
+    pipe.run()
+
+    kinds = [e.kind for e in events]
+    assert kinds == [
+        "prepare",
+        "directions",
+        "direction_start",
+        "direction_done",
+        "direction_start",
+        "direction_done",
+        "stop",
+    ]
+    # sự kiện stop mang lý do dừng
+    assert events[-1].data.get("stop_reason") == "hết_hướng"
+
+
+def test_prepare_loi_thi_dung_sach():
+    calls = {"run": 0, "propose": 0}
+
+    def prepare() -> PrepareInfo:
+        raise RuntimeError("login hỏng")
+
+    def run_direction(d):
+        calls["run"] += 1
+        return DirectionOutcome(passed=[], sims_used=1)
+
+    def propose(n):
+        calls["propose"] += 1
+        return ["h1"]
+
+    pipe = AutoPipeline(
+        prepare=prepare,
+        propose_directions=propose,
+        run_direction=run_direction,
+    )
+
+    with pytest.raises(RuntimeError, match="login hỏng"):
+        pipe.run()
+
+    assert calls["run"] == 0        # chưa chạy hướng nào
+    assert calls["propose"] == 0    # cũng chưa sinh hướng
