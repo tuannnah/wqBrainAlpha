@@ -73,6 +73,9 @@ class AutoPipeline:
             if len(passed) >= self.target_passes:
                 stop_reason = "đủ_K_pass"
                 break
+            if total_sims >= self.max_total_sims:
+                stop_reason = "chạm_trần_sim"
+                break
             outcome = self.run_direction(direction)
             passed.extend(outcome.passed)
             total_sims += outcome.sims_used

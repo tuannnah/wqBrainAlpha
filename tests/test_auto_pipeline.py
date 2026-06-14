@@ -86,3 +86,27 @@ def test_kiem_dieu_kien_dung_o_dau_vong():
 
     assert calls["run"] == 1           # hướng đầu đủ 1 pass -> hướng 2 KHÔNG được gọi
     assert result.stop_reason == "đủ_K_pass"
+
+
+def test_dung_khi_cham_tran_sim():
+    calls = {"run": 0}
+
+    def run_direction(direction: str) -> DirectionOutcome:
+        calls["run"] += 1
+        return DirectionOutcome(passed=[], sims_used=25)
+
+    pipe = AutoPipeline(
+        prepare=lambda: PrepareInfo(10, 5),
+        propose_directions=lambda n: ["h1", "h2", "h3", "h4", "h5"],
+        run_direction=run_direction,
+        target_passes=99,
+        max_total_sims=60,
+        max_directions=5,
+    )
+    result = pipe.run()
+
+    # Hướng 1 (25) + hướng 2 (50): chưa chạm; đầu vòng 3 tổng=50<60 vẫn chạy -> 75.
+    # Đầu vòng 4: 75 >= 60 -> dừng. Vậy chạy 3 hướng.
+    assert calls["run"] == 3
+    assert result.total_sims == 75
+    assert result.stop_reason == "chạm_trần_sim"
