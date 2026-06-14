@@ -405,6 +405,11 @@ def _make_deepseek(model: str | None = None):
 
         return AgentBridgeClient(settings.llm_bridge_dir)
 
+    if settings.llm_backend in ("claude-cli", "codex-cli"):
+        from src.llm.cli_client import make_cli_client
+
+        return make_cli_client(settings.llm_backend, settings)
+
     from src.llm.deepseek_client import DeepSeekClient
 
     if not settings.deepseek_api_key:

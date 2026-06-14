@@ -10,8 +10,12 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"  # model rẻ/nhanh, mặc định cho mọi tác vụ
     deepseek_model_strong: str = ""  # model mạnh cho suy luận khó; rỗng = không routing (T6.3)
-    llm_backend: str = "deepseek"  # "deepseek" = gọi API thật; "agent" = cầu nối qua file cho Claude agent
+    # "deepseek" = API thật; "agent" = cầu nối file (trả tay); "claude-cli"/"codex-cli" = tự gọi CLI
+    llm_backend: str = "deepseek"
     llm_bridge_dir: str = "llm_bridge"  # thư mục trao đổi request/response khi backend=agent
+    llm_cli_timeout_s: int = 180  # trần thời gian mỗi lượt gọi CLI (claude/codex)
+    claude_bin: str = "claude"  # đường dẫn/tên lệnh Claude Code CLI
+    codex_bin: str = "codex"  # đường dẫn/tên lệnh Codex CLI
     database_url: str = "sqlite:///wq_alpha.db"
     cache_ttl_days: int = 30
     default_region: str = "USA"
