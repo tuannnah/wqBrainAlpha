@@ -749,9 +749,13 @@ def submit(
     console.print(table)
 
 
-def _auto_prepare(client_box: dict, session_factory, region, universe, delay) -> PrepareInfo:
-    """Đăng nhập + ensure fields/operators (cache nếu có). Trả PrepareInfo."""
-    client = _make_client()
+def _auto_prepare(client_box: dict, session_factory, region, universe, delay,
+                  existing_client=None) -> PrepareInfo:
+    """Đăng nhập + ensure fields/operators (cache nếu có). Trả PrepareInfo.
+
+    existing_client: tái dùng phiên đã đăng nhập (vd từ menu) thay vì login lại.
+    """
+    client = existing_client or _make_client()
     client.authenticate()
     client_box["client"] = client
 
@@ -828,22 +832,17 @@ def _auto_run_direction_ga(client_box, session_factory, region, universe, delay,
     return run
 
 
-@app.command()
-def auto(
-    engine: str = typer.Option("ai", help="ai | ga"),
-    region: str = typer.Option(settings.default_region),
-    universe: str = typer.Option(settings.default_universe),
-    delay: int = typer.Option(settings.default_delay),
-    target_passes: int = typer.Option(3, "--target", help="Dừng khi đủ K alpha đạt ngưỡng"),
-    max_sims: int = typer.Option(60, "--max-sims", help="Trần cứng tổng số simulation"),
-    max_directions: int = typer.Option(5, "--directions", help="Số hướng nghiên cứu tối đa (engine ai)"),
-) -> None:
-    """Chạy toàn trình: login → cache → tìm/mô phỏng/cải thiện → log. KHÔNG nộp."""
-    _setup_logging()
-    engine = engine.lower().strip()
+def _run_auto(engine, region, universe, delay, target_passes=3, max_sims=60,
+              max_directions=5, existing_client=None):
+    """Lõi toàn trình (hàm thuần, KHÔNG phải lệnh Typer nên gọi trực tiếp được).
+
+    Nhận giá trị scope cụ thể -> dựng AutoPipeline + engine AI/GA -> chạy -> in
+    bảng. Trả AutoResult, hoặc None nếu engine không hợp lệ.
+    """
+    engine = str(engine).lower().strip()
     if engine not in {"ai", "ga"}:
-        console.print("[red]--engine chỉ nhận 'ai' hoặc 'ga'.[/red]")
-        raise typer.Exit(code=1)
+        console.print("[red]engine chỉ nhận 'ai' hoặc 'ga'.[/red]")
+        return None
 
     engine_box = init_db(make_engine())
     session_factory = make_session_factory(engine_box)
@@ -851,7 +850,10 @@ def auto(
     per_direction_box = {"per_direction": max_sims}
 
     def prepare() -> PrepareInfo:
-        return _auto_prepare(client_box, session_factory, region, universe, delay)
+        return _auto_prepare(
+            client_box, session_factory, region, universe, delay,
+            existing_client=existing_client,
+        )
 
     def propose(n: int) -> list[str]:
         if engine == "ga":
@@ -911,14 +913,138 @@ def auto(
     console.print(
         "[dim]Đã lưu DB — xem bằng lệnh 'top'. CHƯA nộp; nộp bằng 'submit' khi muốn.[/dim]"
     )
+    return result
 
 
 @app.command()
-def start(
+def auto(
     engine: str = typer.Option("ai", help="ai | ga"),
+    region: str = typer.Option(settings.default_region),
+    universe: str = typer.Option(settings.default_universe),
+    delay: int = typer.Option(settings.default_delay),
+    target_passes: int = typer.Option(3, "--target", help="Dừng khi đủ K alpha đạt ngưỡng"),
+    max_sims: int = typer.Option(60, "--max-sims", help="Trần cứng tổng số simulation"),
+    max_directions: int = typer.Option(5, "--directions", help="Số hướng nghiên cứu tối đa (engine ai)"),
 ) -> None:
-    """Chạy toàn trình với mặc định (alias của 'auto'). KHÔNG nộp."""
-    auto(engine=engine)
+    """Chạy toàn trình: login → cache → tìm/mô phỏng/cải thiện → log. KHÔNG nộp."""
+    _setup_logging()
+    if _run_auto(engine, region, universe, delay, target_passes, max_sims, max_directions) is None:
+        raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------- menu (start)
+class _MenuState:
+    """Giữ phiên đăng nhập + DB + scope cho menu."""
+
+    def __init__(self):
+        engine = init_db(make_engine())
+        self.session_factory = make_session_factory(engine)
+        self.client = None
+        self.region = settings.default_region
+        self.universe = settings.default_universe
+        self.delay = settings.default_delay
+
+    @property
+    def logged_in(self) -> bool:
+        return self.client is not None and self.client.authenticated
+
+
+def _menu_login(state: _MenuState) -> None:
+    client = _make_client()
+    client.authenticate()
+    state.client = client
+    console.print("[green]✓ Đăng nhập xong.[/green]")
+
+
+def _menu_fields(state: _MenuState) -> None:
+    from src.data.fields import FieldFetchError
+
+    repo = FieldRepository(state.client, state.session_factory)
+    try:
+        fields, fetched = repo.ensure(state.region, state.universe, state.delay)
+    except FieldFetchError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return
+    console.print(
+        f"[green]{'Đã tải mới' if fetched else 'Dùng cache'}: {len(fields)} field "
+        f"({state.region}/{state.universe}/delay={state.delay})[/green]"
+    )
+
+
+def _menu_operators(state: _MenuState) -> None:
+    from src.data.operators import OperatorFetchError
+
+    repo = OperatorRepository(state.client, state.session_factory)
+    if repo.cached_count() > 0:
+        console.print(f"[green]Đã có {repo.cached_count()} operator (dùng cache).[/green]")
+        return
+    try:
+        operators, _ = repo.ensure()
+    except OperatorFetchError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return
+    console.print(f"[green]Đã tải {len(operators)} operator.[/green]")
+
+
+def _menu_ask_engine() -> str:
+    raw = input("Engine [ai/ga, Enter=ai]: ").strip().lower()
+    return raw or "ai"
+
+
+def _print_menu(state: _MenuState) -> None:
+    status = "[green]✓ đã đăng nhập[/green]" if state.logged_in else "[red]✗ chưa đăng nhập[/red]"
+    console.print("\n[bold cyan]=== WQ Auto-Alpha ===[/bold cyan]")
+    console.print(f"Scope: [cyan]{state.region}/{state.universe}/delay={state.delay}[/cyan] | {status}")
+    console.print(" 1) Đăng nhập")
+    console.print(" 2) Tải data fields (dùng cache nếu có)")
+    console.print(" 3) Tải operators (nếu chưa có)")
+    console.print(" 4) Chạy toàn trình auto")
+    console.print(" 5) Chạy thử luồng (tìm + mô phỏng 1 alpha)")
+    console.print(" 0) Thoát")
+
+
+@app.command()
+def start() -> None:
+    """Menu đơn giản: đăng nhập → tải fields/operators → chạy auto / thử luồng."""
+    _setup_logging()
+    from src.data.client import AuthError
+
+    state = _MenuState()
+    while True:
+        _print_menu(state)
+        choice = input("\nChọn: ").strip()
+        try:
+            if choice == "0":
+                break
+            elif choice == "1":
+                _menu_login(state)
+            elif choice in {"2", "3", "4", "5"} and not state.logged_in:
+                console.print("[yellow]Hãy đăng nhập (1) trước.[/yellow]")
+            elif choice == "2":
+                _menu_fields(state)
+            elif choice == "3":
+                _menu_operators(state)
+            elif choice == "4":
+                engine = _menu_ask_engine()
+                _run_auto(
+                    engine, state.region, state.universe, state.delay,
+                    existing_client=state.client,
+                )
+            elif choice == "5":
+                engine = _menu_ask_engine()
+                console.print("[cyan]Thử luồng: tìm + mô phỏng tối đa 1 alpha...[/cyan]")
+                _run_auto(
+                    engine, state.region, state.universe, state.delay,
+                    target_passes=1, max_sims=1, max_directions=1,
+                    existing_client=state.client,
+                )
+            else:
+                console.print("[red]Lựa chọn không hợp lệ.[/red]")
+        except AuthError as exc:
+            console.print(f"[red]Lỗi đăng nhập: {exc}[/red]")
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Đã hủy bước hiện tại.[/yellow]")
+    console.print("[cyan]Kết thúc.[/cyan]")
 
 
 if __name__ == "__main__":
