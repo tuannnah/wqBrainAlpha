@@ -14,7 +14,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from src.decorrelation.similarity import similarity_ratio
+from src.decorrelation.similarity import similarity_ratio, subtree_canon
+from src.generation.ast_utils import parse_expression
 from src.scoring.complexity import complexity_penalty
 from src.simulation.pre_filter import PreFilter
 
@@ -69,12 +70,16 @@ def select_alphas(
     max_nodes: int = 30,
     dedup_threshold: float = 0.85,
     per_family_quota: int | None = None,
+    per_canon_quota: int | None = None,
     max_total: int | None = None,
 ) -> list[Candidate]:
     """Lọc + chấm + khử trùng + quota đa dạng. Trả list Candidate đã sắp giảm điểm.
 
     - dedup_threshold: similarity_ratio >= ngưỡng giữa hai ứng viên -> coi trùng,
-      giữ cái điểm cao hơn.
+      giữ cái điểm cao hơn. CHỈ dùng khi per_canon_quota là None.
+    - per_canon_quota: nếu set, BỎ khử trùng tuyệt đối; thay vào giữ tối đa N biến
+      thể mỗi khung canon (field->F, số->N). Hợp với user tự mô phỏng: cùng khung
+      nhưng khác field/cửa sổ vẫn là alpha đáng test riêng.
     - per_family_quota: số alpha tối đa giữ cho mỗi họ.
     - max_total: trần tổng số alpha output.
     """
@@ -108,12 +113,21 @@ def select_alphas(
     # xét theo điểm giảm dần (ưu tiên giữ cái tốt khi khử trùng / quota)
     scored.sort(key=lambda x: x.score, reverse=True)
 
-    # 2) khử trùng nội bộ
+    # 2) khử trùng nội bộ: theo quota canon (giữ nhiều biến thể) hoặc tuyệt đối
     kept: list[Candidate] = []
-    for c in scored:
-        if _trung_voi_da_chon(c.expression, kept, dedup_threshold):
-            continue
-        kept.append(c)
+    if per_canon_quota is not None:
+        per_canon: dict[str, int] = {}
+        for c in scored:
+            canon = _canon_of(c.expression)
+            if per_canon.get(canon, 0) >= per_canon_quota:
+                continue
+            per_canon[canon] = per_canon.get(canon, 0) + 1
+            kept.append(c)
+    else:
+        for c in scored:
+            if _trung_voi_da_chon(c.expression, kept, dedup_threshold):
+                continue
+            kept.append(c)
 
     # 3) quota đa dạng theo họ + trần tổng
     result: list[Candidate] = []
@@ -127,6 +141,14 @@ def select_alphas(
             break
 
     return result
+
+
+def _canon_of(expr: str) -> str:
+    """Canon cấu trúc của biểu thức (field->F, số->N). Parse lỗi -> dùng nguyên văn."""
+    try:
+        return subtree_canon(parse_expression(expr))
+    except ValueError:
+        return expr
 
 
 def _trung_voi_da_chon(expr: str, kept: list[Candidate], threshold: float) -> bool:

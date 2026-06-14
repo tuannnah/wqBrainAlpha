@@ -102,6 +102,39 @@ def test_select_quota_da_dang_theo_ho():
     assert len(momentum) <= 2
 
 
+def test_select_per_canon_quota_giu_nhieu_bien_the():
+    """per_canon_quota: cùng khung cấu trúc giữ tối đa N biến thể (không gộp về 1).
+
+    Lý do: user tự mô phỏng nên rank(ts_delta(close,5)) và rank(ts_delta(close,20))
+    là HAI alpha đáng test riêng, dù cùng canon rank(ts_delta(F,N))."""
+    cands = [_cand(f"rank(ts_delta(close, {n}))", "momentum") for n in (5, 10, 20, 30)]
+    selected = select_alphas(
+        cands,
+        zoo=[],
+        known_operators={"rank", "ts_delta"},
+        known_fields={"close"},
+        per_canon_quota=3,
+        per_family_quota=100,
+    )
+    assert len(selected) == 3   # 4 biến thể cùng canon -> giữ 3
+
+
+def test_select_per_canon_quota_none_thi_khu_trung_nhu_cu():
+    """Không truyền per_canon_quota -> giữ hành vi khử trùng tuyệt đối cũ."""
+    cands = [
+        _cand("rank(ts_delta(close, 5))"),
+        _cand("rank(ts_delta(volume, 10))"),
+    ]
+    selected = select_alphas(
+        cands,
+        zoo=[],
+        known_operators={"rank", "ts_delta"},
+        known_fields={"close", "volume"},
+        dedup_threshold=0.85,
+    )
+    assert len(selected) == 1
+
+
 def test_select_sap_xep_giam_theo_diem():
     """Kết quả trả về sắp xếp giảm dần theo điểm local."""
     cands = [
