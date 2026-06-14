@@ -24,6 +24,14 @@ from src.data.operators import OperatorRepository
 from src.simulation.simulator import Simulator
 from src.storage.db import init_db, make_engine, make_session_factory
 from src.storage.repository import AlphaRepository
+from src.pipeline.auto import (
+    AutoEvent,
+    AutoPipeline,
+    DirectionOutcome,
+    PassedAlpha,
+    PrepareInfo,
+    passed_from_ga,
+)
 
 app = typer.Typer(help="WorldQuant Brain Auto-Alpha Tool")
 console = Console()
@@ -1036,6 +1044,170 @@ def _wizard_menu(state: _WizardState) -> None:
     console.print(f" 8) Xem fields đã tải{lock(fields_ok)}")
     console.print(" 9) Đổi scope (region/universe/delay)")
     console.print(" 0) Thoát")
+
+
+def _auto_prepare(client_box: dict, session_factory, region, universe, delay) -> PrepareInfo:
+    """Đăng nhập + ensure fields/operators (cache nếu có). Trả PrepareInfo."""
+    client = _make_client()
+    client.authenticate()
+    client_box["client"] = client
+
+    field_repo = FieldRepository(client, session_factory)
+    fields, _ = field_repo.ensure(region, universe, delay)
+
+    op_repo = OperatorRepository(client, session_factory)
+    operators, _ = op_repo.ensure()
+
+    return PrepareInfo(fields=len(fields), operators=len(operators))
+
+
+def _auto_run_direction_ai(client_box, session_factory, region, universe, delay, per_direction_box):
+    """Trả callback run_direction cho engine AI."""
+    def run(direction: str) -> DirectionOutcome:
+        loop, _deepseek = _make_research_loop(
+            session_factory, client_box["client"], region, universe, delay,
+            max_sims=per_direction_box["per_direction"], patience=3,
+        )
+        result = loop.run(direction)
+        passed: list[PassedAlpha] = []
+        cand = result.best_candidate
+        if cand is not None and result.zoo_added > 0 and result.best_vector is not None:
+            d = result.best_vector.dimensions()
+            passed.append(
+                PassedAlpha(
+                    expression=cand.expression,
+                    sharpe=d.get("sharpe"),
+                    fitness=d.get("fitness"),
+                    direction=direction,
+                )
+            )
+        return DirectionOutcome(passed=passed, sims_used=result.sims_used)
+    return run
+
+
+def _auto_run_direction_ga(client_box, session_factory, region, universe, delay, per_direction_box):
+    """Trả callback run_direction cho engine GA."""
+    import random
+
+    from src.generation.ast_utils import to_expression
+    from src.generation.template import TemplateGenerator
+    from src.optimization.evolution import GeneticOptimizer
+    from src.simulation.pre_filter import PreFilter
+
+    def run(direction: str) -> DirectionOutcome:
+        fields, operators = _cached_symbols(session_factory)
+        pf = PreFilter(known_operators=operators or None, known_fields=set(fields))
+        tgen = TemplateGenerator(fields, pf, rng=random.Random())
+        sim = Simulator(client_box["client"])
+
+        def seed_factory():
+            exprs = tgen.generate(1)
+            return GeneticOptimizer.expr_to_node(exprs[0] if exprs else f"rank({fields[0]})")
+
+        results: dict = {}
+        original_simulate = sim.simulate
+
+        def simulate_capture(expr, **kwargs):
+            res = original_simulate(expr, **kwargs)
+            results[expr] = res
+            return res
+
+        sim.simulate = simulate_capture
+        opt = GeneticOptimizer(
+            simulator=sim, prefilter=pf, seed_factory=seed_factory, fields=fields,
+            population_size=30, generations=10,
+            max_simulations=per_direction_box["per_direction"],
+        )
+        best_nodes = opt.run()
+        best_exprs = [to_expression(n) for n in best_nodes]
+        passed = passed_from_ga(best_exprs, results)
+        return DirectionOutcome(passed=passed, sims_used=opt.simulations_used)
+    return run
+
+
+@app.command()
+def auto(
+    engine: str = typer.Option("ai", help="ai | ga"),
+    region: str = typer.Option(settings.default_region),
+    universe: str = typer.Option(settings.default_universe),
+    delay: int = typer.Option(settings.default_delay),
+    target_passes: int = typer.Option(3, "--target", help="Dừng khi đủ K alpha đạt ngưỡng"),
+    max_sims: int = typer.Option(60, "--max-sims", help="Trần cứng tổng số simulation"),
+    max_directions: int = typer.Option(5, "--directions", help="Số hướng nghiên cứu tối đa (engine ai)"),
+) -> None:
+    """Chạy toàn trình: login → cache → tìm/mô phỏng/cải thiện → log. KHÔNG nộp."""
+    _setup_logging()
+    engine = engine.lower().strip()
+    if engine not in {"ai", "ga"}:
+        console.print("[red]--engine chỉ nhận 'ai' hoặc 'ga'.[/red]")
+        raise typer.Exit(code=1)
+
+    engine_box = init_db(make_engine())
+    session_factory = make_session_factory(engine_box)
+    client_box: dict = {}
+    per_direction_box = {"per_direction": max_sims}
+
+    def prepare() -> PrepareInfo:
+        return _auto_prepare(client_box, session_factory, region, universe, delay)
+
+    def propose(n: int) -> list[str]:
+        if engine == "ga":
+            return [""]
+        from src.simulation.pre_filter import PreFilter
+        gen = _make_llm_generator(session_factory, PreFilter())
+        return gen.generate_ideas(n)
+
+    run_builder = _auto_run_direction_ai if engine == "ai" else _auto_run_direction_ga
+    run_direction_raw = run_builder(
+        client_box, session_factory, region, universe, delay, per_direction_box
+    )
+
+    state = {"sims_used": 0, "dirs_total": 1}
+
+    def run_direction(direction: str) -> DirectionOutcome:
+        # Chia trần sim: phần còn lại / số hướng còn lại (hướng đầu không ăn hết).
+        remaining = max_sims - state["sims_used"]
+        dirs_left = max(1, state["dirs_total"])
+        per_direction_box["per_direction"] = max(1, remaining // dirs_left)
+        outcome = run_direction_raw(direction)
+        state["sims_used"] += outcome.sims_used
+        state["dirs_total"] = max(1, state["dirs_total"] - 1)
+        return outcome
+
+    def on_event(ev: AutoEvent) -> None:
+        if ev.kind == "directions":
+            state["dirs_total"] = max(1, len(ev.data.get("directions", [])))
+        logger.info("[auto:{}] {} | {}", ev.kind, ev.message, ev.data)
+        style = {"stop": "bold green", "prepare": "cyan"}.get(ev.kind, "")
+        console.print(f"[{style}]{ev.message}[/{style}]" if style else ev.message)
+
+    pipe = AutoPipeline(
+        prepare=prepare,
+        propose_directions=propose,
+        run_direction=run_direction,
+        target_passes=target_passes,
+        max_total_sims=max_sims,
+        max_directions=max_directions if engine == "ai" else 1,
+        on_event=on_event,
+    )
+    result = pipe.run()
+
+    table = Table(title=f"Alpha đạt ngưỡng ({len(result.passed_alphas)}) — engine={engine}, dừng: {result.stop_reason}")
+    table.add_column("Expression", overflow="fold")
+    table.add_column("Sharpe", justify="right")
+    table.add_column("Fitness", justify="right")
+    table.add_column("Hướng nguồn", overflow="fold")
+    for p in result.passed_alphas:
+        table.add_row(
+            p.expression,
+            f"{p.sharpe:.3f}" if p.sharpe is not None else "—",
+            f"{p.fitness:.3f}" if p.fitness is not None else "—",
+            p.direction or "—",
+        )
+    console.print(table)
+    console.print(
+        "[dim]Đã lưu DB — xem bằng lệnh 'top'. CHƯA nộp; nộp bằng 'submit' khi muốn.[/dim]"
+    )
 
 
 @app.command()
