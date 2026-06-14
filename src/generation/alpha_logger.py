@@ -65,16 +65,25 @@ def _infer_neutralization(expression: str) -> str:
     return DEFAULT_SETTINGS["neutralization"]
 
 
-def settings_for(expression: str) -> dict:
-    """Setting đầy đủ cho một biểu thức (suy neutralization từ biểu thức)."""
+def settings_for(expression: str, overrides: dict | None = None) -> dict:
+    """Setting đầy đủ cho một biểu thức.
+
+    - neutralization suy từ biểu thức (nếu bọc group_neutralize).
+    - overrides: ghi đè per-alpha (vd decay/truncation theo bản chất tín hiệu);
+      chỉ chấp nhận khóa setting hợp lệ, khóa lạ bị bỏ qua.
+    """
     s = dict(DEFAULT_SETTINGS)
     s["neutralization"] = _infer_neutralization(expression)
+    if overrides:
+        for k, v in overrides.items():
+            if k in DEFAULT_SETTINGS:
+                s[k] = v
     return s
 
 
 def format_alpha(candidate, index: int) -> str:
     """In một alpha thành khối text chi tiết."""
-    s = settings_for(candidate.expression)
+    s = settings_for(candidate.expression, getattr(candidate, "overrides", None))
     setting_lines = "\n".join(f"    {k} = {s[k]}" for k in _SETTING_ORDER)
     reasons = "; ".join(candidate.reasons) if candidate.reasons else "—"
     orig = "—" if candidate.originality is None else f"{candidate.originality:.2f}"

@@ -86,6 +86,7 @@ NOVEL_ALPHAS: list[Candidate] = [
     # 1) Volatility Risk Premium (IV - RV). IV > RV bền vững = phí bảo hiểm sợ hãi.
     Candidate(
         family="vol-risk-premium",
+        overrides={"decay": 5, "truncation": 0.08},
         expression=(
             "group_neutralize("
             "rank(implied_volatility_mean_30 - historical_volatility_30), "
@@ -105,6 +106,7 @@ NOVEL_ALPHAS: list[Candidate] = [
     # 2) Put-call IV skew. Skew put dốc = nhu cầu phòng hộ downside cao.
     Candidate(
         family="iv-skew",
+        overrides={"decay": 5, "truncation": 0.08},
         expression=(
             "group_neutralize("
             "rank(implied_volatility_put_30 - implied_volatility_call_30), "
@@ -123,6 +125,7 @@ NOVEL_ALPHAS: list[Candidate] = [
     # 3) Term structure IV (90d - 30d). Backwardation = stress ngắn hạn.
     Candidate(
         family="iv-term-structure",
+        overrides={"decay": 5, "truncation": 0.08},
         expression=(
             "group_neutralize("
             "-rank(implied_volatility_mean_90 - implied_volatility_mean_30), "
@@ -142,6 +145,7 @@ NOVEL_ALPHAS: list[Candidate] = [
     # 4) Put-call open interest ratio momentum. Dòng tiền phòng hộ thay đổi.
     Candidate(
         family="pcr-flow",
+        overrides={"decay": 10, "truncation": 0.06},
         expression=(
             "group_neutralize("
             "-rank(ts_delta(pcr_oi_30, 5)), "
@@ -161,6 +165,7 @@ NOVEL_ALPHAS: list[Candidate] = [
     # 5) News novelty overreaction. Tin càng "mới lạ" càng dễ phản ứng thái quá.
     Candidate(
         family="news-novelty",
+        overrides={"decay": 30, "truncation": 0.04},
         expression=(
             "group_neutralize("
             "-rank(mean_event_novelty_score * mean_event_sentiment_score), "
@@ -180,6 +185,7 @@ NOVEL_ALPHAS: list[Candidate] = [
     # 6) Earnings-release sentiment drift (PEAD qua news, không qua giá).
     Candidate(
         family="news-pead",
+        overrides={"decay": 20, "truncation": 0.04},
         expression=(
             "group_neutralize("
             "rank(ts_mean(nws18_bee, 5)), "
@@ -199,6 +205,7 @@ NOVEL_ALPHAS: list[Candidate] = [
     # 7) Social buzz spike phối hợp sentiment. Attention-driven mispricing.
     Candidate(
         family="social-attention",
+        overrides={"decay": 40, "truncation": 0.03},
         expression=(
             "group_neutralize("
             "-rank(ts_zscore(scl12_buzz, 20) * scl12_sentiment), "
@@ -218,6 +225,7 @@ NOVEL_ALPHAS: list[Candidate] = [
     # 8) Analyst net earnings revision drift (sentiment1, không phải fundamental).
     Candidate(
         family="analyst-revision",
+        overrides={"decay": 20, "truncation": 0.05},
         expression=(
             "group_neutralize("
             "rank(ts_mean(snt1_d1_netearningsrevision, 10)), "
@@ -237,6 +245,7 @@ NOVEL_ALPHAS: list[Candidate] = [
     # 9) Phân kỳ target vs recommendation. Giá mục tiêu tăng nhưng khuyến nghị chưa.
     Candidate(
         family="analyst-divergence",
+        overrides={"decay": 15, "truncation": 0.05},
         expression=(
             "group_neutralize("
             "rank(snt1_d1_nettargetpercent - snt1_d1_netrecpercent), "
@@ -256,6 +265,7 @@ NOVEL_ALPHAS: list[Candidate] = [
     # 10) Supply-chain graph: tín hiệu lợi suất khách hàng lan sang nhà cung cấp.
     Candidate(
         family="supply-chain-graph",
+        overrides={"decay": 10, "truncation": 0.02},
         expression=(
             "group_neutralize("
             "rank(ts_mean(pv13_custretsig_retsig, 5)), "

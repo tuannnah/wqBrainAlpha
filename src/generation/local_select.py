@@ -35,6 +35,8 @@ class Candidate:
     originality: float | None = None
     complexity: float | None = None
     reasons: list[str] = field(default_factory=list)
+    # override setting riêng từng alpha (decay/truncation theo bản chất tín hiệu).
+    overrides: dict = field(default_factory=dict)
 
 
 def originality_score(expr: str, zoo) -> float:
