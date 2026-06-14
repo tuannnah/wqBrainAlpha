@@ -42,3 +42,47 @@ def test_dung_khi_het_huong():
     assert result.total_sims == 2
     assert result.stop_reason == "hết_hướng"
     assert result.passed_alphas == []
+
+
+def test_dung_khi_du_k_pass():
+    calls = {"run": 0}
+
+    def run_direction(direction: str) -> DirectionOutcome:
+        calls["run"] += 1
+        return DirectionOutcome(passed=[_pa(f"e{calls['run']}a"), _pa(f"e{calls['run']}b")], sims_used=3)
+
+    pipe = AutoPipeline(
+        prepare=lambda: PrepareInfo(10, 5),
+        propose_directions=lambda n: ["h1", "h2", "h3", "h4", "h5"],
+        run_direction=run_direction,
+        target_passes=3,
+        max_total_sims=999,
+        max_directions=5,
+    )
+    result = pipe.run()
+
+    assert calls["run"] == 2           # mỗi hướng 2 pass; sau hướng 2 đã có 4 >= 3 -> dừng
+    assert len(result.passed_alphas) == 4
+    assert result.stop_reason == "đủ_K_pass"
+    assert result.directions_run == 2
+
+
+def test_kiem_dieu_kien_dung_o_dau_vong():
+    calls = {"run": 0}
+
+    def run_direction(direction: str) -> DirectionOutcome:
+        calls["run"] += 1
+        return DirectionOutcome(passed=[_pa("only")], sims_used=1)
+
+    pipe = AutoPipeline(
+        prepare=lambda: PrepareInfo(10, 5),
+        propose_directions=lambda n: ["h1", "h2", "h3"],
+        run_direction=run_direction,
+        target_passes=1,
+        max_total_sims=999,
+        max_directions=3,
+    )
+    result = pipe.run()
+
+    assert calls["run"] == 1           # hướng đầu đủ 1 pass -> hướng 2 KHÔNG được gọi
+    assert result.stop_reason == "đủ_K_pass"

@@ -70,10 +70,16 @@ class AutoPipeline:
         directions = self.propose_directions(self.max_directions)
 
         for direction in directions:
+            if len(passed) >= self.target_passes:
+                stop_reason = "đủ_K_pass"
+                break
             outcome = self.run_direction(direction)
             passed.extend(outcome.passed)
             total_sims += outcome.sims_used
             directions_run += 1
+
+        if len(passed) >= self.target_passes:
+            stop_reason = "đủ_K_pass"
 
         return AutoResult(
             passed_alphas=passed,
