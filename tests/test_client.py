@@ -136,6 +136,29 @@ def test_get_tu_backoff_khi_429():
     assert state["data_calls"] == 2
 
 
+def test_authenticate_tu_doi_va_thu_lai_khi_429(capsys):
+    state = {"auth_calls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authentication":
+            state["auth_calls"] += 1
+            if state["auth_calls"] == 1:
+                # Lần đầu bị giới hạn tần suất, server báo chờ 7 giây.
+                return httpx.Response(429, headers={"Retry-After": "7"})
+            return httpx.Response(201)  # lần hai đăng nhập được
+        return httpx.Response(404)
+
+    slept = []
+    client = _client_with(handler, sleep_func=lambda s: slept.append(s))
+    client.authenticate()
+
+    assert client.authenticated is True
+    assert state["auth_calls"] == 2  # 429 rồi mới 201
+    assert slept == [7.0]  # đã chờ đúng Retry-After
+    out = capsys.readouterr().out
+    assert "7" in out  # đã in ra số giây phải chờ cho người dùng
+
+
 def test_get_tu_reauth_khi_session_het_han():
     state = {"auth_count": 0, "data_calls": 0}
 

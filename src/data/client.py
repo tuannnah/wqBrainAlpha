@@ -111,6 +111,24 @@ class WQBrainClient:
                 "Không thể kết nối đến WorldQuant BRAIN. Kiểm tra mạng và thử lại."
             ) from exc
 
+    def _authenticate_with_backoff(self) -> httpx.Response:
+        """Gọi /authentication, tự in Retry-After + chờ + thử lại khi gặp 429."""
+        for attempt in range(self.MAX_RATE_LIMIT_RETRIES + 1):
+            resp = self._request_authentication()
+            if resp.status_code == self.RATE_LIMIT_STATUS and attempt < self.MAX_RATE_LIMIT_RETRIES:
+                wait = self._retry_after(resp)
+                logger.warning(
+                    "Đăng nhập bị giới hạn tần suất (429) — chờ {}s rồi thử lại ({}/{})",
+                    wait,
+                    attempt + 1,
+                    self.MAX_RATE_LIMIT_RETRIES,
+                )
+                print(f"⏳ Bị giới hạn tần suất (429). Chờ {wait:g} giây rồi thử đăng nhập lại...")
+                self._sleep(wait)
+                continue
+            return resp
+        return resp
+
     def authenticate(self, force: bool = False) -> None:
         # Tái dùng session đã lưu nếu còn hạn (khỏi đăng nhập lại).
         if not force and self._has_session() and self.is_session_valid():
@@ -119,7 +137,7 @@ class WQBrainClient:
             print("✅ Dùng lại phiên đăng nhập trước.")
             return
 
-        resp = self._request_authentication()
+        resp = self._authenticate_with_backoff()
 
         if resp.status_code in (200, 201):
             self._authenticated = True
