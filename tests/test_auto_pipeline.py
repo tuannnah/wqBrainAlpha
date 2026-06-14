@@ -167,3 +167,34 @@ def test_prepare_loi_thi_dung_sach():
 
     assert calls["run"] == 0        # chưa chạy hướng nào
     assert calls["propose"] == 0    # cũng chưa sinh hướng
+
+
+from src.pipeline.auto import passed_from_ga
+
+
+class _FakeSimResult:
+    """Giả lập result của simulator cho hard_filter + score."""
+    def __init__(self, sharpe, fitness, turnover, drawdown, status="passed"):
+        self._m = {"sharpe": sharpe, "fitness": fitness, "turnover": turnover,
+                   "returns": 0.1, "drawdown": drawdown, "margin": 0.002}
+        self.status = status
+
+    def metrics(self):
+        return dict(self._m)
+
+
+def test_passed_from_ga_loc_alpha_dat_nguong():
+    # alpha tốt (đạt ngưỡng filter mặc định) + alpha tệ (trượt)
+    good_expr = "rank(close)"
+    bad_expr = "rank(open)"
+    results = {
+        good_expr: _FakeSimResult(sharpe=1.8, fitness=1.3, turnover=0.25, drawdown=0.08),
+        bad_expr: _FakeSimResult(sharpe=0.2, fitness=0.1, turnover=0.9, drawdown=0.5),
+    }
+
+    passed = passed_from_ga([good_expr, bad_expr], results)
+
+    assert [p.expression for p in passed] == [good_expr]
+    assert passed[0].direction == ""           # GA không có hướng
+    assert passed[0].sharpe == 1.8
+    assert passed[0].fitness == 1.3

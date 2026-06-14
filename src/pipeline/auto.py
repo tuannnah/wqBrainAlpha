@@ -130,3 +130,26 @@ class AutoPipeline:
             total_sims=total_sims,
             stop_reason=stop_reason,
         )
+
+
+def passed_from_ga(expressions, results) -> list[PassedAlpha]:
+    """Lọc các biểu thức GA đạt ngưỡng hard-filter -> PassedAlpha (direction='').
+
+    expressions: danh sách expr ứng viên (theo thứ tự tốt→kém).
+    results: dict expr -> sim result (có .metrics() và .status).
+    """
+    from src.scoring.filter import passes as hard_filter
+    from src.scoring.metrics import normalize
+
+    out: list[PassedAlpha] = []
+    for expr in expressions:
+        result = results.get(expr)
+        if result is None:
+            continue
+        ok, _ = hard_filter(result)
+        if result.status == "passed" and ok:
+            m = normalize(result)
+            out.append(
+                PassedAlpha(expression=expr, sharpe=m["sharpe"], fitness=m["fitness"], direction="")
+            )
+    return out
