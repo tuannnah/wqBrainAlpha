@@ -154,6 +154,45 @@ def test_persona_hoan_tat_bang_post_vao_url_inquiry():
     assert len(waited) == 1
 
 
+def test_authenticate_lan_hai_la_no_op_khi_da_dang_nhap():
+    """Đã đăng nhập trong phiên (kể cả persona không set cookie) -> authenticate()
+    lần 2 không được gọi lại /authentication hay /users/self/ (không bắt QR lại).
+
+    Tái hiện bug: chọn 4/5 sau khi đăng nhập lại đòi xác thực QR.
+    """
+    persona_path = "/authentication/persona"
+    state = {"auth_calls": 0, "persona_posts": 0, "self_calls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authentication":
+            state["auth_calls"] += 1
+            return httpx.Response(
+                401,
+                headers={"WWW-Authenticate": "persona", "Location": f"{persona_path}?inquiry=x"},
+            )
+        if request.url.path == persona_path:
+            state["persona_posts"] += 1
+            return httpx.Response(201)  # đăng nhập xong nhưng KHÔNG set cookie phiên
+        if request.url.path == "/users/self/":
+            state["self_calls"] += 1
+            return httpx.Response(200, json={"id": "u1"})
+        return httpx.Response(404)
+
+    client = _client_with(
+        handler,
+        browser_open=lambda url: True,
+        confirmation_input=lambda prompt: None,
+    )
+    client.authenticate()
+    assert client.authenticated is True
+    assert state["auth_calls"] == 1
+
+    # Lần 2 (vd. menu chọn 4/5 truyền lại cùng client) -> phải no-op.
+    client.authenticate()
+    assert state["auth_calls"] == 1  # KHÔNG gọi lại /authentication
+    assert state["self_calls"] == 0  # KHÔNG cần kiểm tra session qua mạng
+
+
 def test_extract_verification_url_tu_header():
     resp = httpx.Response(202, headers={"Location": "/authentication/verify/abc"})
     url = WQBrainClient._extract_verification_url(resp)

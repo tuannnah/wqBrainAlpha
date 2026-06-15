@@ -130,6 +130,10 @@ class WQBrainClient:
         return resp
 
     def authenticate(self, force: bool = False) -> None:
+        # Đã đăng nhập trong phiên này -> no-op (kể cả persona/QR không set cookie).
+        # Tránh bắt quét QR lại mỗi khi gọi lệnh data trên cùng client.
+        if not force and self._authenticated:
+            return
         # Tái dùng session đã lưu nếu còn hạn (khỏi đăng nhập lại).
         if not force and self._has_session() and self.is_session_valid():
             self._authenticated = True
