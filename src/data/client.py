@@ -186,18 +186,33 @@ class WQBrainClient:
             self.confirmation_input(
                 "Quét QR và hoàn tất xác thực trong trình duyệt, sau đó nhấn Enter..."
             )
-            resp = self._request_authentication()
+            # Hoàn tất bằng cách POST vào CHÍNH URL persona/inquiry vừa quét —
+            # KHÔNG POST /authentication lại (sẽ sinh inquiry mới, lặp vô tận).
+            resp = self._post_verification(verification_url)
             if resp.status_code in (200, 201):
                 return
+            # Có thể WQ trả inquiry mới (vd. inquiry trước hết hạn) — cập nhật URL.
+            next_url = self._extract_verification_url(resp)
+            if next_url:
+                verification_url = next_url
             if (
                 resp.status_code in self.VERIFICATION_STATUS_CODES
                 or resp.status_code in (401, 403)
-                or self._extract_verification_url(resp)
+                or next_url
             ):
                 continue
             raise AuthError(f"Xác thực thất bại: HTTP {resp.status_code}")
 
         raise AuthError("Xác thực bổ sung chưa hoàn tất sau ba lần kiểm tra.")
+
+    def _post_verification(self, url: str) -> httpx.Response:
+        """POST vào URL persona/inquiry (kèm Basic Auth) để hoàn tất xác thực QR."""
+        try:
+            return self.client.post(url, auth=(self.email, self.password))
+        except httpx.RequestError as exc:
+            raise AuthError(
+                "Không thể kết nối đến WorldQuant BRAIN. Kiểm tra mạng và thử lại."
+            ) from exc
 
     @classmethod
     def _extract_verification_url(cls, response) -> str | None:

@@ -111,6 +111,49 @@ def test_xac_thuc_qr_mo_trinh_duyet_va_thu_lai():
     assert len(waited) == 1  # đã chờ user nhấn Enter
 
 
+def test_persona_hoan_tat_bang_post_vao_url_inquiry():
+    """Sau khi quét QR, phải POST vào chính URL persona/inquiry để hoàn tất.
+
+    Tái hiện bug: nếu POST /authentication lần nữa thì WQ sinh inquiry MỚI,
+    inquiry vừa quét không bao giờ được hoàn tất -> lặp 3 lần rồi AuthError.
+    """
+    persona_path = "/authentication/persona"
+    state = {"auth_calls": 0, "persona_posts": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authentication":
+            state["auth_calls"] += 1
+            # Mỗi lần POST /authentication -> 401 kèm inquiry MỚI.
+            return httpx.Response(
+                401,
+                headers={
+                    "WWW-Authenticate": "persona",
+                    "Location": f"{persona_path}?inquiry=inq_{state['auth_calls']}",
+                },
+            )
+        if request.url.path == persona_path:
+            # Quét QR xong + POST vào URL inquiry -> hoàn tất.
+            state["persona_posts"] += 1
+            return httpx.Response(201)
+        return httpx.Response(404)
+
+    opened = []
+    waited = []
+    client = _client_with(
+        handler,
+        browser_open=lambda url: opened.append(url) or True,
+        confirmation_input=lambda prompt: waited.append(prompt),
+    )
+    client.authenticate()
+
+    assert client.authenticated is True
+    assert state["auth_calls"] == 1  # CHỈ gọi /authentication 1 lần (không sinh inquiry mới)
+    assert state["persona_posts"] == 1  # hoàn tất bằng POST vào URL persona
+    assert len(opened) == 1  # mở đúng URL inquiry để quét QR
+    assert "inq_1" in opened[0]
+    assert len(waited) == 1
+
+
 def test_extract_verification_url_tu_header():
     resp = httpx.Response(202, headers={"Location": "/authentication/verify/abc"})
     url = WQBrainClient._extract_verification_url(resp)
