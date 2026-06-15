@@ -599,6 +599,38 @@ def _run_research_with_progress(loop, direction, max_sims, mcts=False):
         return loop.run(direction, on_progress=on_progress)
 
 
+def _run_ga_with_progress(opt, total):
+    """Chạy GeneticOptimizer kèm thanh tiến trình (đếm sim + thế hệ)."""
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("sim {task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("GA: khởi tạo quần thể...", total=max(1, total))
+
+        def on_sim(n, expr, score):
+            progress.update(task, completed=min(n, total))
+
+        def on_gen(stats):
+            progress.update(
+                task,
+                description=f"GA gen {stats.generation} best={stats.best_score:.3f}"[:60],
+            )
+
+        return opt.run(on_generation=on_gen, on_simulation=on_sim)
+
+
 @app.command("llm-generate")
 def llm_generate(
     idea: str = typer.Option(..., help="Ý tưởng alpha bằng ngôn ngữ tự nhiên"),
@@ -776,11 +808,13 @@ def _auto_prepare(client_box: dict, session_factory, region, universe, delay,
 def _auto_run_direction_ai(client_box, session_factory, region, universe, delay, per_direction_box):
     """Trả callback run_direction cho engine AI."""
     def run(direction: str) -> DirectionOutcome:
+        per_direction = per_direction_box["per_direction"]
         loop, _deepseek = _make_research_loop(
             session_factory, client_box["client"], region, universe, delay,
-            max_sims=per_direction_box["per_direction"], patience=3,
+            max_sims=per_direction, patience=3,
         )
-        result = loop.run(direction)
+        # Hiển thị tiến trình (spinner + đếm sim + pha) để người dùng biết đang làm gì.
+        result = _run_research_with_progress(loop, direction, per_direction)
         passed: list[PassedAlpha] = []
         cand = result.best_candidate
         if cand is not None and result.zoo_added > 0 and result.best_vector is not None:
@@ -825,12 +859,13 @@ def _auto_run_direction_ga(client_box, session_factory, region, universe, delay,
             return res
 
         sim.simulate = simulate_capture
+        per_direction = per_direction_box["per_direction"]
         opt = GeneticOptimizer(
             simulator=sim, prefilter=pf, seed_factory=seed_factory, fields=fields,
             population_size=30, generations=10,
-            max_simulations=per_direction_box["per_direction"],
+            max_simulations=per_direction,
         )
-        best_nodes = opt.run()
+        best_nodes = _run_ga_with_progress(opt, per_direction)
         best_exprs = [to_expression(n) for n in best_nodes]
         passed = passed_from_ga(best_exprs, results)
         return DirectionOutcome(passed=passed, sims_used=opt.simulations_used)
