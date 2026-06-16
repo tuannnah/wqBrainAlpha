@@ -43,3 +43,36 @@ def test_khong_trung_lap_y_het():
     """Không có hai ứng viên trùng biểu thức y hệt."""
     exprs = [c.expression for c in generate_candidates()]
     assert len(exprs) == len(set(exprs))
+
+
+def test_moi_ung_vien_co_decay_override():
+    """Mỗi ứng viên phải đặt decay riêng (núm điều khiển turnover) — không để mặc định 0 cứng."""
+    for c in generate_candidates():
+        assert "decay" in c.overrides, f"thiếu decay: {c.family} / {c.expression}"
+
+
+def test_decay_trong_khoang_hop_le():
+    """decay là số nguyên trong [0,512] ngày theo WQ Brain."""
+    for c in generate_candidates():
+        d = c.overrides["decay"]
+        assert isinstance(d, int) and 0 <= d <= 512, f"decay sai: {c.family}={d}"
+
+
+def test_bieu_thuc_co_decay_linear_thi_setting_decay_0():
+    """Biểu thức đã có ts_decay_linear (mượt nội tại) thì setting decay = 0 để khỏi mượt kép."""
+    for c in generate_candidates():
+        if "ts_decay_linear" in c.expression:
+            assert c.overrides["decay"] == 0, (
+                f"mượt kép: {c.family} đã có ts_decay_linear nhưng setting decay={c.overrides['decay']}"
+            )
+
+
+def test_tin_hieu_nhieu_decay_cao_hon_tin_hieu_cham():
+    """Tín hiệu nhiễu/spiky (volume) cần decay cao hơn tín hiệu cơ bản chậm (value)."""
+    by_family: dict[str, int] = {}
+    for c in generate_candidates():
+        # lấy decay đại diện của họ từ biểu thức KHÔNG có mượt nội tại
+        if "ts_decay_linear" not in c.expression:
+            by_family.setdefault(c.family, c.overrides["decay"])
+    assert by_family["volume"] > by_family["value"]
+    assert by_family["reversal"] > 0  # tín hiệu đảo chiều thô phải có decay > 0

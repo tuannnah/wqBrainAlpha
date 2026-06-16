@@ -29,6 +29,28 @@ EXPECTED_FAMILIES = (
     "seasonality",
 )
 
+# Decay là núm điều khiển turnover chính (T5.5): decay=0 = tắt làm mượt -> tái cân
+# bằng theo tín hiệu thô mỗi ngày -> turnover cao, ăn phí. Đặt decay theo BẢN CHẤT
+# tín hiệu từng họ: tín hiệu nhiễu/spiky (volume, seasonality lag, analyst revision)
+# cần decay cao để dàn nhiều ngày; tín hiệu cơ bản chậm (value) turnover sẵn thấp nên
+# decay nhẹ; momentum/volatility trung-dài hạn vốn ít giao dịch nên decay vừa.
+_FAMILY_DECAY = {
+    "reversal": 4,      # đảo chiều ngắn hạn, ts_delta thô turnover rất cao -> mượt vừa
+    "momentum": 8,      # xu hướng trung-dài hạn, chậm sẵn -> mượt thoải mái
+    "volatility": 5,    # ước lượng vol 20-120 ngày khá ổn định
+    "volume": 10,       # sốc khối lượng / zscore nhiễu spiky -> mượt mạnh
+    "value": 4,         # cơ bản cập nhật chậm, turnover thấp -> mượt nhẹ
+    "analyst": 10,      # hiệu chỉnh dự báo nhiễu trung bình
+    "seasonality": 10,  # lợi suất trễ point-in-time nhiễu -> mượt mạnh
+}
+
+
+def _decay_for(family: str, expression: str) -> int:
+    """Decay setting theo họ; biểu thức đã có ts_decay_linear (mượt nội tại) -> 0 tránh mượt kép."""
+    if "ts_decay_linear" in expression:
+        return 0
+    return _FAMILY_DECAY.get(family, 0)
+
 # Nhóm neutralization phổ biến (đều là group hợp lệ cho group_neutralize).
 _GROUPS = ("market", "sector", "industry", "subindustry")
 
@@ -351,5 +373,7 @@ def generate_candidates() -> list[Candidate]:
         if c.expression in seen:
             continue
         seen.add(c.expression)
+        # Đặt decay theo bản chất tín hiệu (không ghi đè nếu họ đã tự set).
+        c.overrides.setdefault("decay", _decay_for(c.family, c.expression))
         unique.append(c)
     return unique
