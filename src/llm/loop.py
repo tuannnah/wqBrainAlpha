@@ -127,6 +127,14 @@ class RefinementLoop:
                 )
                 return None
 
+        # Kiểm cache TRƯỚC aligner: expr đã sim trước đây thì đã qua aligner rồi,
+        # gọi lại chỉ tốn lượt LLM alignment (đắt) mà không đổi kết quả.
+        cached = self.repo.get_cached_simulation(expr)
+        if cached is not None:
+            vector = self.score_vector_fn(cached)
+            eff = self._effective_total(vector, expr, originality, None)
+            return _Eval(vector, normalize(cached), None, cached.status == "passed", eff)
+
         alignment = None
         if self.aligner is not None:
             align = self.aligner.score(candidate)
@@ -138,12 +146,6 @@ class RefinementLoop:
                     "llm",
                 )
                 return None
-
-        cached = self.repo.get_cached_simulation(expr)
-        if cached is not None:
-            vector = self.score_vector_fn(cached)
-            eff = self._effective_total(vector, expr, originality, alignment)
-            return _Eval(vector, normalize(cached), None, cached.status == "passed", eff)
 
         if self.sims_used >= self.max_simulations:
             return None  # hết trần sim, không gọi WQ thêm

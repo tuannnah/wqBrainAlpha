@@ -148,6 +148,33 @@ def test_loop_refine_nham_chieu_chan_hard_filter():
     assert captured == ["fitness"]
 
 
+def test_loop_cache_hit_bo_qua_aligner():
+    """Cache hit -> không gọi aligner (tiết kiệm lượt LLM đắt) và không sim lại."""
+    repo = _repo()
+    repo.save_simulation(_result("rank(close)", 1.5), region="USA", universe="TOP3000", score=0.8)
+
+    class _CountAligner:
+        def __init__(self):
+            self.calls = 0
+
+        def score(self, candidate):
+            self.calls += 1
+
+            class _A:
+                value = 1.0
+                reason = ""
+
+            return _A()
+
+    aligner = _CountAligner()
+    sim = FakeSimulator(results=lambda e: _result(e, 1.5))
+    loop = _loop(_FakeTranslator("rank(close)"), _FakeRefiner([]), sim, repo,
+                 max_simulations=10, no_improve_patience=1, aligner=aligner, min_alignment=0.5)
+    loop.run("X")
+    assert aligner.calls == 0  # seed là cache hit -> bỏ qua aligner
+    assert sim.calls == []     # cache hit -> không sim lại
+
+
 def test_loop_zoo_va_failure():
     # seed sharpe thấp (fail hard filter) ; refine sharpe cao (vào zoo).
     scores = {"rank(close)": 1.0, "rank(ts_mean(close, 5))": 1.8}
