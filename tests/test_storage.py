@@ -140,3 +140,16 @@ def test_migration_them_cot_thieu_cho_db_cu():
         assert session.get(AlphaModel, aid).description == "ok"
     finally:
         session.close()
+
+
+def test_top_simulated_sap_xep_theo_sharpe_bo_error():
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    repo = AlphaRepository(sf)
+    repo.save_simulation(_passed("a", sharpe=0.5, fitness=0.1, status="failed"), region="USA", universe="TOP3000")
+    repo.save_simulation(_passed("b", sharpe=1.9, fitness=0.8, status="failed"), region="USA", universe="TOP3000")
+    repo.save_simulation(_passed("c", sharpe=2.0, status="error"), region="USA", universe="TOP3000")
+    top = repo.top_simulated(5)
+    exprs = [t[0] for t in top]
+    assert exprs == ["b", "a"]          # theo sharpe giảm, loại 'error'
+    assert top[0] == ("b", 1.9, 0.8)

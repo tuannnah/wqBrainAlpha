@@ -134,6 +134,26 @@ class AlphaRepository:
         finally:
             session.close()
 
+    def top_simulated(self, limit: int = 5) -> list[tuple[str, float, float]]:
+        """Top alpha ĐÃ mô phỏng (có metric thật, bỏ status='error') theo sharpe
+        giảm dần. Trả [(expression, sharpe, fitness)] để khai thác (exploit) — đề
+        xuất biến thể của tín hiệu đã cho kết quả tốt, kể cả khi chưa pass."""
+        session = self.session_factory()
+        try:
+            rows = (
+                session.query(
+                    AlphaModel.expression, SimulationModel.sharpe, SimulationModel.fitness
+                )
+                .join(SimulationModel, SimulationModel.alpha_id == AlphaModel.id)
+                .filter(SimulationModel.status != "error", SimulationModel.sharpe.isnot(None))
+                .order_by(SimulationModel.sharpe.desc())
+                .limit(limit)
+                .all()
+            )
+            return [(r[0], r[1], r[2] if r[2] is not None else 0.0) for r in rows]
+        finally:
+            session.close()
+
     def zoo(self, limit: int = 20) -> list[AlphaModel]:
         """Alpha zoo (T2.10): các alpha đã pass, sort giảm theo score của simulation."""
         session = self.session_factory()

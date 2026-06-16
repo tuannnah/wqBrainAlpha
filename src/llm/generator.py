@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 import re
 import unicodedata
 
 from loguru import logger
 
+from src.generation.ast_utils import iter_leaves, parse_expression
 from src.llm.jsonutil import extract_json as _extract_json
 
 FEWSHOT_EXAMPLES = [
@@ -155,12 +156,61 @@ def _is_cliche_idea(idea: str) -> bool:
     return score >= 2
 
 
+def _common_fields(exprs, top: int = 6) -> list[str]:
+    """Field xuất hiện nhiều nhất trong tập biểu thức (đếm theo số biểu thức chứa)."""
+    counter: Counter[str] = Counter()
+    for expr in exprs:
+        try:
+            tree = parse_expression(expr)
+        except (ValueError, TypeError):
+            continue
+        counter.update({lf.value for lf in iter_leaves(tree) if isinstance(lf.value, str)})
+    return [f for f, _ in counter.most_common(top)]
+
+
+def build_feedback_prompt(top_alphas, weak_fields) -> str:
+    """Đoạn ngữ cảnh phản hồi từ DB cho prompt sinh hướng (exploit + tránh vùng chết).
+
+    top_alphas: [(expr, sharpe, fitness)] tốt nhất đã sim -> đề xuất biến thể.
+    weak_fields: field liên tục cho kết quả yếu -> tránh."""
+    parts: list[str] = []
+    if top_alphas:
+        lines = "\n".join(
+            f"- {e}  (sharpe={s:.2f}, fitness={f:.2f})" for e, s, f in top_alphas
+        )
+        parts.append(
+            "TÍN HIỆU ĐÃ MÔ PHỎNG TỐT NHẤT — hãy đề xuất hướng BIẾN THỂ/MỞ RỘNG các "
+            "họ này (đặc biệt để nâng fitness), thay vì làm lại từ đầu:\n" + lines
+        )
+    if weak_fields:
+        parts.append(
+            "Các field liên tục cho kết quả YẾU, TRÁNH dựa vào: " + ", ".join(weak_fields)
+        )
+    return "\n".join(parts)
+
+
 class LLMAlphaGenerator:
-    def __init__(self, deepseek, field_repo, operator_repo, prefilter):
+    def __init__(self, deepseek, field_repo, operator_repo, prefilter, repo=None):
         self.deepseek = deepseek
         self.field_repo = field_repo
         self.operator_repo = operator_repo
         self.prefilter = prefilter
+        self.repo = repo  # AlphaRepository để lấy phản hồi (top alpha / failures); None -> không feedback
+
+    def _feedback_context(self) -> str:
+        """Ngữ cảnh phản hồi từ DB: top alpha để khai thác + field yếu để tránh."""
+        if self.repo is None:
+            return ""
+        top = self.repo.top_simulated(5)
+        fails = [
+            f.expression for f in self.repo.recent_failures(200)
+            if f.category in ("low_score", "sim_error") and f.expression
+        ]
+        weak = _common_fields(fails)
+        # Không liệt field đang dùng trong các top performer vào danh sách "tránh".
+        top_fields = set(_common_fields([e for e, _, _ in top], top=20))
+        weak = [w for w in weak if w not in top_fields]
+        return build_feedback_prompt(top, weak)
 
     def build_system_prompt(self) -> str:
         operators = [o.name for o in self.operator_repo.load_cached() if o.name]
@@ -289,8 +339,12 @@ class LLMAlphaGenerator:
         system = self.build_ideas_system_prompt()
         user = (
             f"Đề xuất {n} hướng/ý tưởng alpha độc đáo, mỗi hướng dựa trên một mạch "
-            "dữ liệu thay thế khác nhau. Tránh momentum/reversal giá thuần."
+            "dữ liệu thay thế khác nhau. Cho phép reversal/độ lệch CÓ chuẩn hóa theo "
+            "nhóm nếu nó cho tín hiệu rõ, nhưng tránh momentum giá THUẦN dễ trùng."
         )
+        feedback = self._feedback_context()
+        if feedback:
+            user += "\n\n" + feedback
         results: list[str] = []
         rejected: list[str] = []
         for _ in range(MAX_IDEA_ATTEMPTS):

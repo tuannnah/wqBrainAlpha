@@ -282,3 +282,51 @@ def test_deepseek_client_json_mode_raise_sau_khi_het_retry():
         client.complete("sys", "hello", json_mode=True)
 
     assert len(fake_http.calls) == 2
+
+
+# ------------------------------------------- feedback từ DB cho bộ sinh hướng
+def test_common_fields_dem_field():
+    from src.llm.generator import _common_fields
+
+    exprs = ["rank(actual_eps_value)", "ts_mean(actual_eps_value, 5)", "rank(close)"]
+    assert _common_fields(exprs, top=1) == ["actual_eps_value"]
+
+
+def test_build_feedback_prompt_co_top_va_weak():
+    from src.llm.generator import build_feedback_prompt
+
+    s = build_feedback_prompt([("scale(ts_zscore(returns, 5))", 1.95, 0.87)], ["actual_eps_value"])
+    assert "scale(ts_zscore(returns, 5))" in s
+    assert "1.95" in s
+    assert "actual_eps_value" in s
+
+
+class _FbRepo:
+    def top_simulated(self, limit=5):
+        return [("scale(ts_zscore(returns, 5))", 1.95, 0.87)]
+
+    def recent_failures(self, limit=200):
+        from types import SimpleNamespace
+
+        return [SimpleNamespace(category="low_score", expression="rank(actual_eps_value)")]
+
+
+def test_generate_ideas_chen_feedback_tu_db():
+    deepseek = FakeDeepSeek([json.dumps({"ideas": ["option skew", "news novelty"]})])
+    pf = PreFilter(known_operators={"rank"}, known_fields={"close"})
+    gen = LLMAlphaGenerator(
+        deepseek, FakeRepo([_Field("close")]), FakeRepo([_Op("rank")]), pf, repo=_FbRepo()
+    )
+    gen.generate_ideas(2)
+    user = deepseek.calls[0][1]
+    assert "scale(ts_zscore(returns, 5))" in user  # exploit: top alpha
+    assert "actual_eps_value" in user              # tránh: field yếu
+
+
+def test_generate_ideas_khong_repo_thi_khong_feedback():
+    """Không truyền repo -> prompt không có mục feedback (tương thích ngược)."""
+    deepseek = FakeDeepSeek([json.dumps({"ideas": ["option skew", "news novelty"]})])
+    gen = _generator(deepseek)
+    gen.generate_ideas(2)
+    user = deepseek.calls[0][1]
+    assert "MÔ PHỎNG TỐT NHẤT" not in user
