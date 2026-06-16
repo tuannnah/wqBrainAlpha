@@ -167,6 +167,11 @@ class RefinementLoop:
         passed = result.status == "passed" and ok_hard
         if passed:
             self.zoo_added += 1
+        elif result.status == "error":
+            # Sim lỗi/timeout ở phía WQ Brain: ghi lý do thật (đã kèm message) để
+            # LLM tránh lặp lại biểu thức hỏng, thay vì chỉ ghi "error".
+            detail = result.raw.get("error") if isinstance(result.raw, dict) else None
+            self.repo.record_failure(expr, "sim_error", str(detail or result.status), "llm")
         else:
             self.repo.record_failure(expr, "low_score", "; ".join(reasons) or result.status, "llm")
         eff = self._effective_total(vector, expr, originality, alignment)

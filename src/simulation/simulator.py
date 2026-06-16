@@ -58,6 +58,28 @@ class SimulationError(RuntimeError):
     pass
 
 
+def _error_detail(payload: dict) -> str:
+    """Trích lý do lỗi từ payload simulation ERROR/FAILED của WQ Brain.
+
+    WQ Brain thường đặt mô tả ở `message`; đôi khi nằm trong list lỗi con
+    (`children`) hoặc trong `regular`/`detail`. Trả chuỗi rỗng nếu không thấy
+    để caller fallback về mình status."""
+    for key in ("message", "detail", "error"):
+        val = payload.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    children = payload.get("children")
+    if isinstance(children, list):
+        msgs = [
+            str(c.get("message")).strip()
+            for c in children
+            if isinstance(c, dict) and c.get("message")
+        ]
+        if msgs:
+            return "; ".join(msgs)
+    return ""
+
+
 class Simulator:
     POLL_INTERVAL = 3.0
     TIMEOUT_SECONDS = 300.0
@@ -125,7 +147,9 @@ class Simulator:
                 if status in ("COMPLETE", "WARNING"):
                     return payload
                 if status in ("ERROR", "FAILED"):
-                    raise SimulationError(f"status={status}")
+                    detail = _error_detail(payload)
+                    msg = f"status={status}: {detail}" if detail else f"status={status}"
+                    raise SimulationError(msg)
             elif resp.status_code >= 400:
                 raise SimulationError(f"poll HTTP {resp.status_code}")
 

@@ -66,6 +66,30 @@ def test_simulate_failed_khi_check_fail():
     assert result.status == "failed"
 
 
+def test_simulate_error_giu_message_giai_thich():
+    """status=ERROR kèm message → message phải được nêu trong raw['error'] để chẩn đoán."""
+    client = FakeClient()
+    client.queue_post(FakeResponse(201, headers={"Location": "/simulations/sim-3"}))
+    client.queue_get(
+        FakeResponse(
+            200,
+            json_data={
+                "status": "ERROR",
+                "message": "Datafield 'foo_bar' is not supported in this region.",
+            },
+        )
+    )
+
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0
+    )
+    result = sim.simulate("rank(foo_bar)")
+
+    assert result.status == "error"
+    assert "foo_bar" in result.raw["error"]
+    assert "ERROR" in result.raw["error"]
+
+
 def test_simulate_thieu_location_tra_error():
     client = FakeClient()
     client.queue_post(FakeResponse(201, headers={}))
