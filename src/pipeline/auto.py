@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
+UNLIMITED_DIRECTION_BATCH_SIZE = 5
+
 
 @dataclass
 class PassedAlpha:
@@ -74,15 +76,9 @@ class AutoPipeline:
             operators=info.operators,
         )
 
-        directions = self.propose_directions(self.max_directions)
-        self._emit(
-            "directions",
-            f"Sẽ thử {len(directions)} hướng",
-            directions=list(directions),
-        )
-
-        total = len(directions)
-        for i, direction in enumerate(directions, start=1):
+        unlimited = self.max_directions <= 0
+        batch_size = UNLIMITED_DIRECTION_BATCH_SIZE if unlimited else self.max_directions
+        while True:
             if len(passed) >= self.target_passes:
                 stop_reason = "đủ_K_pass"
                 break
@@ -90,27 +86,50 @@ class AutoPipeline:
                 stop_reason = "chạm_trần_sim"
                 break
 
+            directions = self.propose_directions(batch_size)
             self._emit(
-                "direction_start",
-                f"[Hướng {i}/{total}] {direction!r}",
-                index=i,
-                total=total,
-                direction=direction,
+                "directions",
+                f"Sẽ thử {len(directions)} hướng",
+                directions=list(directions),
             )
-            outcome = self.run_direction(direction)
-            passed.extend(outcome.passed)
-            total_sims += outcome.sims_used
-            directions_run += 1
-            self._emit(
-                "direction_done",
-                f"+{len(outcome.passed)} alpha đạt | sim lượt={outcome.sims_used} "
-                f"| tổng pass={len(passed)}/{self.target_passes} | tổng sim={total_sims}",
-                index=i,
-                added=len(outcome.passed),
-                sims_used=outcome.sims_used,
-                total_passed=len(passed),
-                total_sims=total_sims,
-            )
+            if not directions:
+                stop_reason = "hết_hướng"
+                break
+
+            total_label = "∞" if unlimited else str(len(directions))
+            for direction in directions:
+                if len(passed) >= self.target_passes:
+                    stop_reason = "đủ_K_pass"
+                    break
+                if total_sims >= self.max_total_sims:
+                    stop_reason = "chạm_trần_sim"
+                    break
+
+                index = directions_run + 1
+                self._emit(
+                    "direction_start",
+                    f"[Hướng {index}/{total_label}] {direction!r}",
+                    index=index,
+                    total=0 if unlimited else len(directions),
+                    direction=direction,
+                )
+                outcome = self.run_direction(direction)
+                passed.extend(outcome.passed)
+                total_sims += outcome.sims_used
+                directions_run += 1
+                self._emit(
+                    "direction_done",
+                    f"+{len(outcome.passed)} alpha đạt | sim lượt={outcome.sims_used} "
+                    f"| tổng pass={len(passed)}/{self.target_passes} | tổng sim={total_sims}",
+                    index=index,
+                    added=len(outcome.passed),
+                    sims_used=outcome.sims_used,
+                    total_passed=len(passed),
+                    total_sims=total_sims,
+                )
+
+            if not unlimited or stop_reason != "hết_hướng":
+                break
 
         if len(passed) >= self.target_passes:
             stop_reason = "đủ_K_pass"

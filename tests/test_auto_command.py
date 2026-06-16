@@ -7,6 +7,7 @@ universe/delay là typer OptionInfo -> cache key sai -> gọi API -> HTTP 400.
 from __future__ import annotations
 
 import main
+from src.pipeline.auto import AutoResult
 
 
 class _FakeClient:
@@ -59,6 +60,32 @@ def test_run_auto_truyen_scope_cu_the(monkeypatch):
     assert _FakeFieldRepo.scope == ("USA", "TOP3000", 1)
     # Không hướng -> dừng sạch, không gọi API.
     assert result.stop_reason == "hết_hướng"
+
+
+def test_run_auto_ai_mac_dinh_khong_gioi_han_huong(monkeypatch):
+    captured = {}
+
+    class _FakePipe:
+        def __init__(self, **kwargs):
+            captured["max_directions"] = kwargs["max_directions"]
+            self.prepare = kwargs["prepare"]
+
+        def run(self):
+            self.prepare()
+            return AutoResult([], directions_run=0, total_sims=0, stop_reason="hết_hướng")
+
+    monkeypatch.setattr(main, "init_db", lambda e: e)
+    monkeypatch.setattr(main, "make_engine", lambda: None)
+    monkeypatch.setattr(main, "make_session_factory", lambda e: (lambda: None))
+    monkeypatch.setattr(main, "_make_client", lambda: _FakeClient())
+    monkeypatch.setattr(main, "FieldRepository", _FakeFieldRepo)
+    monkeypatch.setattr(main, "OperatorRepository", _FakeOpRepo)
+    monkeypatch.setattr(main, "_make_llm_generator", lambda sf, pf: _FakeGen())
+    monkeypatch.setattr(main, "AutoPipeline", _FakePipe)
+
+    main._run_auto("ai", "USA", "TOP3000", 1, target_passes=3, max_sims=1)
+
+    assert captured["max_directions"] == 0
 
 
 def test_run_ga_with_progress_noi_callback_va_tra_ket_qua():

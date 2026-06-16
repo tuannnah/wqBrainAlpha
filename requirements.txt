@@ -14,8 +14,7 @@ pytest-asyncio>=0.23
 # Phase 2+
 deap>=1.4
 optuna>=3.6
-# Phase 3 (DeepSeek dùng chuẩn OpenAI-compatible)
-openai>=1.30
+# Phase 3 (DeepSeek Anthropic-compatible API dung httpx o tren)
 # Dashboard
 streamlit>=1.35
 pandas>=2.2

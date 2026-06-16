@@ -7,9 +7,12 @@ class Settings(BaseSettings):
     wq_email: str = ""
     wq_password: str = ""
     deepseek_api_key: str = ""
-    deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-chat"  # model rẻ/nhanh, mặc định cho mọi tác vụ
+    deepseek_base_url: str = "https://api.deepseek.com/anthropic"
+    deepseek_model: str = "deepseek-v4-pro"  # model mặc định cho mọi tác vụ LLM
     deepseek_model_strong: str = ""  # model mạnh cho suy luận khó; rỗng = không routing (T6.3)
+    # deepseek-v4-pro là reasoning model: cần budget rộng cho khối "thinking" + câu trả
+    # lời, nếu không text bị cắt -> trả rỗng. Tăng qua DEEPSEEK_MAX_TOKENS khi cần.
+    deepseek_max_tokens: int = 4096
     # "deepseek" = API thật; "agent" = cầu nối file (trả tay); "claude-cli"/"codex-cli" = tự gọi CLI
     llm_backend: str = "deepseek"
     llm_bridge_dir: str = "llm_bridge"  # thư mục trao đổi request/response khi backend=agent

@@ -418,7 +418,78 @@ def _make_deepseek(model: str | None = None):
     return DeepSeekClient(
         settings.deepseek_api_key, settings.deepseek_base_url,
         model=model or settings.deepseek_model,
+        max_tokens=settings.deepseek_max_tokens,
     )
+
+
+def run_deepseek_smoke(
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    message: str = "hello",
+    client_cls=None,
+) -> str:
+    """Gọi chat completion rất ngắn để kiểm tra DeepSeek API."""
+    if not api_key.strip():
+        raise ValueError("Thiếu DEEPSEEK_API_KEY")
+    if not base_url.strip():
+        raise ValueError("Thiếu DEEPSEEK_BASE_URL")
+    if not model.strip():
+        raise ValueError("Thiếu DEEPSEEK_MODEL")
+
+    from src.llm.deepseek_client import DeepSeekClient
+
+    client_cls = client_cls or DeepSeekClient
+    client = client_cls(api_key.strip(), base_url.strip().rstrip("/"), model=model.strip())
+    return client.complete(
+        "You are a concise API smoke-test assistant.",
+        message,
+        json_mode=False,
+    )
+
+
+def describe_deepseek_smoke_error(exc: Exception) -> str:
+    """Diễn giải lỗi smoke check theo ngữ cảnh người dùng cần biết."""
+    text = str(exc)
+    if "Insufficient Balance" in text or "Error code: 402" in text:
+        return (
+            "Đã tới DeepSeek, nhưng chat completion bị từ chối vì "
+            "Insufficient Balance. Hãy nạp balance hoặc kiểm tra quota của API key."
+        )
+    return text
+
+
+@app.command("check-deepseek")
+def check_deepseek(
+    message: str = typer.Option("hello", "--message", "-m", help="Tin nhắn test gửi tới DeepSeek"),
+    model: str = typer.Option("", "--model", help="Ghi đè DEEPSEEK_MODEL cho lần check này"),
+) -> None:
+    """Gọi DeepSeek chat thật bằng DEEPSEEK_API_KEY/BASE_URL/MODEL."""
+    _setup_logging()
+    selected_model = model or settings.deepseek_model
+    base_url = settings.deepseek_base_url
+    if not base_url.rstrip("/").endswith("/anthropic"):
+        console.print(
+            "[yellow]Cảnh báo:[/yellow] repo này dùng Anthropic-compatible API, "
+            "DEEPSEEK_BASE_URL nên là https://api.deepseek.com/anthropic"
+        )
+
+    console.print(f"[dim]DEEPSEEK_BASE_URL={base_url}[/dim]")
+    console.print(f"[dim]DEEPSEEK_MODEL={selected_model}[/dim]")
+    try:
+        reply = run_deepseek_smoke(
+            api_key=settings.deepseek_api_key,
+            base_url=base_url,
+            model=selected_model,
+            message=message,
+        )
+    except Exception as exc:
+        console.print(f"[red]DeepSeek API check thất bại:[/red] {describe_deepseek_smoke_error(exc)}")
+        raise typer.Exit(code=1)
+
+    console.print("[green]DeepSeek API OK[/green]")
+    console.print((reply or "").strip() or "[dim]<empty response>[/dim]")
 
 
 def _make_router():
@@ -873,7 +944,7 @@ def _auto_run_direction_ga(client_box, session_factory, region, universe, delay,
 
 
 def _run_auto(engine, region, universe, delay, target_passes=3, max_sims=60,
-              max_directions=5, existing_client=None):
+              max_directions=0, existing_client=None):
     """Lõi toàn trình (hàm thuần, KHÔNG phải lệnh Typer nên gọi trực tiếp được).
 
     Nhận giá trị scope cụ thể -> dựng AutoPipeline + engine AI/GA -> chạy -> in
@@ -964,7 +1035,7 @@ def auto(
     delay: int = typer.Option(settings.default_delay),
     target_passes: int = typer.Option(3, "--target", help="Dừng khi đủ K alpha đạt ngưỡng"),
     max_sims: int = typer.Option(60, "--max-sims", help="Trần cứng tổng số simulation"),
-    max_directions: int = typer.Option(5, "--directions", help="Số hướng nghiên cứu tối đa (engine ai)"),
+    max_directions: int = typer.Option(0, "--directions", help="Số hướng nghiên cứu tối đa (0 = không giới hạn, engine ai)"),
 ) -> None:
     """Chạy toàn trình: login → cache → tìm/mô phỏng/cải thiện → log. KHÔNG nộp."""
     _setup_logging()

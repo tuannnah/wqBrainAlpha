@@ -44,7 +44,8 @@ class ReferenceZoo:
             return (None, 1.0)  # parse lỗi -> coi như không độc đáo (an toàn)
         best_expr, best_ratio = None, 0.0
         for expr, node in self._entries:
-            r = similarity_ratio(target, node)
+            # field_aware: dataset/field thay thế -> tính là độc đáo (không gộp về "F").
+            r = similarity_ratio(target, node, field_aware=True)
             if r > best_ratio:
                 best_expr, best_ratio = expr, r
         return (best_expr, best_ratio)

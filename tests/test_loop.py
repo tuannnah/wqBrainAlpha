@@ -150,10 +150,10 @@ def test_loop_loai_alpha_trung_cau_truc_zoo_truoc_sim():
     sim = FakeSimulator(results=lambda e: _result(e, 1.5))
     repo = _repo()
     zoo = ReferenceZoo(["rank(ts_mean(close, 5))"])
-    # seed đổi field/window vẫn cùng canon -> originality ~ 0 -> bị loại.
+    # seed cùng field, chỉ đổi window -> vẫn cùng canon -> originality ~ 0 -> bị loại.
     refiner = _FakeRefiner([])
     loop = _loop(
-        _FakeTranslator("rank(ts_mean(volume, 60))"), refiner, sim, repo,
+        _FakeTranslator("rank(ts_mean(close, 60))"), refiner, sim, repo,
         max_simulations=10, zoo=zoo, min_originality=0.2,
     )
     res = loop.run("X")

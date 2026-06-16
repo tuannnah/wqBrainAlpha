@@ -114,6 +114,34 @@ def test_dung_khi_cham_tran_sim():
     assert result.stop_reason == "chạm_trần_sim"
 
 
+def test_unlimited_directions_tiep_tuc_sinh_batch_den_khi_cham_tran_sim():
+    calls = {"propose": 0, "run": 0}
+
+    def propose(n: int) -> list[str]:
+        calls["propose"] += 1
+        return [f"batch{calls['propose']}_h{i}" for i in range(n)]
+
+    def run_direction(direction: str) -> DirectionOutcome:
+        calls["run"] += 1
+        return DirectionOutcome(passed=[], sims_used=2)
+
+    pipe = AutoPipeline(
+        prepare=lambda: PrepareInfo(10, 5),
+        propose_directions=propose,
+        run_direction=run_direction,
+        target_passes=99,
+        max_total_sims=13,
+        max_directions=0,
+    )
+    result = pipe.run()
+
+    assert calls["propose"] == 2
+    assert calls["run"] == 7
+    assert result.directions_run == 7
+    assert result.total_sims == 14
+    assert result.stop_reason == "chạm_trần_sim"
+
+
 def test_phat_du_su_kien():
     events = []
 
