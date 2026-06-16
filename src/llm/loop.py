@@ -165,11 +165,13 @@ class RefinementLoop:
         )
         ok_hard, reasons = self.hard_filter_fn(result)
         passed = result.status == "passed" and ok_hard
+        # Sim degenerate: status='error' HOẶC metric rỗng (sharpe & fitness None —
+        # sim hoàn tất nhưng không ra metric, vd operator lỗi). Không phải alpha
+        # điểm thấp, nên ghi sim_error để LLM tránh lặp, không thổi phồng low_score.
+        metrics_missing = result.sharpe is None and result.fitness is None
         if passed:
             self.zoo_added += 1
-        elif result.status == "error":
-            # Sim lỗi/timeout ở phía WQ Brain: ghi lý do thật (đã kèm message) để
-            # LLM tránh lặp lại biểu thức hỏng, thay vì chỉ ghi "error".
+        elif result.status == "error" or metrics_missing:
             detail = result.raw.get("error") if isinstance(result.raw, dict) else None
             self.repo.record_failure(expr, "sim_error", str(detail or result.status), "llm")
         else:

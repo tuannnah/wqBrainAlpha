@@ -107,6 +107,26 @@ def test_loop_cai_thien_best_qua_cac_vong():
     assert totals == sorted(totals)  # không giảm
 
 
+def test_loop_sim_metric_rong_ghi_sim_error():
+    """Sim 'failed' nhưng KHÔNG có metric (None) là sim hỏng -> ghi sim_error,
+    không dán nhãn low_score giả (metric mặc định không phản ánh alpha kém)."""
+    degenerate = SimulationResult(
+        expression="rank(close)", alpha_id="wq-x", status="failed",
+        raw={"error": "status=ERROR: operator lỗi"},
+    )  # mọi metric = None
+    sim = FakeSimulator(results=lambda e: degenerate)
+    repo = _repo()
+    loop = _loop(_FakeTranslator("rank(close)"), _FakeRefiner([]), sim, repo,
+                 max_simulations=10, no_improve_patience=1)
+    loop.run("X")
+    cats = {f.category for f in repo.recent_failures(10)}
+    assert "sim_error" in cats
+    assert "low_score" not in cats
+    # lý do thật được giữ lại
+    reasons = [f.reason for f in repo.recent_failures(10) if f.category == "sim_error"]
+    assert any("operator lỗi" in (r or "") for r in reasons)
+
+
 def test_loop_zoo_va_failure():
     # seed sharpe thấp (fail hard filter) ; refine sharpe cao (vào zoo).
     scores = {"rank(close)": 1.0, "rank(ts_mean(close, 5))": 1.8}
