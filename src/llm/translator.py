@@ -6,6 +6,7 @@ rồi mới dịch mô tả đó sang công thức. Sai cú pháp thì gửi l�
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from loguru import logger
@@ -59,12 +60,39 @@ class AlphaTranslator:
         )
 
     # ----------------------------------------------------------- context
-    def _symbol_context(self) -> str:
+    @staticmethod
+    def _tokens(text: str) -> set[str]:
+        return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+    def _relevant_fields(self, cached_fields, text: str) -> list[str]:
+        """Xếp hạng fields theo độ liên quan với hypothesis/mô tả (text), rồi cắt
+        MAX_FIELDS_IN_PROMPT. Đảm bảo field hướng nêu đích danh luôn vào prompt thay
+        vì lấy 40 field đầu theo alphabet. Text rỗng -> giữ thứ tự gốc (tương thích)."""
+        text_low = (text or "").lower()
+        text_tokens = self._tokens(text_low)
+        scored = []
+        for idx, f in enumerate(cached_fields):
+            fid = getattr(f, "id", None)
+            if not fid:
+                continue
+            dataset = (getattr(f, "dataset_id", "") or "").lower()
+            score = 0
+            if fid.lower() in text_low:        # nêu đích danh field -> ưu tiên mạnh
+                score += 100
+            if dataset and dataset in text_low:  # nêu dataset (vd option9, earnings4)
+                score += 20
+            score += len(self._tokens(fid + " " + (getattr(f, "description", "") or "")) & text_tokens)
+            scored.append((score, idx, fid))
+        # score cao trước; hoà thì giữ thứ tự gốc (idx) cho ổn định/tương thích.
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        return [fid for _, _, fid in scored[:MAX_FIELDS_IN_PROMPT]]
+
+    def _symbol_context(self, text: str = "") -> str:
         operators = [o.name for o in self.operator_repo.load_cached() if getattr(o, "name", None)]
         cached_fields = self.field_repo.load_cached(**self._scope) if self._scope else self.field_repo.load_cached()
-        fields = [f.id for f in cached_fields if getattr(f, "id", None)]
+        fields = self._relevant_fields(cached_fields, text)
         op_line = ", ".join(operators[:80]) or "rank, ts_delta, ts_mean, group_neutralize, ts_corr"
-        field_line = ", ".join(fields[:MAX_FIELDS_IN_PROMPT]) or "close, open, high, low, volume, vwap, returns"
+        field_line = ", ".join(fields) or "close, open, high, low, volume, vwap, returns"
         examples = "\n".join(f"- {e}" for e in FEWSHOT_EXAMPLES)
         return (
             f"OPERATORS hợp lệ: {op_line}\n"
@@ -105,10 +133,10 @@ class AlphaTranslator:
             "- Đối số chỉ là field/group đã liệt kê, biểu thức con, hoặc SỐ NGUYÊN.\n"
         )
 
-    def _to_expression(self, description: str) -> str | None:
+    def _to_expression(self, description: str, relevance_text: str = "") -> str | None:
         system = (
             "Bạn là chuyên gia viết biểu thức FASTEXPR trên WorldQuant BRAIN.\n"
-            f"{self._symbol_context()}\n"
+            f"{self._symbol_context(relevance_text or description)}\n"
             f"{self._avoid_context()}"
             f"{self._syntax_constraints()}"
             "Dịch MÔ TẢ thành MỘT biểu thức FASTEXPR dùng đúng operators/fields được liệt kê. "
@@ -131,7 +159,17 @@ class AlphaTranslator:
     # ----------------------------------------------------------- public
     def translate(self, hypothesis: Hypothesis) -> AlphaCandidate | None:
         description = self._describe(hypothesis)
-        expression = self._to_expression(description)
+        # Gộp toàn bộ ngữ cảnh hướng/giả thuyết để chọn field liên quan cho prompt.
+        relevance_text = " ".join(
+            [
+                hypothesis.observation,
+                hypothesis.background,
+                hypothesis.economic_rationale,
+                hypothesis.implementation_spec,
+                description,
+            ]
+        )
+        expression = self._to_expression(description, relevance_text)
         if not expression:
             return None
         return AlphaCandidate(hypothesis=hypothesis, description=description, expression=expression)

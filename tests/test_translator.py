@@ -114,6 +114,27 @@ def test_prompt_cam_doi_so_co_ten_keyvalue():
     assert "key=value" in low or "std=" in low  # cảnh báo không dùng đối số có tên
 
 
+# ------------------------- chọn fields theo độ liên quan với hypothesis/mô tả
+def test_field_lien_quan_duoc_uu_tien_vao_prompt():
+    """Field hướng cần (nêu trong hypothesis) phải vào prompt dù nằm ngoài top-40."""
+    dummies = [f"dummy_field_{i}" for i in range(50)]
+    fields = FakeSymbolRepo(dummies + ["call_breakeven_10"])
+    pf = PreFilter(known_operators={"rank"}, known_fields=set(dummies) | {"call_breakeven_10", "close"})
+    ops = FakeSymbolRepo(["rank"])
+    ds = FakeDeepSeek(
+        [json.dumps({"description": "đo độ dốc kỳ hạn call breakeven"}),
+         json.dumps({"expression": "rank(close)"})]
+    )
+    tr = AlphaTranslator(ds, fields, ops, pf)
+    # implementation_spec nêu đích danh field cần dùng
+    h = Hypothesis("qs", "nền", "lý giải", "dùng call_breakeven_10 để tính kỳ vọng biến động")
+    tr.translate(h)
+    expr_system = ds.calls[1][0]
+    assert "call_breakeven_10" in expr_system  # field liên quan có mặt
+    # không thể nhồi hết: prompt bị cắt, không chứa toàn bộ 50 dummy
+    assert sum(d in expr_system for d in dummies) < len(dummies)
+
+
 # ------------------------------------------------- T6.4 lọc fields theo scope
 def test_set_scope_chi_dung_fields_dung_region():
     """Đặt scope -> prompt chỉ chứa fields của region đó, không trộn region khác."""
