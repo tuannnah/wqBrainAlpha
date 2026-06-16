@@ -61,8 +61,16 @@ def score_vector(source) -> ScoreVector:
     return ScoreVector(sharpe, fitness, turnover_fit, drawdown_fit, total)
 
 
-def weakest_dimension(vector: ScoreVector, priority: dict[str, float] | None = None) -> str:
-    """Tên chiều yếu nhất. `priority` (>1 = ưu tiên cải thiện) chia điểm để thiên về chiều đó."""
+def weakest_dimension(
+    vector: ScoreVector,
+    priority: dict[str, float] | None = None,
+    restrict: set[str] | None = None,
+) -> str:
+    """Tên chiều yếu nhất. `priority` (>1 = ưu tiên cải thiện) chia điểm để thiên
+    về chiều đó. `restrict` (nếu không rỗng) -> chỉ xét các chiều này (vd chỉ các
+    chiều đang chặn hard filter), để refine nhắm đúng biên cần vượt."""
     priority = priority or {}
     dims = vector.dimensions()
+    if restrict:
+        dims = {k: v for k, v in dims.items() if k in restrict} or vector.dimensions()
     return min(dims, key=lambda k: dims[k] / priority.get(k, 1.0))

@@ -127,6 +127,27 @@ def test_loop_sim_metric_rong_ghi_sim_error():
     assert any("operator lỗi" in (r or "") for r in reasons)
 
 
+def test_loop_refine_nham_chieu_chan_hard_filter():
+    """Seed pass turnover (0.6 trong ngưỡng) nhưng turnover_fit=0 là thấp nhất tuyệt
+    đối; chỉ fitness chặn hard filter -> refine phải nhắm 'fitness', không 'turnover_fit'."""
+    seed = SimulationResult(
+        expression="rank(close)", alpha_id="wq-s", status="failed",
+        sharpe=1.5, fitness=0.8, turnover=0.6, drawdown=0.05, raw={},
+    )
+    captured = []
+
+    class _RecRefiner:
+        def refine(self, candidate, metrics, weak_dimension):
+            captured.append(weak_dimension)
+            return None  # dừng sau 1 lượt
+
+    sim = FakeSimulator(results=lambda e: seed)
+    loop = _loop(_FakeTranslator("rank(close)"), _RecRefiner(), sim, _repo(),
+                 max_simulations=10, no_improve_patience=1)
+    loop.run("X")
+    assert captured == ["fitness"]
+
+
 def test_loop_zoo_va_failure():
     # seed sharpe thấp (fail hard filter) ; refine sharpe cao (vào zoo).
     scores = {"rank(close)": 1.0, "rank(ts_mean(close, 5))": 1.8}

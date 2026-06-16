@@ -39,6 +39,34 @@ def test_weakest_dimension_sharpe_thap():
     assert weakest_dimension(v) == "sharpe"
 
 
+def test_weakest_dimension_restrict_chi_xet_chieu_chan():
+    """restrict -> chỉ xét các chiều bị chặn, dù chiều khác thấp hơn tuyệt đối."""
+    # sharpe thấp nhất tuyệt đối, nhưng chỉ fitness bị chặn -> phải trả fitness.
+    v = score_vector({"sharpe": 0.1, "fitness": 0.5, "turnover": 0.3, "drawdown": 0.02})
+    assert weakest_dimension(v, restrict={"fitness"}) == "fitness"
+
+
+def test_weakest_dimension_restrict_rong_thi_xet_tat_ca():
+    """restrict rỗng/None (alpha đã pass) -> hành vi cũ: chiều yếu nhất tuyệt đối."""
+    v = score_vector({"sharpe": 0.1, "fitness": 1.4, "turnover": 0.3, "drawdown": 0.02})
+    assert weakest_dimension(v, restrict=set()) == "sharpe"
+    assert weakest_dimension(v, restrict=None) == "sharpe"
+
+
+def test_blocking_dimensions_map_dung_chieu_fail():
+    from src.scoring.filter import blocking_dimensions
+
+    # fitness <= 1.0 và turnover ngoài khoảng -> 2 chiều bị chặn.
+    blocked = blocking_dimensions(
+        {"sharpe": 1.5, "fitness": 0.8, "turnover": 0.95, "drawdown": 0.05}
+    )
+    assert blocked == {"fitness", "turnover_fit"}
+    # alpha đạt mọi ngưỡng -> rỗng.
+    assert blocking_dimensions(
+        {"sharpe": 1.5, "fitness": 1.4, "turnover": 0.3, "drawdown": 0.05}
+    ) == set()
+
+
 def test_score_vector_nhan_simulation_result_object():
     from src.simulation.simulator import SimulationResult
 

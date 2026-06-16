@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from loguru import logger
 
 from src.scoring.complexity import complexity_penalty
+from src.scoring.filter import blocking_dimensions
 from src.scoring.filter import passes as default_filter
 from src.scoring.metrics import normalize
 from src.scoring.regularized import Penalties, PenaltyWeights, regularized_score
@@ -209,7 +210,12 @@ class RefinementLoop:
         patience = 0
         step = 0
         while self.sims_used < self.max_simulations and patience < self.no_improve_patience:
-            weak = weakest_dimension(best_ev.vector)
+            # Nhắm chiều yếu nhất TRONG SỐ các chiều đang chặn hard filter (vd
+            # fitness) để hướng refine về biên cần vượt; alpha đã đạt -> chiều yếu
+            # nhất tuyệt đối như cũ.
+            weak = weakest_dimension(
+                best_ev.vector, restrict=blocking_dimensions(best_ev.metrics)
+            )
             cand = self.refiner.refine(best_cand, best_ev.metrics, weak)
             if cand is None:
                 patience += 1

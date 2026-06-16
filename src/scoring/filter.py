@@ -32,3 +32,22 @@ def passes(source, thresholds: FilterThresholds | None = None) -> tuple[bool, li
         reasons.append(f"drawdown {m['drawdown']:.2f} >= {t.max_drawdown}")
 
     return (len(reasons) == 0, reasons)
+
+
+def blocking_dimensions(source, thresholds: FilterThresholds | None = None) -> set[str]:
+    """Tập tên chiều ScoreVector đang KHÔNG đạt ngưỡng hard filter.
+
+    Dùng để refiner nhắm đúng chiều chặn việc pass (đặc biệt fitness), thay vì
+    chiều có điểm chuẩn-hoá thấp nhất tuyệt đối. Rỗng nghĩa là alpha đã đạt."""
+    t = thresholds or FilterThresholds()
+    m = normalize(source)
+    dims: set[str] = set()
+    if m["sharpe"] < t.min_sharpe:
+        dims.add("sharpe")
+    if m["fitness"] <= t.min_fitness:
+        dims.add("fitness")
+    if not (t.turnover_low <= m["turnover"] <= t.turnover_high):
+        dims.add("turnover_fit")
+    if m["drawdown"] >= t.max_drawdown:
+        dims.add("drawdown_fit")
+    return dims
