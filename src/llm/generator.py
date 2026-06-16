@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+import re
+import unicodedata
+
 from loguru import logger
 
 from src.llm.jsonutil import extract_json as _extract_json
@@ -17,6 +21,9 @@ FEWSHOT_EXAMPLES = [
 
 MAX_FIELDS_IN_PROMPT = 40
 MAX_REPAIR_ATTEMPTS = 3
+MAX_IDEA_ATTEMPTS = 3
+MAX_IDEA_DATASET_LINES = 8
+MAX_IDEA_FIELDS_PER_DATASET = 4
 
 # Các hướng dataset ít người khai thác (correlation thấp trên nền tảng). Mỗi mục
 # là một "mạch" nghiên cứu để LLM bám vào thay vì PV/fundamental kinh điển.
@@ -37,6 +44,115 @@ CLICHE_PATTERNS = [
     "rank(returns)",
     "momentum/reversal giá thuần dùng close/returns đơn lẻ",
 ]
+
+
+ALT_DATA_FALLBACK_IDEAS = [
+    "Option implied volatility skew divergence between put-call demand and realized volatility.",
+    "News event novelty and sentiment reversal after unusually intense coverage.",
+    "Social attention shock with delayed sector-neutral mean reversion.",
+    "Analyst net earnings revision surprise with target-price recommendation divergence.",
+    "Supply-chain customer and competitor graph lead-lag signal across related companies.",
+]
+
+ALT_DATA_KEYWORDS = (
+    "analyst",
+    "buzz",
+    "call",
+    "competitor",
+    "customer",
+    "event",
+    "estimate",
+    "graph",
+    "implied",
+    "iv",
+    "news",
+    "novelty",
+    "open interest",
+    "option",
+    "put",
+    "recommendation",
+    "revision",
+    "sentiment",
+    "skew",
+    "social",
+    "supply",
+    "target",
+)
+
+PRICE_VOLUME_FIELDS = {
+    "adv20",
+    "cap",
+    "close",
+    "high",
+    "low",
+    "open",
+    "returns",
+    "volume",
+    "vwap",
+}
+
+CLICHE_IDEA_TERMS = (
+    "bollinger",
+    "close",
+    "correlation",
+    "dao chieu",
+    "dong luong",
+    "gia",
+    "giam qua",
+    "high",
+    "khoi luong",
+    "loi suat",
+    "long",
+    "low",
+    "moving average",
+    "momentum",
+    "mua",
+    "open",
+    "price",
+    "rank",
+    "return",
+    "reversal",
+    "rsi",
+    "short",
+    "technical",
+    "tuong quan",
+    "volume",
+    "vwap",
+)
+
+
+def _ascii_lower(text: str) -> str:
+    text = text.replace("\u0111", "d").replace("\u0110", "d")
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii").lower()
+
+
+def _field_attr(field, name: str) -> str:
+    return str(getattr(field, name, "") or "")
+
+
+def _has_alt_data_keyword(text: str) -> bool:
+    low = _ascii_lower(text)
+    return any(keyword in low for keyword in ALT_DATA_KEYWORDS)
+
+
+def _is_pure_price_volume_field(field) -> bool:
+    fid = _ascii_lower(_field_attr(field, "id"))
+    combined = f"{fid} {_field_attr(field, 'description')} {_field_attr(field, 'dataset_id')}"
+    if _has_alt_data_keyword(combined):
+        return False
+    return fid in PRICE_VOLUME_FIELDS or fid.startswith("adv")
+
+
+def _is_cliche_idea(idea: str) -> bool:
+    low = _ascii_lower(idea)
+    if not low.strip():
+        return True
+    if _has_alt_data_keyword(low):
+        return False
+    score = sum(1 for term in CLICHE_IDEA_TERMS if term in low)
+    if re.search(r"\b\d+\s*(d|day|days|ngay|m|month|months|thang)\b", low):
+        score += 1
+    return score >= 2
 
 
 class LLMAlphaGenerator:
@@ -90,12 +206,69 @@ class LLMAlphaGenerator:
                 results.append(expr)
         return results
 
+    def _cached_fields(self) -> list:
+        try:
+            return list(self.field_repo.load_cached())
+        except TypeError:
+            return list(self.field_repo.load_cached(None, None, None))
+
+    def _idea_field_context(self) -> str:
+        fields = [f for f in self._cached_fields() if _field_attr(f, "id") and not _is_pure_price_volume_field(f)]
+        if not fields:
+            return "- No cached alternative fields found yet; use the theme list below."
+
+        grouped = defaultdict(list)
+        for field in fields:
+            dataset_id = _field_attr(field, "dataset_id") or "unknown"
+            grouped[dataset_id].append(field)
+
+        def dataset_score(item) -> tuple[int, int, str]:
+            dataset_id, items = item
+            combined = " ".join(
+                f"{_field_attr(f, 'id')} {_field_attr(f, 'description')} {_field_attr(f, 'dataset_id')}"
+                for f in items
+            )
+            alt_hits = sum(1 for keyword in ALT_DATA_KEYWORDS if keyword in _ascii_lower(combined))
+            return (alt_hits, min(len(items), 20), dataset_id)
+
+        lines = []
+        for dataset_id, items in sorted(grouped.items(), key=dataset_score, reverse=True)[:MAX_IDEA_DATASET_LINES]:
+            samples = []
+            for field in items[:MAX_IDEA_FIELDS_PER_DATASET]:
+                fid = _field_attr(field, "id")
+                desc = _field_attr(field, "description").strip()
+                samples.append(f"{fid}: {desc[:80]}" if desc else fid)
+            lines.append(f"- {dataset_id}: " + "; ".join(samples))
+        return "\n".join(lines)
+
+    def _parse_ideas(self, content: str) -> list[str]:
+        data = _extract_json(content)
+        if isinstance(data, dict):
+            ideas = data.get("ideas", [])
+        elif isinstance(data, list):
+            ideas = data
+        else:
+            ideas = []
+        return [str(i).strip() for i in ideas if str(i).strip()]
+
+    def _ideas_retry_prompt(self, n: int, rejected: list[str]) -> str:
+        rejected_line = "; ".join(rejected[-8:]) or "generic price/volume ideas"
+        return (
+            f"Need {n} more alpha research directions. The previous ideas were rejected as cliche: "
+            f"{rejected_line}. Return ONLY fresh low-correlation directions using cached non-price "
+            'datasets/fields when available. JSON format: {"ideas": ["...", "..."]}.'
+        )
+
+    def _fallback_ideas(self) -> list[str]:
+        return list(ALT_DATA_FALLBACK_IDEAS)
+
     def build_ideas_system_prompt(self) -> str:
         """Prompt sinh HƯỚNG nghiên cứu, dẫn LLM sang dataset ít khai thác + cấu
         trúc lạ thay vì công thức PV/fundamental kinh điển (dễ trùng -> correlation
         cao -> bị loại). Xem feedback độ độc đáo alpha."""
         themes = "\n".join(f"- {t}" for t in ALT_DATA_THEMES)
         cliches = "; ".join(CLICHE_PATTERNS)
+        field_context = self._idea_field_context()
         return (
             "Bạn là nhà nghiên cứu alpha định lượng trên WorldQuant BRAIN, săn tín "
             "hiệu ĐỘC ĐÁO có correlation thấp với các factor đại trà.\n"
@@ -105,6 +278,8 @@ class LLMAlphaGenerator:
             "cấu trúc tổ hợp lạ (chuẩn hóa theo nhóm, phân kỳ hai kênh, lan truyền "
             "lead-lag, z-score đột biến...):\n"
             f"{themes}\n"
+            "AVAILABLE NON-PRICE DATASETS/FIELDS from cache. Prefer these concrete IDs when they match the thesis:\n"
+            f"{field_context}\n"
             "Mỗi ý tưởng là một câu ngắn nêu rõ NGUỒN DỮ LIỆU + hiện tượng kinh tế "
             "khai thác (không phải tên operator). Đa dạng nguồn, không lặp một mạch.\n"
             'Trả JSON đúng định dạng: {"ideas": ["...", "..."]}.'
@@ -116,12 +291,23 @@ class LLMAlphaGenerator:
             f"Đề xuất {n} hướng/ý tưởng alpha độc đáo, mỗi hướng dựa trên một mạch "
             "dữ liệu thay thế khác nhau. Tránh momentum/reversal giá thuần."
         )
-        content = self.deepseek.complete(system, user, json_mode=True)
-        data = _extract_json(content)
-        if isinstance(data, dict):
-            ideas = data.get("ideas", [])
-        elif isinstance(data, list):
-            ideas = data
-        else:
-            ideas = []
-        return [str(i) for i in ideas][:n]
+        results: list[str] = []
+        rejected: list[str] = []
+        for _ in range(MAX_IDEA_ATTEMPTS):
+            content = self.deepseek.complete(system, user, json_mode=True)
+            for idea in self._parse_ideas(content):
+                if _is_cliche_idea(idea):
+                    rejected.append(idea)
+                    continue
+                if idea not in results:
+                    results.append(idea)
+                if len(results) >= n:
+                    return results[:n]
+            user = self._ideas_retry_prompt(max(1, n - len(results)), rejected)
+
+        for idea in self._fallback_ideas():
+            if idea not in results and not _is_cliche_idea(idea):
+                results.append(idea)
+            if len(results) >= n:
+                break
+        return results[:n]

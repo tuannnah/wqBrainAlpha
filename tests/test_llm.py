@@ -14,6 +14,8 @@ from src.simulation.pre_filter import PreFilter
 @dataclass
 class _Field:
     id: str
+    description: str = ""
+    dataset_id: str = ""
 
 
 @dataclass
@@ -106,10 +108,10 @@ def test_generate_bo_qua_khi_het_retry():
 
 
 def test_generate_ideas_parse_json():
-    deepseek = FakeDeepSeek([json.dumps({"ideas": ["momentum", "reversal", "volume"]})])
+    deepseek = FakeDeepSeek([json.dumps({"ideas": ["option skew", "analyst revision", "news novelty"]})])
     gen = _generator(deepseek)
     ideas = gen.generate_ideas(3)
-    assert ideas == ["momentum", "reversal", "volume"]
+    assert ideas == ["option skew", "analyst revision", "news novelty"]
 
 
 def test_ideas_prompt_huong_dataset_thay_the():
@@ -138,6 +140,60 @@ def test_generate_ideas_dung_prompt_moi():
     gen.generate_ideas(2)
     sent_system, _ = deepseek.calls[0]
     assert sent_system == gen.build_ideas_system_prompt()
+
+
+def test_generate_ideas_retry_va_loai_cliche():
+    deepseek = FakeDeepSeek(
+        [
+            json.dumps(
+                {
+                    "ideas": [
+                        "Long cac co phieu co dong luong 20 ngay tang manh va volume cao.",
+                        "Short cac co phieu giam qua 10% trong 5 ngay, ky vong phuc hoi.",
+                    ]
+                }
+            ),
+            json.dumps(
+                {
+                    "ideas": [
+                        "Option implied volatility skew divergence between put-call demand and realized volatility.",
+                        "Analyst net earnings revision surprise with sector-neutral confirmation.",
+                    ]
+                }
+            ),
+        ]
+    )
+    gen = _generator(deepseek)
+
+    ideas = gen.generate_ideas(2)
+
+    assert ideas == [
+        "Option implied volatility skew divergence between put-call demand and realized volatility.",
+        "Analyst net earnings revision surprise with sector-neutral confirmation.",
+    ]
+    assert len(deepseek.calls) == 2
+    assert "rejected" in deepseek.calls[1][1].lower()
+
+
+def test_ideas_prompt_dung_dataset_field_that_tu_cache():
+    pf = PreFilter(known_operators={"rank"}, known_fields={"close", "volume", "opt_iv_skew", "news_sentiment"})
+    field_repo = FakeRepo(
+        [
+            _Field("close", dataset_id="pv1"),
+            _Field("volume", dataset_id="pv1"),
+            _Field("opt_iv_skew", description="put call implied volatility skew", dataset_id="option8"),
+            _Field("news_sentiment", description="event sentiment and novelty", dataset_id="news18"),
+        ]
+    )
+    op_repo = FakeRepo([_Op("rank")])
+    gen = LLMAlphaGenerator(FakeDeepSeek([]), field_repo, op_repo, pf)
+
+    prompt = gen.build_ideas_system_prompt()
+
+    assert "option8" in prompt
+    assert "opt_iv_skew" in prompt
+    assert "news18" in prompt
+    assert "news_sentiment" in prompt
 
 
 def test_deepseek_client_track_usage():
