@@ -47,6 +47,42 @@ def test_qua_sau():
     assert "sâu" in reason.lower()
 
 
+# ----------------------- luật type: chặn operator MATRIX áp lên field VECTOR
+def _pf_typed():
+    return PreFilter(
+        known_operators={"ts_zscore", "rank", "vec_avg", "ts_mean", "add"},
+        known_fields={"close", "composite_sentiment_score_2"},
+        field_types={"close": "MATRIX", "composite_sentiment_score_2": "VECTOR"},
+        matrix_only_ops={"ts_zscore", "rank", "ts_mean"},  # Time Series + Cross Sectional
+    )
+
+
+def test_chan_operator_matrix_tren_field_vector():
+    """ts_zscore (Time Series) áp trực tiếp lên field VECTOR -> chặn trước khi sim."""
+    ok, reason = _pf_typed().check("ts_zscore(composite_sentiment_score_2, 20)")
+    assert not ok
+    assert "vector" in reason.lower()
+    assert "composite_sentiment_score_2" in reason
+
+
+def test_field_vector_qua_vec_op_thi_hop_le():
+    """vec_avg (Vector) tiêu thụ VECTOR trước -> ts_mean nhận Node, không bị chặn."""
+    ok, reason = _pf_typed().check("ts_mean(vec_avg(composite_sentiment_score_2), 20)")
+    assert ok, reason
+
+
+def test_field_matrix_tren_operator_matrix_hop_le():
+    ok, reason = _pf_typed().check("ts_zscore(close, 20)")
+    assert ok, reason
+
+
+def test_khong_khai_bao_type_thi_bo_qua_kiem_type():
+    """Tương thích ngược: không truyền field_types -> không kiểm type."""
+    pf = PreFilter(known_operators={"ts_zscore"}, known_fields={"composite_sentiment_score_2"})
+    ok, reason = pf.check("ts_zscore(composite_sentiment_score_2, 20)")
+    assert ok, reason
+
+
 # Biểu thức residual-momentum thật (độ sâu 7) từng bị loại khi max_depth=6.
 _DEPTH7 = (
     "group_neutralize(ts_delay(divide(rank(ts_delay(ts_sum(returns, 210), 21)), "

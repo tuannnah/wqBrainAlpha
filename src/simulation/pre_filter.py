@@ -22,12 +22,19 @@ class PreFilter:
         known_groups: set[str] | None = None,
         max_depth: int = 7,
         max_nodes: int = 30,
+        field_types: dict[str, str] | None = None,
+        matrix_only_ops: set[str] | None = None,
     ):
         self.known_operators = known_operators
         self.known_fields = known_fields
         self.known_groups = known_groups or set(DEFAULT_GROUPS)
         self.max_depth = max_depth
         self.max_nodes = max_nodes
+        # Kiểm tương thích kiểu: operator Time Series/Cross Sectional đòi input
+        # MATRIX, không nhận field VECTOR trực tiếp (WQ trả status=ERROR). Cần
+        # vec_*/group_* để rút VECTOR về MATRIX trước. Thiếu dữ liệu -> bỏ qua.
+        self.field_types = field_types
+        self.matrix_only_ops = matrix_only_ops or set()
 
     def check(self, expr: str) -> tuple[bool, str]:
         if expr.count("(") != expr.count(")"):
@@ -62,6 +69,17 @@ class PreFilter:
         if node.op not in BINARY_OPS and node.op != "neg":
             if self.known_operators is not None and node.op not in self.known_operators:
                 return False, f"Operator không tồn tại: {node.op}"
+
+        # Operator đòi MATRIX không được nhận field VECTOR làm đối số TRỰC TIẾP.
+        if self.field_types and node.op in self.matrix_only_ops:
+            for child in node.children:
+                if isinstance(child, Leaf) and not isinstance(child.value, (int, float)):
+                    ftype = self.field_types.get(str(child.value))
+                    if ftype == "VECTOR":
+                        return False, (
+                            f"Operator {node.op} đòi input MATRIX, không nhận field "
+                            f"VECTOR trực tiếp: {child.value} (cần vec_avg/vec_sum trước)"
+                        )
 
         for child in node.children:
             ok, reason = self._check_symbols(child)

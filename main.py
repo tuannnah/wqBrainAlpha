@@ -298,12 +298,22 @@ def sweep_config(
 
 
 def _cached_symbols(session_factory):
-    """Trả (field_ids, operator_names) đã cache trong DB."""
+    """Trả (field_ids, operator_names, field_types, matrix_only_ops) từ cache DB.
+
+    field_types: id->MATRIX/VECTOR/GROUP để prefilter chặn type mismatch.
+    matrix_only_ops: operator Time Series/Cross Sectional đòi input MATRIX."""
     field_repo = FieldRepository(None, session_factory)
     op_repo = OperatorRepository(None, session_factory)
-    fields = [f.id for f in field_repo.load_cached() if f.id]
-    operators = {o.name for o in op_repo.load_cached() if o.name}
-    return fields, operators
+    cached_fields = field_repo.load_cached()
+    cached_ops = op_repo.load_cached()
+    fields = [f.id for f in cached_fields if f.id]
+    operators = {o.name for o in cached_ops if o.name}
+    field_types = {f.id: f.type for f in cached_fields if f.id and getattr(f, "type", None)}
+    matrix_only_ops = {
+        o.name for o in cached_ops
+        if o.name and getattr(o, "category", "") in ("Time Series", "Cross Sectional")
+    }
+    return fields, operators, field_types, matrix_only_ops
 
 
 @app.command()
@@ -318,12 +328,15 @@ def generate(
 
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
-    fields, operators = _cached_symbols(session_factory)
+    fields, operators, field_types, matrix_only_ops = _cached_symbols(session_factory)
     if not fields:
         console.print("[red]Chưa có fields trong DB — chạy fetch-fields trước.[/red]")
         raise typer.Exit(code=1)
 
-    pf = PreFilter(known_operators=operators or None, known_fields=set(fields))
+    pf = PreFilter(
+        known_operators=operators or None, known_fields=set(fields),
+        field_types=field_types, matrix_only_ops=matrix_only_ops,
+    )
     gen = TemplateGenerator(fields, pf)
     alphas = gen.generate(count)
 
@@ -352,7 +365,7 @@ def run_ga(
 
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
-    fields, operators = _cached_symbols(session_factory)
+    fields, operators, field_types, matrix_only_ops = _cached_symbols(session_factory)
     if not fields:
         console.print("[red]Chưa có fields — chạy fetch-fields trước.[/red]")
         raise typer.Exit(code=1)
@@ -360,7 +373,10 @@ def run_ga(
     client = _make_client()
     client.authenticate()
     sim = Simulator(client)
-    pf = PreFilter(known_operators=operators or None, known_fields=set(fields))
+    pf = PreFilter(
+        known_operators=operators or None, known_fields=set(fields),
+        field_types=field_types, matrix_only_ops=matrix_only_ops,
+    )
     tgen = TemplateGenerator(fields, pf, rng=random.Random())
 
     llm_pool: list[str] = []
@@ -528,8 +544,11 @@ def _make_research_loop(
     from src.simulation.pre_filter import PreFilter
 
     deepseek = _make_router()  # T6.3: routing tác vụ khó -> model mạnh (nếu cấu hình)
-    fields, operators = _cached_symbols(session_factory)
-    pf = PreFilter(known_operators=operators or None, known_fields=set(fields) or None)
+    fields, operators, field_types, matrix_only_ops = _cached_symbols(session_factory)
+    pf = PreFilter(
+        known_operators=operators or None, known_fields=set(fields) or None,
+        field_types=field_types, matrix_only_ops=matrix_only_ops,
+    )
     field_repo = FieldRepository(None, session_factory)
     op_repo = OperatorRepository(None, session_factory)
     translator = AlphaTranslator(deepseek, field_repo, op_repo, pf)
@@ -713,8 +732,11 @@ def llm_generate(
 
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
-    fields, operators = _cached_symbols(session_factory)
-    pf = PreFilter(known_operators=operators or None, known_fields=set(fields) or None)
+    fields, operators, field_types, matrix_only_ops = _cached_symbols(session_factory)
+    pf = PreFilter(
+        known_operators=operators or None, known_fields=set(fields) or None,
+        field_types=field_types, matrix_only_ops=matrix_only_ops,
+    )
     llm_gen = _make_llm_generator(session_factory, pf)
 
     alphas = llm_gen.generate(idea, n=count)
@@ -912,8 +934,11 @@ def _auto_run_direction_ga(client_box, session_factory, region, universe, delay,
     from src.simulation.pre_filter import PreFilter
 
     def run(direction: str) -> DirectionOutcome:
-        fields, operators = _cached_symbols(session_factory)
-        pf = PreFilter(known_operators=operators or None, known_fields=set(fields))
+        fields, operators, field_types, matrix_only_ops = _cached_symbols(session_factory)
+        pf = PreFilter(
+        known_operators=operators or None, known_fields=set(fields),
+        field_types=field_types, matrix_only_ops=matrix_only_ops,
+    )
         tgen = TemplateGenerator(fields, pf, rng=random.Random())
         sim = Simulator(client_box["client"])
 
@@ -944,11 +969,18 @@ def _auto_run_direction_ga(client_box, session_factory, region, universe, delay,
 
 
 def _run_auto(engine, region, universe, delay, target_passes=3, max_sims=60,
-              max_directions=0, existing_client=None):
+              max_directions=0, existing_client=None,
+              per_direction_sims: int | None = None,
+              swallow_errors: bool = False):
     """Lõi toàn trình (hàm thuần, KHÔNG phải lệnh Typer nên gọi trực tiếp được).
 
     Nhận giá trị scope cụ thể -> dựng AutoPipeline + engine AI/GA -> chạy -> in
     bảng. Trả AutoResult, hoặc None nếu engine không hợp lệ.
+
+    per_direction_sims: nếu set, mỗi hướng dùng đúng N sim, KHÔNG còn chia
+    remaining // dirs_left (dùng cho menu 4/ai unlimited).
+    swallow_errors: truyền xuống AutoPipeline để dừng êm khi LLM hết token /
+    Ctrl+C, thay vì raise lên.
     """
     engine = str(engine).lower().strip()
     if engine not in {"ai", "ga"}:
@@ -958,7 +990,7 @@ def _run_auto(engine, region, universe, delay, target_passes=3, max_sims=60,
     engine_box = init_db(make_engine())
     session_factory = make_session_factory(engine_box)
     client_box: dict = {}
-    per_direction_box = {"per_direction": max_sims}
+    per_direction_box = {"per_direction": per_direction_sims or max_sims}
 
     def prepare() -> PrepareInfo:
         return _auto_prepare(
@@ -982,9 +1014,13 @@ def _run_auto(engine, region, universe, delay, target_passes=3, max_sims=60,
 
     def run_direction(direction: str) -> DirectionOutcome:
         # Chia trần sim: phần còn lại / số hướng còn lại (hướng đầu không ăn hết).
-        remaining = max_sims - state["sims_used"]
-        dirs_left = max(1, state["dirs_total"])
-        per_direction_box["per_direction"] = max(1, remaining // dirs_left)
+        # Khi per_direction_sims được set: dùng đúng giá trị đó, không chia.
+        if per_direction_sims is not None:
+            per_direction_box["per_direction"] = per_direction_sims
+        else:
+            remaining = max_sims - state["sims_used"]
+            dirs_left = max(1, state["dirs_total"])
+            per_direction_box["per_direction"] = max(1, remaining // dirs_left)
         outcome = run_direction_raw(direction)
         state["sims_used"] += outcome.sims_used
         state["dirs_total"] = max(1, state["dirs_total"] - 1)
@@ -1005,6 +1041,7 @@ def _run_auto(engine, region, universe, delay, target_passes=3, max_sims=60,
         max_total_sims=max_sims,
         max_directions=max_directions if engine == "ai" else 1,
         on_event=on_event,
+        swallow_errors=swallow_errors,
     )
     result = pipe.run()
 
@@ -1137,10 +1174,23 @@ def start() -> None:
                 _menu_operators(state)
             elif choice == "4":
                 engine = _menu_ask_engine()
-                _run_auto(
-                    engine, state.region, state.universe, state.delay,
-                    existing_client=state.client,
-                )
+                if engine == "ai":
+                    # AI engine: chạy không giới hạn, chỉ dừng khi LLM hết token /
+                    # Ctrl+C. Không K-pass, không trần sim, không trần hướng.
+                    _run_auto(
+                        engine, state.region, state.universe, state.delay,
+                        target_passes=10**9,
+                        max_sims=10**18,
+                        max_directions=0,
+                        per_direction_sims=30,
+                        swallow_errors=True,
+                        existing_client=state.client,
+                    )
+                else:
+                    _run_auto(
+                        engine, state.region, state.universe, state.delay,
+                        existing_client=state.client,
+                    )
             elif choice == "5":
                 engine = _menu_ask_engine()
                 console.print("[cyan]Thử luồng: tìm + mô phỏng tối đa 1 alpha...[/cyan]")
