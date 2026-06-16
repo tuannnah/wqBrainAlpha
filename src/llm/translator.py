@@ -17,11 +17,13 @@ from src.llm.jsonutil import extract_json
 MAX_FIELDS_IN_PROMPT = 40
 MAX_REPAIR_ATTEMPTS = 3
 
+# Ví dụ minh hoạ CÚ PHÁP, cố ý đa dạng cấu trúc và tránh các bộ khung kinh điển
+# trùng Alpha101 (vd rank(ts_delta(close,N))) để LLM không neo vào mẫu dễ trùng.
 FEWSHOT_EXAMPLES = [
-    "rank(ts_delta(close, 5))",
-    "-rank(ts_zscore(volume, 20))",
-    "group_neutralize(rank(returns), sector)",
-    "rank(ts_corr(close, volume, 20))",
+    "ts_decay_linear(rank(ts_std_dev(returns, 20)), 5)",
+    "group_neutralize(ts_zscore(vwap, 60), industry)",
+    "rank(divide(ts_mean(volume, 10), ts_mean(volume, 60)))",
+    "ts_rank(ts_corr(close, volume, 20), 120)",
 ]
 
 

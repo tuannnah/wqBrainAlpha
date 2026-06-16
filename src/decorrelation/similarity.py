@@ -90,3 +90,23 @@ def common_subtrees(
     items = [(c, n) for c, n in counter.items() if n >= min_count]
     items.sort(key=lambda x: x[1], reverse=True)
     return items[:top_n] if top_n is not None else items
+
+
+def avoid_subtree_canons(
+    passed_exprs,
+    failed_exprs=None,
+    passed_min: int = 3,
+    passed_top: int = 8,
+    failed_min: int = 2,
+    failed_top: int = 12,
+) -> set[str]:
+    """Tập canon subtree LLM nên tránh để giữ đa dạng (T3.6 mở rộng).
+
+    Gộp 2 nguồn: bộ khung phổ biến trong alpha ĐÃ PASS (tránh lặp cái ai cũng có)
+    và bộ khung LẶP LẠI trong các thất bại (failed_exprs, vd duplicate/low_score —
+    tránh đi lại vết xe đổ). `failed_min>=2` để chỉ tránh cấu trúc thực sự bị lặp,
+    không phải mọi expr hỏng đơn lẻ."""
+    avoid = {c for c, _ in common_subtrees(passed_exprs, min_count=passed_min, top_n=passed_top)}
+    if failed_exprs:
+        avoid |= {c for c, _ in common_subtrees(failed_exprs, min_count=failed_min, top_n=failed_top)}
+    return avoid

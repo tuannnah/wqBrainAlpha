@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.decorrelation.similarity import (
+    avoid_subtree_canons,
     largest_common_subtree,
     similarity_ratio,
     subtree_canon,
@@ -73,3 +74,18 @@ def test_largest_common_subtree_dung_kich_thuoc():
 def test_ratio_nhan_ca_chuoi_va_node():
     a = P("rank(close)")
     assert similarity_ratio(a, "rank(close)") == 1.0
+
+
+def test_avoid_subtree_canons_gop_pass_va_fail():
+    """Gộp bộ khung phổ biến trong pass + bộ khung lặp trong failures (>=2 lần)."""
+    passed = ["rank(ts_mean(close, 5))"] * 3  # canon phổ biến trong pass
+    failed = ["rank(ts_delta(volume, 10))", "rank(ts_delta(open, 20))"]  # ts_delta lặp 2
+    avoid = avoid_subtree_canons(passed, failed, passed_min=3, failed_min=2)
+    assert "rank(ts_mean(F,N))" in avoid  # từ pass
+    assert "ts_delta(F,N)" in avoid       # từ fail (lặp >= 2)
+
+
+def test_avoid_subtree_canons_fail_don_le_khong_tinh():
+    """Cấu trúc chỉ xuất hiện 1 failure (failed_min=2) -> không bị đưa vào avoid."""
+    avoid = avoid_subtree_canons([], ["rank(ts_corr(close, volume, 20))"], failed_min=2)
+    assert avoid == set()

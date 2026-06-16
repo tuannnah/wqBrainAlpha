@@ -534,7 +534,7 @@ def _make_research_loop(
     align=True, regularize=False, penalty_lambda=0.3,
 ):
     """Lắp RefinementLoop GĐ2 với DeepSeek + Simulator thật. Trả (loop, deepseek)."""
-    from src.decorrelation.similarity import common_subtrees
+    from src.decorrelation.similarity import avoid_subtree_canons
     from src.decorrelation.zoo import ReferenceZoo
     from src.llm.alignment import AlignmentScorer
     from src.llm.hypothesis import HypothesisGenerator
@@ -559,10 +559,11 @@ def _make_research_loop(
     # Zoo tham chiếu = Alpha101 + các alpha đã pass trong DB (T3.4/T3.5).
     passed_exprs = [a.expression for a in repo.zoo(200)]
     zoo = ReferenceZoo.default(extra=passed_exprs)
-    # T3.6: nhánh con phổ biến trong alpha tốt -> yêu cầu LLM tránh dùng lại.
-    translator.set_avoid_subtrees(
-        c for c, _ in common_subtrees(passed_exprs, min_count=3, top_n=8)
-    )
+    # T3.6: nhánh con phổ biến trong alpha tốt + bộ khung lặp lại trong các thất
+    # bại (duplicate/low_score/sim_error) -> yêu cầu LLM tránh dùng lại để giữ đa
+    # dạng và không đi lại vết xe đổ.
+    failed_exprs = [f.expression for f in repo.recent_failures(200) if f.expression]
+    translator.set_avoid_subtrees(avoid_subtree_canons(passed_exprs, failed_exprs))
     # T4.2: bộ lọc nhất quán giả thuyết–công thức trước sim (bật/tắt qua --align).
     aligner = AlignmentScorer(deepseek) if align else None
     loop = RefinementLoop(
