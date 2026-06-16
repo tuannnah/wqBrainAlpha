@@ -18,6 +18,26 @@ FEWSHOT_EXAMPLES = [
 MAX_FIELDS_IN_PROMPT = 40
 MAX_REPAIR_ATTEMPTS = 3
 
+# Các hướng dataset ít người khai thác (correlation thấp trên nền tảng). Mỗi mục
+# là một "mạch" nghiên cứu để LLM bám vào thay vì PV/fundamental kinh điển.
+# Đồng bộ tinh thần với src/generation/novel_ideas.py (option/news/social/analyst/graph).
+ALT_DATA_THEMES = [
+    "biến động ngụ ý từ quyền chọn (implied volatility, IV-RV spread, skew put-call, "
+    "term structure, put-call open interest)",
+    "tin tức sự kiện (event sentiment, novelty/độ mới lạ, overreaction theo tin)",
+    "tín hiệu mạng xã hội (buzz/social volume, attention-driven mispricing)",
+    "điều chỉnh dự báo của analyst (net earnings revision, target vs recommendation divergence)",
+    "đồ thị chuỗi cung ứng (customer return signal, competitor pagerank, lan truyền lead-lag)",
+]
+
+# Những mẫu công thức đã quá đông người dùng -> dễ trùng -> correlation cao -> bị loại.
+CLICHE_PATTERNS = [
+    "rank(ts_delta(close, N))",
+    "rank(ebit / cap)",
+    "rank(returns)",
+    "momentum/reversal giá thuần dùng close/returns đơn lẻ",
+]
+
 
 class LLMAlphaGenerator:
     def __init__(self, deepseek, field_repo, operator_repo, prefilter):
@@ -70,13 +90,32 @@ class LLMAlphaGenerator:
                 results.append(expr)
         return results
 
-    def generate_ideas(self, n: int = 10) -> list[str]:
-        system = (
-            "Bạn là nhà nghiên cứu alpha định lượng. Trả JSON "
-            '{"ideas": ["...", "..."]} gồm các ý tưởng alpha ngắn gọn '
-            "(momentum, reversal, volume, volatility, correlation...)."
+    def build_ideas_system_prompt(self) -> str:
+        """Prompt sinh HƯỚNG nghiên cứu, dẫn LLM sang dataset ít khai thác + cấu
+        trúc lạ thay vì công thức PV/fundamental kinh điển (dễ trùng -> correlation
+        cao -> bị loại). Xem feedback độ độc đáo alpha."""
+        themes = "\n".join(f"- {t}" for t in ALT_DATA_THEMES)
+        cliches = "; ".join(CLICHE_PATTERNS)
+        return (
+            "Bạn là nhà nghiên cứu alpha định lượng trên WorldQuant BRAIN, săn tín "
+            "hiệu ĐỘC ĐÁO có correlation thấp với các factor đại trà.\n"
+            "TRÁNH các công thức kinh điển vì cả nghìn người đã dùng nên trùng nặng "
+            f"và bị loại do correlation cao: {cliches}.\n"
+            "Thay vào đó, ưu tiên các MẠCH dữ liệu thay thế ít người khai thác và "
+            "cấu trúc tổ hợp lạ (chuẩn hóa theo nhóm, phân kỳ hai kênh, lan truyền "
+            "lead-lag, z-score đột biến...):\n"
+            f"{themes}\n"
+            "Mỗi ý tưởng là một câu ngắn nêu rõ NGUỒN DỮ LIỆU + hiện tượng kinh tế "
+            "khai thác (không phải tên operator). Đa dạng nguồn, không lặp một mạch.\n"
+            'Trả JSON đúng định dạng: {"ideas": ["...", "..."]}.'
         )
-        user = f"Đề xuất {n} ý tưởng alpha đa dạng."
+
+    def generate_ideas(self, n: int = 10) -> list[str]:
+        system = self.build_ideas_system_prompt()
+        user = (
+            f"Đề xuất {n} hướng/ý tưởng alpha độc đáo, mỗi hướng dựa trên một mạch "
+            "dữ liệu thay thế khác nhau. Tránh momentum/reversal giá thuần."
+        )
         content = self.deepseek.complete(system, user, json_mode=True)
         data = _extract_json(content)
         if isinstance(data, dict):
