@@ -34,6 +34,57 @@ def _count_arity(definition: str) -> int:
     return len([p for p in inside.split(",") if p.strip()])
 
 
+def _split_top_level(s: str) -> list[str]:
+    """Tách chuỗi theo dấu phẩy ở mức ngoài cùng — bỏ qua phẩy trong ngoặc tròn
+    hoặc trong ngoặc kép (kể cả ngoặc kép cong “ ” mà WQ dùng)."""
+    parts: list[str] = []
+    depth = 0
+    in_quote = False
+    buf: list[str] = []
+    for ch in s:
+        if ch in "“”\"'":
+            if ch == "“":
+                in_quote = True
+            elif ch == "”":
+                in_quote = False
+            else:  # ngoặc kép/đơn ASCII -> bật/tắt
+                in_quote = not in_quote
+            buf.append(ch)
+            continue
+        if not in_quote:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            elif ch == "," and depth == 0:
+                parts.append("".join(buf))
+                buf = []
+                continue
+        buf.append(ch)
+    if buf:
+        parts.append("".join(buf))
+    return parts
+
+
+def count_positional_arity(definition: str) -> int:
+    """Số tham số POSITIONAL (không có default `=`) trong chữ ký đầu tiên.
+
+    Tham số có `=` (vd `std=4`, `range=…`, `dense=false`) là named-only — không
+    truyền positional được; nếu truyền positional WQ báo "Invalid number of
+    inputs". Đây là arity tối đa positional để PreFilter chặn biểu thức thừa input
+    (gồm cả trường hợp gọi named-param như winsorize/bucket bằng positional)."""
+    if "(" not in definition or ")" not in definition:
+        return 0
+    # Một số operator có nhiều dạng chữ ký phân tách bởi 'or'/xuống dòng -> lấy dòng đầu.
+    head = definition.splitlines()[0]
+    if "(" not in head or ")" not in head:
+        return 0
+    inside = head[head.find("(") + 1 : head.rfind(")")]
+    if not inside.strip():
+        return 0
+    return sum(1 for p in _split_top_level(inside) if p.strip() and "=" not in p)
+
+
 def _parse_operator(raw: dict) -> Operator:
     definition = raw.get("definition", "") or raw.get("name", "")
     return Operator(

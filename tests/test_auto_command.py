@@ -63,6 +63,60 @@ def test_run_auto_truyen_scope_cu_the(monkeypatch):
     assert result.stop_reason == "hết_hướng"
 
 
+def test_simulate_command_truyen_day_du_sim_config(monkeypatch):
+    from src.simulation.simulator import SimulationResult
+
+    captured = {}
+
+    class _FakeSimulator:
+        def __init__(self, client):
+            pass
+
+        def simulate(self, expr, settings=None):
+            captured["expr"] = expr
+            captured["settings"] = settings
+            return SimulationResult(expression=expr, status="passed", sharpe=1.2, fitness=1.0)
+
+    class _FakeRepo:
+        def __init__(self, sf):
+            pass
+
+        def save_simulation(self, result, **kwargs):
+            captured["saved"] = kwargs
+
+    monkeypatch.setattr(main, "init_db", lambda e: e)
+    monkeypatch.setattr(main, "make_engine", lambda: None)
+    monkeypatch.setattr(main, "make_session_factory", lambda e: (lambda: None))
+    monkeypatch.setattr(main, "_make_client", lambda: _FakeClient())
+    monkeypatch.setattr(main, "Simulator", _FakeSimulator)
+    monkeypatch.setattr(main, "AlphaRepository", _FakeRepo)
+
+    main.simulate(
+        expr="rank(close)",
+        region="EUR",
+        universe="TOP1200",
+        delay=0,
+        decay=6,
+        truncation=0.12,
+        neutralization="industry",
+    )
+
+    assert captured["expr"] == "rank(close)"
+    assert captured["settings"] == {
+        "region": "EUR",
+        "universe": "TOP1200",
+        "delay": 0,
+        "neutralization": "INDUSTRY",
+        "decay": 6,
+        "truncation": 0.12,
+    }
+    assert captured["saved"] == {
+        "region": "EUR",
+        "universe": "TOP1200",
+        "config_key": "EUR|TOP1200|delay=0|INDUSTRY|decay=6|truncation=0.12",
+    }
+
+
 def test_run_auto_ai_mac_dinh_khong_gioi_han_huong(monkeypatch):
     captured = {}
 
@@ -235,3 +289,198 @@ def test_run_ga_with_progress_noi_callback_va_tra_ket_qua():
 
     assert result == ["node1", "node2"]
     assert captured == {"has_gen": True, "has_sim": True}
+
+
+def test_run_ga_truyen_fixed_sim_config_xuong_optimizer(monkeypatch):
+    import src.generation.template as template_mod
+    import src.optimization.evolution as evolution_mod
+
+    captured = {}
+
+    class _FakeTemplateGenerator:
+        def __init__(self, *a, **k):
+            pass
+
+        def generate(self, count):
+            return ["rank(close)"]
+
+    class _FakeOptimizer:
+        history = [type("_H", (), {"best_expression": "rank(close)"})()]
+        simulations_used = 0
+
+        def __init__(self, **kwargs):
+            captured["simulation_settings"] = kwargs.get("simulation_settings")
+
+        @staticmethod
+        def expr_to_node(expr):
+            return expr
+
+        def run(self):
+            return []
+
+    monkeypatch.setattr(main, "init_db", lambda e: e)
+    monkeypatch.setattr(main, "make_engine", lambda: None)
+    monkeypatch.setattr(main, "make_session_factory", lambda e: (lambda: None))
+    monkeypatch.setattr(main, "_cached_symbols", lambda sf: (["close"], {"rank"}, {"close": "MATRIX"}, {"rank"}, {"rank": 1}))
+    monkeypatch.setattr(main, "_make_client", lambda: _FakeClient())
+    monkeypatch.setattr(template_mod, "TemplateGenerator", _FakeTemplateGenerator)
+    monkeypatch.setattr(evolution_mod, "GeneticOptimizer", _FakeOptimizer)
+
+    main.run_ga(
+        population=1,
+        generations=1,
+        region="EUR",
+        universe="TOP1200",
+        delay=0,
+        decay=6,
+        truncation=0.12,
+        neutralization="industry",
+        seed_llm=False,
+        max_sims=0,
+    )
+
+    assert captured["simulation_settings"] == {
+        "region": "EUR",
+        "universe": "TOP1200",
+        "delay": 0,
+        "neutralization": "INDUSTRY",
+        "decay": 6,
+        "truncation": 0.12,
+    }
+
+
+def test_run_ga_truyen_operator_arity_vao_prefilter(monkeypatch):
+    import src.generation.template as template_mod
+    import src.optimization.evolution as evolution_mod
+
+    captured = {}
+
+    class _FakeTemplateGenerator:
+        def __init__(self, *a, **k):
+            pass
+
+        def generate(self, count):
+            return ["rank(close)"]
+
+    class _FakeOptimizer:
+        history = [type("_H", (), {"best_expression": "rank(close)"})()]
+        simulations_used = 0
+
+        def __init__(self, **kwargs):
+            captured["operator_arity"] = kwargs["prefilter"].operator_arity
+
+        @staticmethod
+        def expr_to_node(expr):
+            return expr
+
+        def run(self):
+            return []
+
+    monkeypatch.setattr(main, "init_db", lambda e: e)
+    monkeypatch.setattr(main, "make_engine", lambda: None)
+    monkeypatch.setattr(main, "make_session_factory", lambda e: (lambda: None))
+    monkeypatch.setattr(
+        main,
+        "_cached_symbols",
+        lambda sf: (["close"], {"rank"}, {"close": "MATRIX"}, {"rank"}, {"rank": 1}),
+    )
+    monkeypatch.setattr(main, "_make_client", lambda: _FakeClient())
+    monkeypatch.setattr(template_mod, "TemplateGenerator", _FakeTemplateGenerator)
+    monkeypatch.setattr(evolution_mod, "GeneticOptimizer", _FakeOptimizer)
+
+    main.run_ga(
+        population=1,
+        generations=1,
+        region="USA",
+        universe="TOP3000",
+        delay=1,
+        decay=0,
+        truncation=0.08,
+        neutralization="SUBINDUSTRY",
+        seed_llm=False,
+        max_sims=0,
+    )
+
+    assert captured["operator_arity"] == {"rank": 1}
+
+
+def test_research_truyen_fixed_sim_config_xuong_loop_builder(monkeypatch):
+    captured = {}
+
+    def _fake_builder(session_factory, client, region, universe, delay, max_sims, patience,
+                      align=True, regularize=False, penalty_lambda=0.3, sim_config=None):
+        captured["scope"] = (region, universe, delay)
+        captured["sim_config"] = sim_config
+        return object(), object()
+
+    monkeypatch.setattr(main, "init_db", lambda e: e)
+    monkeypatch.setattr(main, "make_engine", lambda: None)
+    monkeypatch.setattr(main, "make_session_factory", lambda e: (lambda: None))
+    monkeypatch.setattr(main, "_cached_symbols", lambda sf: (["close"], {"rank"}, {"close": "MATRIX"}, {"rank"}, {"rank": 1}))
+    monkeypatch.setattr(main, "_make_client", lambda: _FakeClient())
+    monkeypatch.setattr(main, "_make_research_loop", _fake_builder)
+    monkeypatch.setattr(main, "_run_research_with_progress", lambda *a, **k: object())
+    monkeypatch.setattr(main, "_render_research_result", lambda *a, **k: None)
+
+    main.research(
+        direction="test",
+        region="EUR",
+        universe="TOP1200",
+        delay=0,
+        max_sims=1,
+        decay=6,
+        truncation=0.12,
+        neutralization="industry",
+    )
+
+    assert captured["scope"] == ("EUR", "TOP1200", 0)
+    assert captured["sim_config"] == SimConfig(
+        region="EUR",
+        universe="TOP1200",
+        delay=0,
+        decay=6,
+        truncation=0.12,
+        neutralization="INDUSTRY",
+    )
+
+
+def test_start_menu_truyen_sim_settings_xuong_run_auto(monkeypatch):
+    captured = {}
+    answers = iter(["5", "ai", "6", "0.12", "industry", "0"])
+
+    class _FakeState:
+        region = "EUR"
+        universe = "TOP1200"
+        delay = 0
+        client = _FakeClient()
+
+        @property
+        def logged_in(self):
+            return True
+
+    def _fake_run_auto(engine, region, universe, delay, **kwargs):
+        captured.update(
+            {
+                "engine": engine,
+                "scope": (region, universe, delay),
+                "decay": kwargs["decay"],
+                "truncation": kwargs["truncation"],
+                "neutralization": kwargs["neutralization"],
+            }
+        )
+        from src.pipeline.auto import AutoResult
+        return AutoResult([], directions_run=0, total_sims=0, stop_reason="test")
+
+    monkeypatch.setattr(main, "_MenuState", _FakeState)
+    monkeypatch.setattr(main, "_run_auto", _fake_run_auto)
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+
+    main.start()
+
+    assert captured == {
+        "engine": "ai",
+        "scope": ("EUR", "TOP1200", 0),
+        "decay": 6,
+        "truncation": 0.12,
+        "neutralization": "INDUSTRY",
+    }

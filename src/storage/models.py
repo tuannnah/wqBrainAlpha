@@ -108,6 +108,19 @@ class FailureModel(Base):
     created_at = Column(DateTime, default=_utcnow)
 
 
+class InvalidFieldModel(Base):
+    """Field WQ liệt kê trong /data-fields nhưng simulator từ chối ('Invalid data
+    field'). Blacklist tự học để loại khỏi nguồn sinh, khỏi phí quota (vùng chết)."""
+
+    __tablename__ = "invalid_fields"
+
+    field_id = Column(String, primary_key=True)
+    region = Column(String)
+    universe = Column(String)
+    reason = Column(Text)
+    created_at = Column(DateTime, default=_utcnow)
+
+
 class SubmissionModel(Base):
     __tablename__ = "submissions"
 

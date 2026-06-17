@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from src.data.fields import FieldRepository
-from src.data.operators import OperatorRepository, _count_arity
+from src.data.operators import OperatorRepository, _count_arity, count_positional_arity
 from src.storage.db import init_db, make_session_factory
 from tests.fakes import FakeClient, FakeResponse
 
@@ -205,6 +205,28 @@ def test_count_arity():
     assert _count_arity("ts_mean(x, d)") == 2
     assert _count_arity("rank(x)") == 1
     assert _count_arity("close") == 0
+
+
+def test_count_positional_arity_loai_named_param():
+    """Tham số có '=' (named-only) không tính positional -> chặn được named-param."""
+    # positional thuần
+    assert count_positional_arity("ts_zscore(x, d)") == 2
+    assert count_positional_arity("trade_when(x, y, z)") == 3
+    assert count_positional_arity("group_neutralize(x, group)") == 2
+    # named-only: chỉ x là positional
+    assert count_positional_arity("winsorize(x, std=4)") == 1
+    assert count_positional_arity("rank(x, rate=2)") == 1
+    assert count_positional_arity("ts_decay_linear(x, d, dense = false)") == 2
+    assert count_positional_arity("close") == 0
+
+
+def test_count_positional_arity_bucket_da_chu_ky_va_phay_trong_ngoac_kep():
+    """bucket có nhiều chữ ký + giá trị chứa dấu phẩy trong ngoặc kép -> vẫn ra 1."""
+    definition = (
+        "bucket(rank(x), range=“0, 1, 0.1”, skipBoth=False, NaNGroup=False)\r\n"
+        "or\r\nbucket(rank(x), buckets = “2,5,6,7,10”, skipBoth=False, NaNGroup=False)"
+    )
+    assert count_positional_arity(definition) == 1
 
 
 def test_fetch_operators_parse_arity():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -9,7 +10,54 @@ from typing import Any
 from loguru import logger
 
 from src.data.client import WQBrainClient
+from src.generation.ast_utils import Leaf, Node, all_subtrees, parse_expression
 from src.simulation.rate_limiter import RateLimiter
+
+# WQ trả "Invalid data field <id>." khi field được liệt kê nhưng không simulate được.
+_INVALID_FIELD_RE = re.compile(r"Invalid data field (\w+)")
+# WQ trả "Operator <op> does not support event inputs" khi field 'event' (dataset
+# news/earnings/analyst…) bị đưa vào operator chuẩn — không suy ra được từ type cache.
+_EVENT_OP_RE = re.compile(r"Operator (\w+) does not support event inputs")
+
+
+def extract_invalid_field(error: str) -> str | None:
+    """Trích field id từ thông điệp lỗi WQ 'Invalid data field X'; None nếu khác."""
+    if not error:
+        return None
+    m = _INVALID_FIELD_RE.search(error)
+    return m.group(1) if m else None
+
+
+def extract_event_fields(error: str, expression: str) -> list[str]:
+    """Trích các field 'event' gây lỗi: là input field-leaf TRỰC TIẾP của operator
+    mà WQ báo 'does not support event inputs'. Trả [] nếu lỗi khác hoặc parse hỏng."""
+    if not error or not expression:
+        return []
+    m = _EVENT_OP_RE.search(error)
+    if not m:
+        return []
+    op = m.group(1)
+    try:
+        tree = parse_expression(expression)
+    except Exception:
+        return []
+    out: list[str] = []
+    for node in all_subtrees(tree):
+        if isinstance(node, Node) and node.op == op:
+            for child in node.children:
+                if isinstance(child, Leaf) and isinstance(child.value, str):
+                    out.append(child.value)
+    return list(dict.fromkeys(out))  # khử trùng, giữ thứ tự
+
+
+class AuthExpiredError(RuntimeError):
+    """Phiên xác thực hết hạn và re-auth thất bại lặp lại — dừng sớm để tránh phí
+    quota (thay vì mô phỏng hỏng hàng loạt như sự cố session chết kéo dài)."""
+
+
+def _is_auth_error(status_code: int, text: str) -> bool:
+    return status_code in (401, 403) or "authentication credentials" in (text or "").lower()
+
 
 SIM_DEFAULTS: dict[str, Any] = {
     "type": "REGULAR",
@@ -83,6 +131,9 @@ def _error_detail(payload: dict) -> str:
 class Simulator:
     POLL_INTERVAL = 3.0
     TIMEOUT_SECONDS = 300.0
+    # Số lần POST /simulations lỗi xác thực LIÊN TIẾP trước khi bỏ cuộc (client đã
+    # tự re-auth 1 lần; còn 401 nghĩa là session chết) — chặn phí quota kéo dài.
+    MAX_CONSECUTIVE_AUTH_FAILURES = 3
 
     def __init__(
         self,
@@ -90,11 +141,15 @@ class Simulator:
         rate_limiter: RateLimiter | None = None,
         sleep_func=time.sleep,
         time_func=time.monotonic,
+        on_invalid_field=None,
     ):
         self.client = client
         self.rate_limiter = rate_limiter or RateLimiter()
         self._sleep = sleep_func
         self._time = time_func
+        # callback(field_id) khi WQ báo field 'chết'/'event' — để blacklist tránh sinh lại.
+        self.on_invalid_field = on_invalid_field
+        self._consecutive_auth_failures = 0
 
     def _build_body(self, expression: str, settings: dict | None) -> dict:
         body = {
@@ -114,8 +169,18 @@ class Simulator:
 
         if resp.status_code not in (200, 201):
             logger.error("POST /simulations lỗi {}: {}", resp.status_code, resp.text)
+            if _is_auth_error(resp.status_code, resp.text):
+                self._consecutive_auth_failures += 1
+                if self._consecutive_auth_failures >= self.MAX_CONSECUTIVE_AUTH_FAILURES:
+                    raise AuthExpiredError(
+                        f"Xác thực thất bại {self._consecutive_auth_failures} lần liên tiếp "
+                        "— dừng để tránh phí quota. Hãy đăng nhập lại (re-auth)."
+                    )
+            else:
+                self._consecutive_auth_failures = 0
             return SimulationResult(expression=expression, status="error", raw={"error": resp.text})
 
+        self._consecutive_auth_failures = 0  # POST thành công -> reset bộ đếm auth.
         location = resp.headers.get("Location")
         if not location:
             return SimulationResult(
@@ -125,7 +190,13 @@ class Simulator:
         try:
             progress = self._poll(location)
         except SimulationError as exc:
-            logger.error("Simulation lỗi/timeout: {}", exc)
+            logger.error("Simulation lỗi/timeout: {} | expr={}", exc, expression)
+            if self.on_invalid_field is not None:
+                bad_field = extract_invalid_field(str(exc))
+                if bad_field:
+                    self.on_invalid_field(bad_field)
+                for event_field in extract_event_fields(str(exc), expression):
+                    self.on_invalid_field(event_field)
             return SimulationResult(expression=expression, status="error", raw={"error": str(exc)})
 
         alpha_id = progress.get("alpha")

@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 from src.simulation.simulator import SimulationResult
 from src.storage.db import init_db, make_session_factory
 from src.storage.models import AlphaModel, FailureModel, SimulationModel
-from src.storage.repository import AlphaRepository, expr_hash
+from src.storage.repository import AlphaRepository, InvalidFieldRepository, expr_hash
 
 
 def _engine():
@@ -51,6 +51,20 @@ def test_save_simulation_persists_alpha_va_metrics():
         assert session.query(AlphaModel).count() == 1
     finally:
         session.close()
+
+
+def test_invalid_field_repo_record_va_blacklist():
+    """Ghi field chết rồi đọc lại blacklist; ghi trùng không nhân đôi."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    repo = InvalidFieldRepository(sf)
+
+    repo.record("mdl77_2gdna_cfroi", region="USA", universe="TOP3000", reason="Invalid data field")
+    repo.record("opt6_10dorhv", region="USA", universe="TOP3000")
+    repo.record("mdl77_2gdna_cfroi", region="USA", universe="TOP3000")  # trùng -> idempotent
+
+    bl = repo.blacklist()
+    assert bl == {"mdl77_2gdna_cfroi", "opt6_10dorhv"}
 
 
 def test_save_alpha_luu_bo_ba_gia_thuyet():

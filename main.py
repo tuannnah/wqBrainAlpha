@@ -20,10 +20,10 @@ for _stream in (sys.stdout, sys.stderr):
 from config.settings import settings
 from src.data.client import WQBrainClient
 from src.data.fields import FieldRepository
-from src.data.operators import OperatorRepository
+from src.data.operators import OperatorRepository, count_positional_arity
 from src.simulation.simulator import Simulator
 from src.storage.db import init_db, make_engine, make_session_factory
-from src.storage.repository import AlphaRepository
+from src.storage.repository import AlphaRepository, InvalidFieldRepository
 from src.pipeline.auto import (
     AutoEvent,
     AutoPipeline,
@@ -210,19 +210,32 @@ def simulate(
     region: str = typer.Option(settings.default_region),
     universe: str = typer.Option(settings.default_universe),
     delay: int = typer.Option(settings.default_delay),
+    decay: int = typer.Option(0, "--decay", help="Decay simulation config"),
+    truncation: float = typer.Option(0.08, "--truncation", help="Truncation simulation config"),
+    neutralization: str = typer.Option("SUBINDUSTRY", "--neutralization", help="Neutralization simulation config"),
 ) -> None:
     """Chạy một simulation và lưu metrics."""
     _setup_logging()
+    from src.simulation.config import SimConfig
+
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
     client = _make_client()
     client.authenticate()
 
+    sim_config = SimConfig(
+        region=region,
+        universe=universe,
+        delay=delay,
+        decay=decay,
+        truncation=truncation,
+        neutralization=neutralization,
+    )
     sim = Simulator(client)
-    result = sim.simulate(expr, settings={"region": region, "universe": universe, "delay": delay})
+    result = sim.simulate(expr, settings=sim_config.to_settings())
 
     repo = AlphaRepository(session_factory)
-    repo.save_simulation(result, region=region, universe=universe)
+    repo.save_simulation(result, region=region, universe=universe, config_key=sim_config.key())
 
     table = Table(title=f"Simulation: {expr}")
     table.add_column("Metric")
@@ -298,22 +311,46 @@ def sweep_config(
 
 
 def _cached_symbols(session_factory):
-    """Trả (field_ids, operator_names, field_types, matrix_only_ops) từ cache DB.
+    """Trả (field_ids, operator_names, field_types, matrix_only_ops, operator_arity).
 
     field_types: id->MATRIX/VECTOR/GROUP để prefilter chặn type mismatch.
-    matrix_only_ops: operator Time Series/Cross Sectional đòi input MATRIX."""
+    matrix_only_ops: operator Time Series/Cross Sectional đòi input MATRIX.
+    operator_arity: name->arity (số input tối đa theo chữ ký) để prefilter chặn
+    biểu thức thừa input (lỗi WQ "Invalid number of inputs")."""
     field_repo = FieldRepository(None, session_factory)
     op_repo = OperatorRepository(None, session_factory)
     cached_fields = field_repo.load_cached()
     cached_ops = op_repo.load_cached()
-    fields = [f.id for f in cached_fields if f.id]
+    # Loại field 'chết' (WQ từ chối khi simulate) khỏi nguồn sinh — vùng chết tự học.
+    blacklist = InvalidFieldRepository(session_factory).blacklist()
+    fields = [f.id for f in cached_fields if f.id and f.id not in blacklist]
     operators = {o.name for o in cached_ops if o.name}
     field_types = {f.id: f.type for f in cached_fields if f.id and getattr(f, "type", None)}
     matrix_only_ops = {
         o.name for o in cached_ops
         if o.name and getattr(o, "category", "") in ("Time Series", "Cross Sectional")
     }
-    return fields, operators, field_types, matrix_only_ops
+    # Arity positional (bỏ tham số named-only có '=') tính lại từ definition đã lưu
+    # -> chặn cả lỗi thừa input lẫn gọi named-param (winsorize/bucket) positional.
+    operator_arity = {}
+    for o in cached_ops:
+        if not o.name:
+            continue
+        n = count_positional_arity(o.definition or "")
+        if n:
+            operator_arity[o.name] = n
+    return fields, operators, field_types, matrix_only_ops, operator_arity
+
+
+def _make_invalid_field_recorder(session_factory, region, universe):
+    """Trả callback(field_id) ghi field 'chết' vào blacklist (tự học vùng chết)."""
+    repo = InvalidFieldRepository(session_factory)
+
+    def record(field_id: str) -> None:
+        logger.warning("Field WQ từ chối (chết/event) -> blacklist: {}", field_id)
+        repo.record(field_id, region=region, universe=universe, reason="WQ từ chối (chết/event)")
+
+    return record
 
 
 @app.command()
@@ -328,7 +365,7 @@ def generate(
 
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
-    fields, operators, field_types, matrix_only_ops = _cached_symbols(session_factory)
+    fields, operators, field_types, matrix_only_ops, operator_arity = _cached_symbols(session_factory)
     if not fields:
         console.print("[red]Chưa có fields trong DB — chạy fetch-fields trước.[/red]")
         raise typer.Exit(code=1)
@@ -336,6 +373,7 @@ def generate(
     pf = PreFilter(
         known_operators=operators or None, known_fields=set(fields),
         field_types=field_types, matrix_only_ops=matrix_only_ops,
+        operator_arity=operator_arity,
     )
     gen = TemplateGenerator(fields, pf)
     alphas = gen.generate(count)
@@ -352,6 +390,10 @@ def run_ga(
     generations: int = typer.Option(10),
     region: str = typer.Option(settings.default_region),
     universe: str = typer.Option(settings.default_universe),
+    delay: int = typer.Option(settings.default_delay),
+    decay: int = typer.Option(0, "--decay", help="Fixed decay setting for GA simulations"),
+    truncation: float = typer.Option(0.08, "--truncation", help="Fixed truncation setting for GA simulations"),
+    neutralization: str = typer.Option("SUBINDUSTRY", "--neutralization", help="Fixed neutralization setting for GA simulations"),
     seed_llm: bool = typer.Option(False, "--seed-llm", help="Trộn 50% seed từ DeepSeek"),
     max_sims: int = typer.Option(0, "--max-sims", help="Trần số alpha mô phỏng (0 = không giới hạn, để test pipeline)"),
 ) -> None:
@@ -361,11 +403,12 @@ def run_ga(
 
     from src.generation.template import TemplateGenerator
     from src.optimization.evolution import GeneticOptimizer
+    from src.simulation.config import SimConfig
     from src.simulation.pre_filter import PreFilter
 
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
-    fields, operators, field_types, matrix_only_ops = _cached_symbols(session_factory)
+    fields, operators, field_types, matrix_only_ops, operator_arity = _cached_symbols(session_factory)
     if not fields:
         console.print("[red]Chưa có fields — chạy fetch-fields trước.[/red]")
         raise typer.Exit(code=1)
@@ -373,9 +416,18 @@ def run_ga(
     client = _make_client()
     client.authenticate()
     sim = Simulator(client)
+    sim_config = SimConfig(
+        region=region,
+        universe=universe,
+        delay=delay,
+        decay=decay,
+        truncation=truncation,
+        neutralization=neutralization,
+    )
     pf = PreFilter(
         known_operators=operators or None, known_fields=set(fields),
         field_types=field_types, matrix_only_ops=matrix_only_ops,
+        operator_arity=operator_arity,
     )
     tgen = TemplateGenerator(fields, pf, rng=random.Random())
 
@@ -401,6 +453,7 @@ def run_ga(
         population_size=population,
         generations=generations,
         max_simulations=max_sims or None,
+        simulation_settings=sim_config.to_settings(),
     )
     best = opt.run()
 
@@ -547,10 +600,11 @@ def _make_research_loop(
     from src.simulation.pre_filter import PreFilter
 
     deepseek = _make_router()  # T6.3: routing tác vụ khó -> model mạnh (nếu cấu hình)
-    fields, operators, field_types, matrix_only_ops = _cached_symbols(session_factory)
+    fields, operators, field_types, matrix_only_ops, operator_arity = _cached_symbols(session_factory)
     pf = PreFilter(
         known_operators=operators or None, known_fields=set(fields) or None,
         field_types=field_types, matrix_only_ops=matrix_only_ops,
+        operator_arity=operator_arity,
     )
     field_repo = FieldRepository(None, session_factory)
     op_repo = OperatorRepository(None, session_factory)
@@ -573,7 +627,9 @@ def _make_research_loop(
         hypothesis_gen=HypothesisGenerator(deepseek),
         translator=translator,
         refiner=refiner,
-        simulator=Simulator(client),
+        simulator=Simulator(
+            client, on_invalid_field=_make_invalid_field_recorder(session_factory, region, universe)
+        ),
         prefilter=pf,
         repo=repo,
         region=region,
@@ -639,6 +695,9 @@ def research(
     region: str = typer.Option(settings.default_region),
     universe: str = typer.Option(settings.default_universe),
     delay: int = typer.Option(settings.default_delay),
+    decay: int = typer.Option(0, "--decay", help="Fixed decay setting for research simulations"),
+    truncation: float = typer.Option(0.08, "--truncation", help="Fixed truncation setting for research simulations"),
+    neutralization: str = typer.Option("SUBINDUSTRY", "--neutralization", help="Fixed neutralization setting for research simulations"),
     max_sims: int = typer.Option(20, "--max-sims", help="Trần số simulation cho cả vòng"),
     no_improve: int = typer.Option(3, "--no-improve", help="Dừng sau N vòng không cải thiện"),
     align: bool = typer.Option(True, "--align/--no-align", help="Bật lọc nhất quán giả thuyết–công thức trước sim (T4.2)"),
@@ -655,9 +714,19 @@ def research(
         raise typer.Exit(code=1)
     client = _make_client()
     client.authenticate()
+    from src.simulation.config import SimConfig
+
+    sim_config = SimConfig(
+        region=region,
+        universe=universe,
+        delay=delay,
+        decay=decay,
+        truncation=truncation,
+        neutralization=neutralization,
+    )
     loop, deepseek = _make_research_loop(
         session_factory, client, region, universe, delay, max_sims, no_improve,
-        align, regularize, penalty_lambda,
+        align, regularize, penalty_lambda, sim_config=sim_config,
     )
     result = _run_research_with_progress(loop, direction, max_sims, mcts=mcts)
     _render_research_result(result, deepseek)
@@ -737,10 +806,11 @@ def llm_generate(
 
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
-    fields, operators, field_types, matrix_only_ops = _cached_symbols(session_factory)
+    fields, operators, field_types, matrix_only_ops, operator_arity = _cached_symbols(session_factory)
     pf = PreFilter(
         known_operators=operators or None, known_fields=set(fields) or None,
         field_types=field_types, matrix_only_ops=matrix_only_ops,
+        operator_arity=operator_arity,
     )
     llm_gen = _make_llm_generator(session_factory, pf)
 
@@ -940,13 +1010,17 @@ def _auto_run_direction_ga(client_box, session_factory, region, universe, delay,
     from src.simulation.pre_filter import PreFilter
 
     def run(direction: str) -> DirectionOutcome:
-        fields, operators, field_types, matrix_only_ops = _cached_symbols(session_factory)
+        fields, operators, field_types, matrix_only_ops, operator_arity = _cached_symbols(session_factory)
         pf = PreFilter(
-        known_operators=operators or None, known_fields=set(fields),
-        field_types=field_types, matrix_only_ops=matrix_only_ops,
-    )
+            known_operators=operators or None, known_fields=set(fields),
+            field_types=field_types, matrix_only_ops=matrix_only_ops,
+            operator_arity=operator_arity,
+        )
         tgen = TemplateGenerator(fields, pf, rng=random.Random())
-        sim = Simulator(client_box["client"])
+        sim = Simulator(
+            client_box["client"],
+            on_invalid_field=_make_invalid_field_recorder(session_factory, region, universe),
+        )
 
         def seed_factory():
             exprs = tgen.generate(1)
@@ -1162,6 +1236,17 @@ def _menu_ask_engine() -> str:
     return raw or "ai"
 
 
+def _menu_ask_sim_settings() -> dict:
+    decay_raw = input("Decay [Enter=0]: ").strip()
+    truncation_raw = input("Truncation [Enter=0.08]: ").strip()
+    neutralization_raw = input("Neutralization [Enter=SUBINDUSTRY]: ").strip()
+    return {
+        "decay": int(decay_raw or "0"),
+        "truncation": float(truncation_raw or "0.08"),
+        "neutralization": (neutralization_raw or "SUBINDUSTRY").upper(),
+    }
+
+
 def _print_menu(state: _MenuState) -> None:
     status = "[green]✓ đã đăng nhập[/green]" if state.logged_in else "[red]✗ chưa đăng nhập[/red]"
     console.print("\n[bold cyan]=== WQ Auto-Alpha ===[/bold cyan]")
@@ -1197,6 +1282,7 @@ def start() -> None:
                 _menu_operators(state)
             elif choice == "4":
                 engine = _menu_ask_engine()
+                sim_settings = _menu_ask_sim_settings()
                 if engine == "ai":
                     # AI engine: chạy không giới hạn, chỉ dừng khi LLM hết token /
                     # Ctrl+C. Không K-pass, không trần sim, không trần hướng.
@@ -1208,19 +1294,23 @@ def start() -> None:
                         per_direction_sims=30,
                         swallow_errors=True,
                         existing_client=state.client,
+                        **sim_settings,
                     )
                 else:
                     _run_auto(
                         engine, state.region, state.universe, state.delay,
                         existing_client=state.client,
+                        **sim_settings,
                     )
             elif choice == "5":
                 engine = _menu_ask_engine()
+                sim_settings = _menu_ask_sim_settings()
                 console.print("[cyan]Thử luồng: tìm + mô phỏng tối đa 1 alpha...[/cyan]")
                 _run_auto(
                     engine, state.region, state.universe, state.delay,
                     target_passes=1, max_sims=1, max_directions=1,
                     existing_client=state.client,
+                    **sim_settings,
                 )
             else:
                 console.print("[red]Lựa chọn không hợp lệ.[/red]")

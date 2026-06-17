@@ -83,6 +83,72 @@ def test_khong_khai_bao_type_thi_bo_qua_kiem_type():
     assert ok, reason
 
 
+# ----------------------- luật arity: chặn operator thừa input (tolerant)
+def test_chan_arity_thua_input():
+    """rank nhận đúng 1 input; `rank(close, volume, 5)` (3 input) -> chặn trước sim.
+
+    Tái hiện lỗi WQ thật: `Invalid number of inputs : 3, should be exactly 1`."""
+    pf = PreFilter(
+        known_operators={"rank"},
+        known_fields={"close", "volume"},
+        operator_arity={"rank": 1},
+    )
+    ok, reason = pf.check("rank(close, volume, 5)")
+    assert not ok
+    assert "input" in reason.lower()
+    assert "rank" in reason
+
+
+def test_arity_tham_so_tuy_chon_khong_chan():
+    """ts_decay_linear có chữ ký 3 (gồm tham số tùy chọn) nhưng dùng 2 input vẫn
+    hợp lệ. Tolerant: chỉ chặn khi THỪA, không chặn khi THIẾU."""
+    pf = PreFilter(
+        known_operators={"ts_decay_linear"},
+        known_fields={"close"},
+        operator_arity={"ts_decay_linear": 3},
+    )
+    ok, reason = pf.check("ts_decay_linear(close, 5)")
+    assert ok, reason
+
+
+def test_variadic_khong_chan_du_thua_input():
+    """Operator variadic (vd add) nhận số input bất kỳ -> không chặn dù > arity chữ ký."""
+    pf = PreFilter(
+        known_operators={"add"},
+        known_fields={"close", "volume", "returns"},
+        operator_arity={"add": 2},
+        variadic_ops={"add"},
+    )
+    ok, reason = pf.check("add(close, volume, returns)")
+    assert ok, reason
+
+
+def test_chan_named_param_goi_positional():
+    """winsorize/bucket chỉ nhận 1 positional (std/buckets là named) -> gọi 2 positional bị chặn.
+
+    Tái hiện lỗi WQ: winsorize(x, 3) -> 'should be exactly 1 input'; bucket(x, 10) ->
+    'buckets/range required'. arity positional (bỏ named '=') = 1 cho cả hai."""
+    pf = PreFilter(
+        known_operators={"winsorize", "bucket", "ts_zscore", "rank"},
+        known_fields={"close"},
+        operator_arity={"winsorize": 1, "bucket": 1, "ts_zscore": 2, "rank": 1},
+    )
+    ok, _ = pf.check("winsorize(ts_zscore(close, 20), 3)")
+    assert not ok
+    ok, _ = pf.check("bucket(rank(close), 10)")
+    assert not ok
+    # Gọi đúng (1 positional) vẫn hợp lệ.
+    ok, reason = pf.check("winsorize(close)")
+    assert ok, reason
+
+
+def test_khong_khai_bao_arity_thi_bo_qua():
+    """Tương thích ngược: không truyền operator_arity -> không kiểm arity."""
+    pf = PreFilter(known_operators={"rank"}, known_fields={"close", "volume"})
+    ok, reason = pf.check("rank(close, volume, 5)")
+    assert ok, reason
+
+
 # Biểu thức residual-momentum thật (độ sâu 7) từng bị loại khi max_depth=6.
 _DEPTH7 = (
     "group_neutralize(ts_delay(divide(rank(ts_delay(ts_sum(returns, 210), 21)), "

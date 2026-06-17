@@ -7,13 +7,49 @@ import json
 import uuid
 
 from src.simulation.simulator import SimulationResult
-from src.storage.models import AlphaModel, FailureModel, SimulationModel
+from src.storage.models import (
+    AlphaModel,
+    FailureModel,
+    InvalidFieldModel,
+    SimulationModel,
+)
 
 
 def expr_hash(expression: str, config: str | None = None) -> str:
     """Hash biểu thức (+config) để cache simulation. GĐ2 dùng config mặc định cố định."""
     payload = expression if config is None else f"{expression}|{config}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class InvalidFieldRepository:
+    """Blacklist field 'chết' (WQ từ chối khi simulate) — tự học để khỏi sinh lại."""
+
+    def __init__(self, session_factory):
+        self.session_factory = session_factory
+
+    def record(
+        self, field_id: str, region: str | None = None,
+        universe: str | None = None, reason: str = "",
+    ) -> None:
+        """Ghi/cập nhật field chết (idempotent theo field_id)."""
+        session = self.session_factory()
+        try:
+            session.merge(
+                InvalidFieldModel(
+                    field_id=field_id, region=region, universe=universe, reason=reason
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+    def blacklist(self) -> set[str]:
+        """Trả tập field id bị đánh dấu chết."""
+        session = self.session_factory()
+        try:
+            return {r.field_id for r in session.query(InvalidFieldModel).all()}
+        finally:
+            session.close()
 
 
 class AlphaRepository:
