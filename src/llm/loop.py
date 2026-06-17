@@ -17,6 +17,7 @@ from src.scoring.filter import passes as default_filter
 from src.scoring.metrics import normalize
 from src.scoring.regularized import Penalties, PenaltyWeights, regularized_score
 from src.scoring.vector import ScoreVector, score_vector, weakest_dimension
+from src.simulation.config import SimConfig
 
 
 @dataclass
@@ -69,6 +70,7 @@ class RefinementLoop:
         regularize: bool = False,
         penalty_lambda: float = 0.3,
         penalty_weights: PenaltyWeights | None = None,
+        sim_config: SimConfig | None = None,
     ):
         self.hypothesis_gen = hypothesis_gen
         self.translator = translator
@@ -76,9 +78,10 @@ class RefinementLoop:
         self.simulator = simulator
         self.prefilter = prefilter
         self.repo = repo
-        self.region = region
-        self.universe = universe
-        self.delay = delay
+        self.sim_config = sim_config or SimConfig.default(region=region, universe=universe, delay=delay)
+        self.region = self.sim_config.region
+        self.universe = self.sim_config.universe
+        self.delay = self.sim_config.delay
         self.score_vector_fn = score_vector_fn
         self.hard_filter_fn = hard_filter_fn
         self.max_simulations = max_simulations
@@ -129,7 +132,8 @@ class RefinementLoop:
 
         # Kiểm cache TRƯỚC aligner: expr đã sim trước đây thì đã qua aligner rồi,
         # gọi lại chỉ tốn lượt LLM alignment (đắt) mà không đổi kết quả.
-        cached = self.repo.get_cached_simulation(expr)
+        config_key = self.sim_config.key()
+        cached = self.repo.get_cached_simulation(expr, config_key=config_key)
         if cached is not None:
             vector = self.score_vector_fn(cached)
             eff = self._effective_total(vector, expr, originality, None)
@@ -150,9 +154,7 @@ class RefinementLoop:
         if self.sims_used >= self.max_simulations:
             return None  # hết trần sim, không gọi WQ thêm
 
-        result = self.simulator.simulate(
-            expr, settings={"region": self.region, "universe": self.universe, "delay": self.delay}
-        )
+        result = self.simulator.simulate(expr, settings=self.sim_config.to_settings())
         self.sims_used += 1
         vector = self.score_vector_fn(result)
         alpha_id = self.repo.save_alpha(
@@ -164,7 +166,7 @@ class RefinementLoop:
         )
         self.repo.save_simulation(
             result, region=self.region, universe=self.universe,
-            score=vector.total, alpha_id=alpha_id,
+            score=vector.total, alpha_id=alpha_id, config_key=config_key,
         )
         ok_hard, reasons = self.hard_filter_fn(result)
         passed = result.status == "passed" and ok_hard

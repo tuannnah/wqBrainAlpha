@@ -14,6 +14,24 @@ DEFAULT_NEUTRALIZATION = "SUBINDUSTRY"
 DEFAULT_DECAY = 0
 DEFAULT_TRUNCATION = 0.08
 DEFAULT_DELAY = 1
+VALID_NEUTRALIZATIONS = {
+    "NONE",
+    "MARKET",
+    "SECTOR",
+    "INDUSTRY",
+    "SUBINDUSTRY",
+    "COUNTRY",
+    "EXCHANGE",
+}
+
+
+def _normalize_neutralization(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"neutralization must be a string, got {value!r}")
+    normalized = str(value).strip().upper()
+    if normalized not in VALID_NEUTRALIZATIONS:
+        raise ValueError(f"neutralization must be one of {sorted(VALID_NEUTRALIZATIONS)}, got {value!r}")
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -24,6 +42,18 @@ class SimConfig:
     neutralization: str = DEFAULT_NEUTRALIZATION
     decay: int = DEFAULT_DECAY
     truncation: float = DEFAULT_TRUNCATION
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.decay, int) or isinstance(self.decay, bool) or not 0 <= self.decay <= 512:
+            raise ValueError(f"decay must be an int in [0, 512], got {self.decay!r}")
+        if (
+            not isinstance(self.truncation, (int, float))
+            or isinstance(self.truncation, bool)
+            or not 0.0 < float(self.truncation) <= 0.5
+        ):
+            raise ValueError(f"truncation must be numeric in (0, 0.5], got {self.truncation!r}")
+        object.__setattr__(self, "truncation", float(self.truncation))
+        object.__setattr__(self, "neutralization", _normalize_neutralization(self.neutralization))
 
     @classmethod
     def default(cls, region: str = "USA", universe: str = "TOP3000", delay: int = DEFAULT_DELAY) -> "SimConfig":

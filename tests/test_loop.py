@@ -80,6 +80,44 @@ def _loop(translator, refiner, sim, repo, **kw):
     )
 
 
+def test_loop_truyen_sim_config_vao_simulator():
+    from src.simulation.config import SimConfig
+
+    class _SettingsSim:
+        def __init__(self):
+            self.calls = []
+
+        def simulate(self, expr, settings=None):
+            self.calls.append((expr, settings))
+            return _result(expr, 1.5)
+
+    sim_config = SimConfig(
+        region="EUR",
+        universe="TOP1200",
+        delay=0,
+        decay=4,
+        truncation=0.05,
+        neutralization="INDUSTRY",
+    )
+    sim = _SettingsSim()
+    repo = _repo()
+    loop = _loop(
+        _FakeTranslator("rank(close)"),
+        _FakeRefiner([]),
+        sim,
+        repo,
+        max_simulations=1,
+        sim_config=sim_config,
+    )
+
+    loop.run("X")
+
+    assert sim.calls == [("rank(close)", sim_config.to_settings())]
+    cached = repo.get_cached_simulation("rank(close)", config_key=sim_config.key())
+    assert cached.region == "EUR"
+    assert cached.universe == "TOP1200"
+
+
 def test_loop_ton_trong_tran_sim():
     sim = FakeSimulator(results=lambda e: _result(e, 1.5))
     repo = _repo()
@@ -150,8 +188,17 @@ def test_loop_refine_nham_chieu_chan_hard_filter():
 
 def test_loop_cache_hit_bo_qua_aligner():
     """Cache hit -> không gọi aligner (tiết kiệm lượt LLM đắt) và không sim lại."""
+    from src.simulation.config import SimConfig
+
     repo = _repo()
-    repo.save_simulation(_result("rank(close)", 1.5), region="USA", universe="TOP3000", score=0.8)
+    config = SimConfig.default(region="USA", universe="TOP3000", delay=1)
+    repo.save_simulation(
+        _result("rank(close)", 1.5),
+        region="USA",
+        universe="TOP3000",
+        score=0.8,
+        config_key=config.key(),
+    )
 
     class _CountAligner:
         def __init__(self):
@@ -169,10 +216,48 @@ def test_loop_cache_hit_bo_qua_aligner():
     aligner = _CountAligner()
     sim = FakeSimulator(results=lambda e: _result(e, 1.5))
     loop = _loop(_FakeTranslator("rank(close)"), _FakeRefiner([]), sim, repo,
-                 max_simulations=10, no_improve_patience=1, aligner=aligner, min_alignment=0.5)
+                 max_simulations=10, no_improve_patience=1, aligner=aligner, min_alignment=0.5,
+                 sim_config=config)
     loop.run("X")
     assert aligner.calls == 0  # seed là cache hit -> bỏ qua aligner
     assert sim.calls == []     # cache hit -> không sim lại
+
+
+def test_loop_cache_phan_biet_theo_sim_config():
+    """Cùng expression nhưng khác config -> không dùng cache cũ; phải mô phỏng với config mới."""
+    from src.simulation.config import SimConfig
+
+    default_config = SimConfig.default(region="USA", universe="TOP3000", delay=1)
+    tuned_config = SimConfig(
+        region="USA",
+        universe="TOP3000",
+        delay=1,
+        decay=6,
+        truncation=0.05,
+        neutralization="INDUSTRY",
+    )
+    repo = _repo()
+    repo.save_simulation(
+        _result("rank(close)", 1.0),
+        region="USA",
+        universe="TOP3000",
+        score=0.5,
+        config_key=default_config.key(),
+    )
+    sim = FakeSimulator(results=lambda e: _result(e, 1.8))
+    loop = _loop(
+        _FakeTranslator("rank(close)"),
+        _FakeRefiner([]),
+        sim,
+        repo,
+        max_simulations=10,
+        no_improve_patience=1,
+        sim_config=tuned_config,
+    )
+
+    loop.run("X")
+
+    assert sim.calls == ["rank(close)"]
 
 
 def test_loop_zoo_va_failure():

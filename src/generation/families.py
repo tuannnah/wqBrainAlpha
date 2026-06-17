@@ -45,11 +45,41 @@ _FAMILY_DECAY = {
 }
 
 
+_FAMILY_TRUNCATION = {
+    "reversal": 0.06,
+    "momentum": 0.08,
+    "volatility": 0.08,
+    "volume": 0.05,
+    "value": 0.10,
+    "analyst": 0.06,
+    "seasonality": 0.05,
+}
+
+_GROUP_TO_NEUTRALIZATION = {
+    "market": "MARKET",
+    "sector": "SECTOR",
+    "industry": "INDUSTRY",
+    "subindustry": "SUBINDUSTRY",
+}
+
+
 def _decay_for(family: str, expression: str) -> int:
     """Decay setting theo họ; biểu thức đã có ts_decay_linear (mượt nội tại) -> 0 tránh mượt kép."""
     if "ts_decay_linear" in expression:
         return 0
     return _FAMILY_DECAY.get(family, 0)
+
+
+def _truncation_for(family: str) -> float:
+    return _FAMILY_TRUNCATION.get(family, 0.08)
+
+
+def _neutralization_for_expression(expression: str) -> str:
+    marker = "group_neutralize("
+    if marker not in expression:
+        return "MARKET"
+    group = expression.rsplit(",", 1)[-1].rstrip(") ").strip().lower()
+    return _GROUP_TO_NEUTRALIZATION.get(group, "SUBINDUSTRY")
 
 # Nhóm neutralization phổ biến (đều là group hợp lệ cho group_neutralize).
 _GROUPS = ("market", "sector", "industry", "subindustry")
@@ -375,5 +405,7 @@ def generate_candidates() -> list[Candidate]:
         seen.add(c.expression)
         # Đặt decay theo bản chất tín hiệu (không ghi đè nếu họ đã tự set).
         c.overrides.setdefault("decay", _decay_for(c.family, c.expression))
+        c.overrides.setdefault("truncation", _truncation_for(c.family))
+        c.overrides.setdefault("neutralization", _neutralization_for_expression(c.expression))
         unique.append(c)
     return unique

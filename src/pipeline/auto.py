@@ -57,10 +57,33 @@ class AutoPipeline:
     max_total_sims: int = 60
     max_directions: int = 5
     on_event: Callable[[AutoEvent], None] | None = None
+    swallow_errors: bool = False
 
     def _emit(self, kind: str, message: str, **data) -> None:
         if self.on_event is not None:
             self.on_event(AutoEvent(kind=kind, message=message, data=data))
+
+    def _build_result(
+        self,
+        passed: list[PassedAlpha],
+        directions_run: int,
+        total_sims: int,
+        stop_reason: str,
+    ) -> AutoResult:
+        self._emit(
+            "stop",
+            f"Dừng: {stop_reason} — pass={len(passed)}, sim={total_sims}, hướng đã chạy={directions_run}",
+            stop_reason=stop_reason,
+            total_passed=len(passed),
+            total_sims=total_sims,
+            directions_run=directions_run,
+        )
+        return AutoResult(
+            passed_alphas=passed,
+            directions_run=directions_run,
+            total_sims=total_sims,
+            stop_reason=stop_reason,
+        )
 
     def run(self) -> AutoResult:
         passed: list[PassedAlpha] = []
@@ -86,7 +109,18 @@ class AutoPipeline:
                 stop_reason = "chạm_trần_sim"
                 break
 
-            directions = self.propose_directions(batch_size)
+            try:
+                directions = self.propose_directions(batch_size)
+            except KeyboardInterrupt:
+                if not self.swallow_errors:
+                    raise
+                return self._build_result(passed, directions_run, total_sims, "ctrl_c")
+            except Exception as exc:
+                if not self.swallow_errors:
+                    raise
+                reason = f"lỗi: {type(exc).__name__}: {str(exc)[:120]}"
+                return self._build_result(passed, directions_run, total_sims, reason)
+
             self._emit(
                 "directions",
                 f"Sẽ thử {len(directions)} hướng",
@@ -113,7 +147,17 @@ class AutoPipeline:
                     total=0 if unlimited else len(directions),
                     direction=direction,
                 )
-                outcome = self.run_direction(direction)
+                try:
+                    outcome = self.run_direction(direction)
+                except KeyboardInterrupt:
+                    if not self.swallow_errors:
+                        raise
+                    return self._build_result(passed, directions_run, total_sims, "ctrl_c")
+                except Exception as exc:
+                    if not self.swallow_errors:
+                        raise
+                    reason = f"lỗi: {type(exc).__name__}: {str(exc)[:120]}"
+                    return self._build_result(passed, directions_run, total_sims, reason)
                 passed.extend(outcome.passed)
                 total_sims += outcome.sims_used
                 directions_run += 1
@@ -134,21 +178,7 @@ class AutoPipeline:
         if len(passed) >= self.target_passes:
             stop_reason = "đủ_K_pass"
 
-        self._emit(
-            "stop",
-            f"Dừng: {stop_reason} — pass={len(passed)}, sim={total_sims}, hướng đã chạy={directions_run}",
-            stop_reason=stop_reason,
-            total_passed=len(passed),
-            total_sims=total_sims,
-            directions_run=directions_run,
-        )
-
-        return AutoResult(
-            passed_alphas=passed,
-            directions_run=directions_run,
-            total_sims=total_sims,
-            stop_reason=stop_reason,
-        )
+        return self._build_result(passed, directions_run, total_sims, stop_reason)
 
 
 def passed_from_ga(expressions, results) -> list[PassedAlpha]:

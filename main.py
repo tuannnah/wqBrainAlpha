@@ -534,7 +534,7 @@ def _make_llm_generator(session_factory, prefilter):
 
 def _make_research_loop(
     session_factory, client, region, universe, delay, max_sims, patience,
-    align=True, regularize=False, penalty_lambda=0.3,
+    align=True, regularize=False, penalty_lambda=0.3, sim_config=None,
 ):
     """Lắp RefinementLoop GĐ2 với DeepSeek + Simulator thật. Trả (loop, deepseek)."""
     from src.decorrelation.similarity import avoid_subtree_canons
@@ -585,6 +585,7 @@ def _make_research_loop(
         aligner=aligner,
         regularize=regularize,
         penalty_lambda=penalty_lambda,
+        sim_config=sim_config,
     )
     return loop, deepseek
 
@@ -902,13 +903,14 @@ def _auto_prepare(client_box: dict, session_factory, region, universe, delay,
     return PrepareInfo(fields=len(fields), operators=len(operators))
 
 
-def _auto_run_direction_ai(client_box, session_factory, region, universe, delay, per_direction_box):
+def _auto_run_direction_ai(client_box, session_factory, region, universe, delay, per_direction_box, sim_config):
     """Trả callback run_direction cho engine AI."""
     def run(direction: str) -> DirectionOutcome:
         per_direction = per_direction_box["per_direction"]
         loop, _deepseek = _make_research_loop(
             session_factory, client_box["client"], region, universe, delay,
             max_sims=per_direction, patience=3,
+            sim_config=sim_config,
         )
         # Hiển thị tiến trình (spinner + đếm sim + pha) để người dùng biết đang làm gì.
         result = _run_research_with_progress(loop, direction, per_direction)
@@ -928,7 +930,7 @@ def _auto_run_direction_ai(client_box, session_factory, region, universe, delay,
     return run
 
 
-def _auto_run_direction_ga(client_box, session_factory, region, universe, delay, per_direction_box):
+def _auto_run_direction_ga(client_box, session_factory, region, universe, delay, per_direction_box, sim_config):
     """Trả callback run_direction cho engine GA."""
     import random
 
@@ -964,6 +966,7 @@ def _auto_run_direction_ga(client_box, session_factory, region, universe, delay,
             simulator=sim, prefilter=pf, seed_factory=seed_factory, fields=fields,
             population_size=30, generations=10,
             max_simulations=per_direction,
+            simulation_settings=sim_config.to_settings() if sim_config is not None else None,
         )
         best_nodes = _run_ga_with_progress(opt, per_direction)
         best_exprs = [to_expression(n) for n in best_nodes]
@@ -975,7 +978,8 @@ def _auto_run_direction_ga(client_box, session_factory, region, universe, delay,
 def _run_auto(engine, region, universe, delay, target_passes=3, max_sims=60,
               max_directions=0, existing_client=None,
               per_direction_sims: int | None = None,
-              swallow_errors: bool = False):
+              swallow_errors: bool = False,
+              decay=0, truncation=0.08, neutralization="SUBINDUSTRY"):
     """Lõi toàn trình (hàm thuần, KHÔNG phải lệnh Typer nên gọi trực tiếp được).
 
     Nhận giá trị scope cụ thể -> dựng AutoPipeline + engine AI/GA -> chạy -> in
@@ -995,6 +999,15 @@ def _run_auto(engine, region, universe, delay, target_passes=3, max_sims=60,
     session_factory = make_session_factory(engine_box)
     client_box: dict = {}
     per_direction_box = {"per_direction": per_direction_sims or max_sims}
+    from src.simulation.config import SimConfig
+    sim_config = SimConfig(
+        region=region,
+        universe=universe,
+        delay=delay,
+        decay=decay,
+        truncation=truncation,
+        neutralization=neutralization,
+    )
 
     def prepare() -> PrepareInfo:
         return _auto_prepare(
@@ -1011,7 +1024,7 @@ def _run_auto(engine, region, universe, delay, target_passes=3, max_sims=60,
 
     run_builder = _auto_run_direction_ai if engine == "ai" else _auto_run_direction_ga
     run_direction_raw = run_builder(
-        client_box, session_factory, region, universe, delay, per_direction_box
+        client_box, session_factory, region, universe, delay, per_direction_box, sim_config
     )
 
     state = {"sims_used": 0, "dirs_total": 1}
@@ -1077,10 +1090,16 @@ def auto(
     target_passes: int = typer.Option(3, "--target", help="Dừng khi đủ K alpha đạt ngưỡng"),
     max_sims: int = typer.Option(60, "--max-sims", help="Trần cứng tổng số simulation"),
     max_directions: int = typer.Option(0, "--directions", help="Số hướng nghiên cứu tối đa (0 = không giới hạn, engine ai)"),
+    decay: int = typer.Option(0, "--decay", help="Decay simulation config"),
+    truncation: float = typer.Option(0.08, "--truncation", help="Truncation simulation config"),
+    neutralization: str = typer.Option("SUBINDUSTRY", "--neutralization", help="Neutralization simulation config"),
 ) -> None:
     """Chạy toàn trình: login → cache → tìm/mô phỏng/cải thiện → log. KHÔNG nộp."""
     _setup_logging()
-    if _run_auto(engine, region, universe, delay, target_passes, max_sims, max_directions) is None:
+    if _run_auto(
+        engine, region, universe, delay, target_passes, max_sims, max_directions,
+        decay=decay, truncation=truncation, neutralization=neutralization,
+    ) is None:
         raise typer.Exit(code=1)
 
 

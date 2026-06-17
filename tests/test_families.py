@@ -51,6 +51,12 @@ def test_moi_ung_vien_co_decay_override():
         assert "decay" in c.overrides, f"thiếu decay: {c.family} / {c.expression}"
 
 
+def test_every_candidate_has_complete_settings_overrides():
+    for c in generate_candidates():
+        assert "truncation" in c.overrides, f"missing truncation: {c.family} / {c.expression}"
+        assert "neutralization" in c.overrides, f"missing neutralization: {c.family} / {c.expression}"
+
+
 def test_decay_trong_khoang_hop_le():
     """decay là số nguyên trong [0,512] ngày theo WQ Brain."""
     for c in generate_candidates():
@@ -65,6 +71,31 @@ def test_bieu_thuc_co_decay_linear_thi_setting_decay_0():
             assert c.overrides["decay"] == 0, (
                 f"mượt kép: {c.family} đã có ts_decay_linear nhưng setting decay={c.overrides['decay']}"
             )
+
+
+def test_market_variants_use_market_neutralization():
+    market = [c for c in generate_candidates() if "group_neutralize" not in c.expression]
+    assert market
+    assert all(c.overrides["neutralization"] == "MARKET" for c in market)
+
+
+def test_group_neutralize_variants_use_matching_neutralization_setting():
+    expected_by_group = {
+        "sector": "SECTOR",
+        "industry": "INDUSTRY",
+        "subindustry": "SUBINDUSTRY",
+    }
+    grouped = [c for c in generate_candidates() if "group_neutralize" in c.expression]
+    assert grouped
+    for c in grouped:
+        group = c.expression.rsplit(",", 1)[-1].rstrip(") ").strip().lower()
+        assert c.overrides["neutralization"] == expected_by_group[group]
+
+
+def test_truncation_is_valid_for_classic_alpha_candidates():
+    for c in generate_candidates():
+        t = c.overrides["truncation"]
+        assert 0.0 < t <= 0.5, f"invalid truncation: {c.family}={t}"
 
 
 def test_tin_hieu_nhieu_decay_cao_hon_tin_hieu_cham():

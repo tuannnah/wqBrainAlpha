@@ -62,6 +62,7 @@ class GeneticOptimizer:
     max_depth: int = 6
     max_nodes: int = 30
     max_simulations: int | None = None  # trần số lần simulate thật (None = không giới hạn)
+    simulation_settings: dict | None = None
     rng: random.Random = field(default_factory=random.Random)
 
     def __post_init__(self):
@@ -92,7 +93,10 @@ class GeneticOptimizer:
         if self._budget_exhausted():
             # Hết ngân sách simulate — không gọi WQ thêm, coi như chưa đánh giá.
             return NEG_INF
-        result = self.simulator.simulate(expr)
+        if self.simulation_settings is None:
+            result = self.simulator.simulate(expr)
+        else:
+            result = self.simulator.simulate(expr, settings=self.simulation_settings)
         self._sim_count += 1
         value = self.scorer(result)
         self._cache[expr] = value

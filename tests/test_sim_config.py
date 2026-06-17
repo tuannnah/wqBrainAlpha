@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from src.simulation.config import SimConfig
 
 
@@ -47,3 +49,30 @@ def test_key_doc_duoc_chua_cac_chieu_chinh():
     key = c.key()
     assert "SECTOR" in key
     assert "decay=4" in key
+
+
+@pytest.mark.parametrize("decay", [-1, 513])
+def test_decay_must_be_valid_range(decay):
+    with pytest.raises(ValueError, match="decay"):
+        SimConfig(decay=decay)
+
+
+@pytest.mark.parametrize("truncation", [0, -0.1, 0.51])
+def test_truncation_must_be_valid_range(truncation):
+    with pytest.raises(ValueError, match="truncation"):
+        SimConfig(truncation=truncation)
+
+
+def test_neutralization_is_normalized_to_uppercase():
+    assert SimConfig(neutralization="market").neutralization == "MARKET"
+
+
+def test_neutralization_must_be_valid():
+    with pytest.raises(ValueError, match="neutralization"):
+        SimConfig(neutralization="BAD_GROUP")
+
+
+@pytest.mark.parametrize("neutralization", [None, 123])
+def test_neutralization_must_be_string(neutralization):
+    with pytest.raises(ValueError, match="neutralization"):
+        SimConfig(neutralization=neutralization)

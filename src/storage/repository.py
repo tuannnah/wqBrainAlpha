@@ -55,6 +55,7 @@ class AlphaRepository:
         source: str = "manual",
         score: float | None = None,
         alpha_id: str | None = None,
+        config_key: str | None = None,
     ) -> str:
         """Lưu alpha (nếu chưa có) + simulation. Trả simulation id."""
         session = self.session_factory()
@@ -68,7 +69,7 @@ class AlphaRepository:
                 SimulationModel(
                     id=sim_id,
                     alpha_id=alpha_id,
-                    expr_hash=expr_hash(result.expression),
+                    expr_hash=expr_hash(result.expression, config_key),
                     wq_alpha_id=result.alpha_id,
                     region=region,
                     universe=universe,
@@ -88,9 +89,9 @@ class AlphaRepository:
         finally:
             session.close()
 
-    def get_cached_simulation(self, expression: str) -> SimulationModel | None:
+    def get_cached_simulation(self, expression: str, config_key: str | None = None) -> SimulationModel | None:
         """Trả simulation đã lưu (mới nhất) cho biểu thức — bỏ qua kết quả 'error'."""
-        h = expr_hash(expression)
+        h = expr_hash(expression, config_key)
         session = self.session_factory()
         try:
             return (

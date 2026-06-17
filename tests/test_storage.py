@@ -86,6 +86,27 @@ def test_get_cached_simulation_hit_theo_hash():
     assert repo.get_cached_simulation("rank(open)") is None
 
 
+def test_get_cached_simulation_phan_biet_theo_config_key():
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    repo = AlphaRepository(sf)
+    cfg_a = "USA|TOP3000|delay=1|SUBINDUSTRY|decay=0|truncation=0.08"
+    cfg_b = "USA|TOP3000|delay=1|INDUSTRY|decay=6|truncation=0.05"
+
+    repo.save_simulation(
+        _passed("rank(close)", sharpe=1.1),
+        region="USA",
+        universe="TOP3000",
+        config_key=cfg_a,
+    )
+
+    hit_a = repo.get_cached_simulation("rank(close)", config_key=cfg_a)
+    assert hit_a is not None
+    assert hit_a.expr_hash == expr_hash("rank(close)", cfg_a)
+    assert repo.get_cached_simulation("rank(close)", config_key=cfg_b) is None
+    assert repo.get_cached_simulation("rank(close)") is None
+
+
 def test_get_cached_simulation_bo_qua_status_error():
     engine = init_db(_engine())
     sf = make_session_factory(engine)

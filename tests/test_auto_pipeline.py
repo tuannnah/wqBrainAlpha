@@ -170,6 +170,104 @@ def test_phat_du_su_kien():
     assert events[-1].data.get("stop_reason") == "hết_hướng"
 
 
+def test_swallow_errors_bat_keyboard_interrupt_o_run_direction():
+    calls = {"run": 0}
+
+    def run_direction(direction: str) -> DirectionOutcome:
+        calls["run"] += 1
+        if calls["run"] == 2:
+            raise KeyboardInterrupt
+        return DirectionOutcome(passed=[_pa(f"e{calls['run']}")], sims_used=2)
+
+    pipe = AutoPipeline(
+        prepare=lambda: PrepareInfo(10, 5),
+        propose_directions=lambda n: ["h1", "h2", "h3"],
+        run_direction=run_direction,
+        target_passes=99,
+        max_total_sims=999,
+        max_directions=5,
+        swallow_errors=True,
+    )
+    result = pipe.run()
+
+    assert calls["run"] == 2
+    assert len(result.passed_alphas) == 1            # giữ pass từ hướng 1
+    assert result.directions_run == 1                # hướng 2 fail nửa chừng -> chưa kịp đếm
+    assert result.stop_reason == "ctrl_c"
+
+
+def test_swallow_errors_bat_exception_o_run_direction():
+    calls = {"run": 0}
+
+    def run_direction(direction: str) -> DirectionOutcome:
+        calls["run"] += 1
+        if calls["run"] == 1:
+            return DirectionOutcome(passed=[_pa("e1")], sims_used=2)
+        raise RuntimeError("Insufficient Balance")
+
+    pipe = AutoPipeline(
+        prepare=lambda: PrepareInfo(10, 5),
+        propose_directions=lambda n: ["h1", "h2", "h3"],
+        run_direction=run_direction,
+        target_passes=99,
+        max_total_sims=999,
+        max_directions=5,
+        swallow_errors=True,
+    )
+    result = pipe.run()
+
+    assert calls["run"] == 2
+    assert len(result.passed_alphas) == 1
+    assert result.stop_reason.startswith("lỗi:")
+    assert "RuntimeError" in result.stop_reason
+
+
+def test_swallow_errors_mac_dinh_tat_van_raise():
+    """Default swallow_errors=False -> exception bay lên như trước (regression)."""
+    def run_direction(direction: str) -> DirectionOutcome:
+        raise RuntimeError("LLM down")
+
+    pipe = AutoPipeline(
+        prepare=lambda: PrepareInfo(10, 5),
+        propose_directions=lambda n: ["h1"],
+        run_direction=run_direction,
+    )
+
+    with pytest.raises(RuntimeError, match="LLM down"):
+        pipe.run()
+
+
+def test_swallow_errors_o_propose_cung_bat_duoc():
+    """LM lỗi khi sinh batch hướng tiếp theo (unlimited mode) cũng phải dừng êm."""
+    calls = {"propose": 0, "run": 0}
+
+    def propose(n: int) -> list[str]:
+        calls["propose"] += 1
+        if calls["propose"] == 1:
+            return ["h1", "h2"]
+        raise RuntimeError("LLM hết quota")
+
+    def run_direction(d):
+        calls["run"] += 1
+        return DirectionOutcome(passed=[], sims_used=1)
+
+    pipe = AutoPipeline(
+        prepare=lambda: PrepareInfo(10, 5),
+        propose_directions=propose,
+        run_direction=run_direction,
+        target_passes=99,
+        max_total_sims=999,
+        max_directions=0,           # unlimited -> phải đi vòng propose lần 2
+        swallow_errors=True,
+    )
+    result = pipe.run()
+
+    assert calls["propose"] == 2
+    assert calls["run"] == 2                # batch 1 chạy trọn vẹn
+    assert result.stop_reason.startswith("lỗi:")
+    assert "RuntimeError" in result.stop_reason
+
+
 def test_prepare_loi_thi_dung_sach():
     calls = {"run": 0, "propose": 0}
 
