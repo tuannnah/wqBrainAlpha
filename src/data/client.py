@@ -74,8 +74,13 @@ class WQBrainClient:
             data = json.loads(self.session_file.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             return
+        # Gắn cookie kèm ĐÚNG domain host. Nếu set không domain (domain=''),
+        # khi server trả Set-Cookie (host-only) httpx sẽ giữ CẢ HAI cookie cùng
+        # tên rồi gửi cả hai lên — WQ đọc cái cũ trước -> 401. Set kèm domain để
+        # cookie mới của server THAY THẾ cookie nạp từ file thay vì nhân đôi.
+        domain = urlparse(self.BASE_URL).hostname or ""
         for name, value in data.items():
-            self.client.cookies.set(name, value)
+            self.client.cookies.set(name, value, domain=domain)
         logger.info("Đã nạp session từ {}", self.session_file)
 
     def _save_session(self) -> None:

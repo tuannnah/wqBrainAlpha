@@ -241,6 +241,36 @@ def test_authenticate_tu_doi_va_thu_lai_khi_429(capsys):
     assert "7" in out  # đã in ra số giây phải chờ cho người dùng
 
 
+def test_khong_gui_cookie_cu_khi_doi_tai_khoan():
+    """Bug: .wq_session chứa cookie 't' cũ (tài khoản khác). _load_session set
+    cookie KHÔNG kèm domain -> sau login httpx giữ CẢ HAI cookie 't' (cũ domain=''
+    + mới do server set) và gửi cả hai lên. WQ đọc cookie 't' ĐẦU TIÊN (token cũ)
+    -> 401 'Incorrect authentication credentials' ở mọi endpoint bảo vệ.
+
+    Sau sửa: chỉ gửi đúng cookie 't' mới mà server vừa set.
+    """
+    import json
+
+    sf = _tmp_session()
+    sf.write_text(json.dumps({"t": "STALE_TOKEN_TAI_KHOAN_CU"}), encoding="utf-8")
+
+    seen = {"cookie_header": None}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authentication":
+            return httpx.Response(201, headers={"set-cookie": "t=FRESH_TOKEN; Path=/"})
+        # Endpoint bảo vệ: nếu token cũ còn được gửi -> WQ trả 401.
+        seen["cookie_header"] = request.headers.get("cookie", "")
+        if "STALE_TOKEN_TAI_KHOAN_CU" in seen["cookie_header"]:
+            return httpx.Response(401, json={"detail": "Incorrect authentication credentials."})
+        return httpx.Response(200, json={"ok": True})
+
+    client = _client_with(handler, session_file=sf)
+    resp = client.get("/data-fields")
+    assert resp.status_code == 200, f"cookie gửi lên: {seen['cookie_header']!r}"
+    assert seen["cookie_header"] == "t=FRESH_TOKEN"
+
+
 def test_get_tu_reauth_khi_session_het_han():
     state = {"auth_count": 0, "data_calls": 0}
 
