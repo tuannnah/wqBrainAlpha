@@ -245,8 +245,20 @@ class FieldRepository:
             lambda q: q.filter_by(region=region, universe=universe, delay=delay)
         )
 
-    def load_cached(self) -> list[DataField]:
-        return self._rows_to_fields(lambda q: q)
+    def load_cached(
+        self, region: str | None = None, universe: str | None = None, delay: int | None = None
+    ) -> list[DataField]:
+        """Load fields đã cache; lọc theo scope nếu truyền (đa region — T6.4).
+        Không truyền scope -> trả tất cả (tương thích ngược)."""
+        def refine(q):
+            if region is not None:
+                q = q.filter(DataFieldModel.region == region)
+            if universe is not None:
+                q = q.filter(DataFieldModel.universe == universe)
+            if delay is not None:
+                q = q.filter(DataFieldModel.delay == delay)
+            return q
+        return self._rows_to_fields(refine)
 
     def _rows_to_fields(self, refine) -> list[DataField]:
         session: Session = self.session_factory()

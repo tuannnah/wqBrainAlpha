@@ -168,6 +168,26 @@ def test_scope_khac_nhau_khong_de_len_nhau():
     assert repo.cached_count() == 2
 
 
+def test_load_cached_loc_theo_scope():
+    """T6.4: load_cached(scope) chỉ trả fields của đúng (region, universe, delay)."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    c1 = FakeClient()
+    c1.queue_get(FakeResponse(200, json_data={"count": 2, "results": [{"id": "close"}, {"id": "open"}]}))
+    FieldRepository(c1, sf).fetch_all("USA", "TOP3000", 1, page_size=10)
+    c2 = FakeClient()
+    c2.queue_get(FakeResponse(200, json_data={"count": 1, "results": [{"id": "vwap"}]}))
+    FieldRepository(c2, sf).fetch_all("EUR", "TOP1000", 0, page_size=10)
+
+    repo = FieldRepository(None, sf)
+    usa = {f.id for f in repo.load_cached(region="USA", universe="TOP3000", delay=1)}
+    assert usa == {"close", "open"}  # không lẫn 'vwap' của EUR
+    eur = {f.id for f in repo.load_cached(region="EUR", universe="TOP1000", delay=0)}
+    assert eur == {"vwap"}
+    # Không truyền scope -> tất cả (tương thích ngược).
+    assert len(repo.load_cached()) == 3
+
+
 def test_get_state_va_all_states():
     engine = init_db(_engine())
     sf = make_session_factory(engine)

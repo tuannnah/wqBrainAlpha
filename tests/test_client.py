@@ -111,6 +111,88 @@ def test_xac_thuc_qr_mo_trinh_duyet_va_thu_lai():
     assert len(waited) == 1  # đã chờ user nhấn Enter
 
 
+def test_persona_hoan_tat_bang_post_vao_url_inquiry():
+    """Sau khi quét QR, phải POST vào chính URL persona/inquiry để hoàn tất.
+
+    Tái hiện bug: nếu POST /authentication lần nữa thì WQ sinh inquiry MỚI,
+    inquiry vừa quét không bao giờ được hoàn tất -> lặp 3 lần rồi AuthError.
+    """
+    persona_path = "/authentication/persona"
+    state = {"auth_calls": 0, "persona_posts": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authentication":
+            state["auth_calls"] += 1
+            # Mỗi lần POST /authentication -> 401 kèm inquiry MỚI.
+            return httpx.Response(
+                401,
+                headers={
+                    "WWW-Authenticate": "persona",
+                    "Location": f"{persona_path}?inquiry=inq_{state['auth_calls']}",
+                },
+            )
+        if request.url.path == persona_path:
+            # Quét QR xong + POST vào URL inquiry -> hoàn tất.
+            state["persona_posts"] += 1
+            return httpx.Response(201)
+        return httpx.Response(404)
+
+    opened = []
+    waited = []
+    client = _client_with(
+        handler,
+        browser_open=lambda url: opened.append(url) or True,
+        confirmation_input=lambda prompt: waited.append(prompt),
+    )
+    client.authenticate()
+
+    assert client.authenticated is True
+    assert state["auth_calls"] == 1  # CHỈ gọi /authentication 1 lần (không sinh inquiry mới)
+    assert state["persona_posts"] == 1  # hoàn tất bằng POST vào URL persona
+    assert len(opened) == 1  # mở đúng URL inquiry để quét QR
+    assert "inq_1" in opened[0]
+    assert len(waited) == 1
+
+
+def test_authenticate_lan_hai_la_no_op_khi_da_dang_nhap():
+    """Đã đăng nhập trong phiên (kể cả persona không set cookie) -> authenticate()
+    lần 2 không được gọi lại /authentication hay /users/self/ (không bắt QR lại).
+
+    Tái hiện bug: chọn 4/5 sau khi đăng nhập lại đòi xác thực QR.
+    """
+    persona_path = "/authentication/persona"
+    state = {"auth_calls": 0, "persona_posts": 0, "self_calls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authentication":
+            state["auth_calls"] += 1
+            return httpx.Response(
+                401,
+                headers={"WWW-Authenticate": "persona", "Location": f"{persona_path}?inquiry=x"},
+            )
+        if request.url.path == persona_path:
+            state["persona_posts"] += 1
+            return httpx.Response(201)  # đăng nhập xong nhưng KHÔNG set cookie phiên
+        if request.url.path == "/users/self/":
+            state["self_calls"] += 1
+            return httpx.Response(200, json={"id": "u1"})
+        return httpx.Response(404)
+
+    client = _client_with(
+        handler,
+        browser_open=lambda url: True,
+        confirmation_input=lambda prompt: None,
+    )
+    client.authenticate()
+    assert client.authenticated is True
+    assert state["auth_calls"] == 1
+
+    # Lần 2 (vd. menu chọn 4/5 truyền lại cùng client) -> phải no-op.
+    client.authenticate()
+    assert state["auth_calls"] == 1  # KHÔNG gọi lại /authentication
+    assert state["self_calls"] == 0  # KHÔNG cần kiểm tra session qua mạng
+
+
 def test_extract_verification_url_tu_header():
     resp = httpx.Response(202, headers={"Location": "/authentication/verify/abc"})
     url = WQBrainClient._extract_verification_url(resp)
@@ -134,6 +216,59 @@ def test_get_tu_backoff_khi_429():
     assert resp.status_code == 200
     assert slept == [2.0]  # đã chờ đúng Retry-After rồi thử lại
     assert state["data_calls"] == 2
+
+
+def test_authenticate_tu_doi_va_thu_lai_khi_429(capsys):
+    state = {"auth_calls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authentication":
+            state["auth_calls"] += 1
+            if state["auth_calls"] == 1:
+                # Lần đầu bị giới hạn tần suất, server báo chờ 7 giây.
+                return httpx.Response(429, headers={"Retry-After": "7"})
+            return httpx.Response(201)  # lần hai đăng nhập được
+        return httpx.Response(404)
+
+    slept = []
+    client = _client_with(handler, sleep_func=lambda s: slept.append(s))
+    client.authenticate()
+
+    assert client.authenticated is True
+    assert state["auth_calls"] == 2  # 429 rồi mới 201
+    assert slept == [7.0]  # đã chờ đúng Retry-After
+    out = capsys.readouterr().out
+    assert "7" in out  # đã in ra số giây phải chờ cho người dùng
+
+
+def test_khong_gui_cookie_cu_khi_doi_tai_khoan():
+    """Bug: .wq_session chứa cookie 't' cũ (tài khoản khác). _load_session set
+    cookie KHÔNG kèm domain -> sau login httpx giữ CẢ HAI cookie 't' (cũ domain=''
+    + mới do server set) và gửi cả hai lên. WQ đọc cookie 't' ĐẦU TIÊN (token cũ)
+    -> 401 'Incorrect authentication credentials' ở mọi endpoint bảo vệ.
+
+    Sau sửa: chỉ gửi đúng cookie 't' mới mà server vừa set.
+    """
+    import json
+
+    sf = _tmp_session()
+    sf.write_text(json.dumps({"t": "STALE_TOKEN_TAI_KHOAN_CU"}), encoding="utf-8")
+
+    seen = {"cookie_header": None}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authentication":
+            return httpx.Response(201, headers={"set-cookie": "t=FRESH_TOKEN; Path=/"})
+        # Endpoint bảo vệ: nếu token cũ còn được gửi -> WQ trả 401.
+        seen["cookie_header"] = request.headers.get("cookie", "")
+        if "STALE_TOKEN_TAI_KHOAN_CU" in seen["cookie_header"]:
+            return httpx.Response(401, json={"detail": "Incorrect authentication credentials."})
+        return httpx.Response(200, json={"ok": True})
+
+    client = _client_with(handler, session_file=sf)
+    resp = client.get("/data-fields")
+    assert resp.status_code == 200, f"cookie gửi lên: {seen['cookie_header']!r}"
+    assert seen["cookie_header"] == "t=FRESH_TOKEN"
 
 
 def test_get_tu_reauth_khi_session_het_han():

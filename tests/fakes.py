@@ -42,3 +42,73 @@ class FakeClient:
     def post(self, path, **kwargs):
         self.calls.append(("POST", path, kwargs))
         return self._post_queue.pop(0)
+
+
+class FakeDeepSeek:
+    """LLM giả: trả lần lượt nội dung trong hàng đợi cho mỗi complete()."""
+
+    def __init__(self, responses=None):
+        from src.llm.deepseek_client import Usage
+
+        self._responses = list(responses or [])
+        self.calls = []  # [(system, user)]
+        self.tasks = []  # task truyền vào mỗi complete() (None nếu không truyền)
+        self.usage = Usage()
+
+    def queue(self, content):
+        self._responses.append(content)
+
+    def complete(self, system, user, json_mode=True, task=None):
+        self.calls.append((system, user))
+        self.tasks.append(task)
+        if not self._responses:
+            return "{}"
+        return self._responses.pop(0)
+
+
+class _Symbol:
+    def __init__(self, value):
+        self.id = value
+        self.name = value
+
+
+class FakeSymbolRepo:
+    """Repo giả cho fields/operators: load_cached() trả danh sách có .id/.name.
+
+    Nếu khởi tạo với `by_scope` (dict (region,universe,delay)->values), load_cached
+    lọc theo scope kwargs — mô phỏng FieldRepository đa region (T6.4)."""
+
+    def __init__(self, values=None, by_scope=None):
+        self._items = [_Symbol(v) for v in (values or [])]
+        self._by_scope = {
+            k: [_Symbol(v) for v in vs] for k, vs in (by_scope or {}).items()
+        }
+        self.scope_calls = []
+
+    def load_cached(self, region=None, universe=None, delay=None):
+        self.scope_calls.append((region, universe, delay))
+        if self._by_scope and region is not None:
+            return self._by_scope.get((region, universe, delay), [])
+        return self._items
+
+
+class FakeSimulator:
+    """Simulator giả: map biểu thức -> SimulationResult, đếm số lần gọi."""
+
+    def __init__(self, results=None, default=None):
+        # results: dict expr -> SimulationResult, hoặc callable(expr)->result
+        self._results = results or {}
+        self._default = default
+        self.calls = []
+
+    def simulate(self, expression, settings=None):
+        self.calls.append(expression)
+        if callable(self._results):
+            return self._results(expression)
+        if expression in self._results:
+            return self._results[expression]
+        if self._default is not None:
+            return self._default(expression) if callable(self._default) else self._default
+        from src.simulation.simulator import SimulationResult
+
+        return SimulationResult(expression=expression, status="error")

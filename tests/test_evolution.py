@@ -20,6 +20,15 @@ class FakeSimulator:
         return expr
 
 
+class FakeSettingsSimulator:
+    def __init__(self):
+        self.calls = []
+
+    def simulate(self, expr, settings=None):
+        self.calls.append((expr, settings))
+        return expr
+
+
 def _expr_scorer(expr: str) -> float:
     # Ưu tiên expression có nhiều 'rank' — deterministic để test sắp xếp.
     return float(expr.count("rank"))
@@ -56,6 +65,31 @@ def test_max_simulations_gioi_han_so_lan_mo_phong():
     # Không bao giờ gọi simulate quá trần đã đặt.
     assert len(sim.calls) <= 4
     assert opt.simulations_used <= 4
+
+
+def test_evaluate_truyen_simulation_settings_vao_simulator():
+    settings = {
+        "region": "EUR",
+        "universe": "TOP1200",
+        "delay": 1,
+        "decay": 6,
+        "truncation": 0.12,
+        "neutralization": "INDUSTRY",
+    }
+    pf = PreFilter(known_operators=None, known_fields=None)
+    sim = FakeSettingsSimulator()
+    opt = GeneticOptimizer(
+        simulator=sim,
+        prefilter=pf,
+        seed_factory=lambda: GeneticOptimizer.expr_to_node("rank(close)"),
+        fields=["close"],
+        scorer=_expr_scorer,
+        simulation_settings=settings,
+    )
+
+    opt.evaluate(GeneticOptimizer.expr_to_node("rank(close)"))
+
+    assert sim.calls == [("rank(close)", settings)]
 
 
 def test_crossover_tao_cay_hop_le():

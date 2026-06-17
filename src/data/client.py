@@ -74,8 +74,13 @@ class WQBrainClient:
             data = json.loads(self.session_file.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             return
+        # Gắn cookie kèm ĐÚNG domain host. Nếu set không domain (domain=''),
+        # khi server trả Set-Cookie (host-only) httpx sẽ giữ CẢ HAI cookie cùng
+        # tên rồi gửi cả hai lên — WQ đọc cái cũ trước -> 401. Set kèm domain để
+        # cookie mới của server THAY THẾ cookie nạp từ file thay vì nhân đôi.
+        domain = urlparse(self.BASE_URL).hostname or ""
         for name, value in data.items():
-            self.client.cookies.set(name, value)
+            self.client.cookies.set(name, value, domain=domain)
         logger.info("Đã nạp session từ {}", self.session_file)
 
     def _save_session(self) -> None:
@@ -111,7 +116,29 @@ class WQBrainClient:
                 "Không thể kết nối đến WorldQuant BRAIN. Kiểm tra mạng và thử lại."
             ) from exc
 
+    def _authenticate_with_backoff(self) -> httpx.Response:
+        """Gọi /authentication, tự in Retry-After + chờ + thử lại khi gặp 429."""
+        for attempt in range(self.MAX_RATE_LIMIT_RETRIES + 1):
+            resp = self._request_authentication()
+            if resp.status_code == self.RATE_LIMIT_STATUS and attempt < self.MAX_RATE_LIMIT_RETRIES:
+                wait = self._retry_after(resp)
+                logger.warning(
+                    "Đăng nhập bị giới hạn tần suất (429) — chờ {}s rồi thử lại ({}/{})",
+                    wait,
+                    attempt + 1,
+                    self.MAX_RATE_LIMIT_RETRIES,
+                )
+                print(f"⏳ Bị giới hạn tần suất (429). Chờ {wait:g} giây rồi thử đăng nhập lại...")
+                self._sleep(wait)
+                continue
+            return resp
+        return resp
+
     def authenticate(self, force: bool = False) -> None:
+        # Đã đăng nhập trong phiên này -> no-op (kể cả persona/QR không set cookie).
+        # Tránh bắt quét QR lại mỗi khi gọi lệnh data trên cùng client.
+        if not force and self._authenticated:
+            return
         # Tái dùng session đã lưu nếu còn hạn (khỏi đăng nhập lại).
         if not force and self._has_session() and self.is_session_valid():
             self._authenticated = True
@@ -119,7 +146,7 @@ class WQBrainClient:
             print("✅ Dùng lại phiên đăng nhập trước.")
             return
 
-        resp = self._request_authentication()
+        resp = self._authenticate_with_backoff()
 
         if resp.status_code in (200, 201):
             self._authenticated = True
@@ -168,18 +195,33 @@ class WQBrainClient:
             self.confirmation_input(
                 "Quét QR và hoàn tất xác thực trong trình duyệt, sau đó nhấn Enter..."
             )
-            resp = self._request_authentication()
+            # Hoàn tất bằng cách POST vào CHÍNH URL persona/inquiry vừa quét —
+            # KHÔNG POST /authentication lại (sẽ sinh inquiry mới, lặp vô tận).
+            resp = self._post_verification(verification_url)
             if resp.status_code in (200, 201):
                 return
+            # Có thể WQ trả inquiry mới (vd. inquiry trước hết hạn) — cập nhật URL.
+            next_url = self._extract_verification_url(resp)
+            if next_url:
+                verification_url = next_url
             if (
                 resp.status_code in self.VERIFICATION_STATUS_CODES
                 or resp.status_code in (401, 403)
-                or self._extract_verification_url(resp)
+                or next_url
             ):
                 continue
             raise AuthError(f"Xác thực thất bại: HTTP {resp.status_code}")
 
         raise AuthError("Xác thực bổ sung chưa hoàn tất sau ba lần kiểm tra.")
+
+    def _post_verification(self, url: str) -> httpx.Response:
+        """POST vào URL persona/inquiry (kèm Basic Auth) để hoàn tất xác thực QR."""
+        try:
+            return self.client.post(url, auth=(self.email, self.password))
+        except httpx.RequestError as exc:
+            raise AuthError(
+                "Không thể kết nối đến WorldQuant BRAIN. Kiểm tra mạng và thử lại."
+            ) from exc
 
     @classmethod
     def _extract_verification_url(cls, response) -> str | None:

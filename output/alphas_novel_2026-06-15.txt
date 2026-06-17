@@ -1,0 +1,206 @@
+======================================================================
+ALPHA ĐẠT CHUẨN — 2026-06-15
+Tổng số: 10 alpha  |  Theo họ: analyst-divergence=1, analyst-revision=1, iv-skew=1, iv-term-structure=1, news-novelty=1, news-pead=1, pcr-flow=1, social-attention=1, supply-chain-graph=1, vol-risk-premium=1
+Scope: USA / TOP3000 / delay=1 (FASTEXPR)
+Hướng dẫn: copy biểu thức FASTEXPR + setting tương ứng lên WQ Brain để mô phỏng.
+======================================================================
+
+#1  [news-novelty]
+  Giả thuyết : Tin tức có độ mới lạ cao đi kèm sentiment mạnh gây phản ứng thái quá tức thời; tổ hợp novelty x sentiment lớn dự báo đảo chiều ngắn hạn (dấu âm: bán tin tốt giật, mua tin xấu giật).
+  Lý giải    : Tendayi/Tetlock: thị trường phản ứng thái quá với tin mới, điều chỉnh dần sau đó. Nhân novelty với sentiment khuếch đại tín hiệu overreaction — dữ liệu news18 ít người khai thác nên correlation thấp.
+  FASTEXPR   : group_neutralize(-rank(mean_event_novelty_score * mean_event_sentiment_score), industry)
+  Điểm local : 0.84  (originality=1.00, complexity=0.41)
+  Lý do đạt  : originality=1.00; complexity=0.41; dataset thay thế (option/news/social/analyst/graph); cú pháp/field/operator hợp lệ
+  Setting:
+    instrumentType = EQUITY
+    region = USA
+    universe = TOP3000
+    delay = 1
+    decay = 30
+    neutralization = INDUSTRY
+    truncation = 0.04
+    pasteurization = ON
+    unitHandling = VERIFY
+    nanHandling = OFF
+    language = FASTEXPR
+    visualization = False
+
+#2  [news-pead]
+  Giả thuyết : Điểm đánh giá tin tức về kết quả kinh doanh (earnings evaluation) tích cực kéo dài báo hiệu post-earnings-announcement drift; thị trường hấp thụ chậm tông tin tức lợi nhuận.
+  Lý giải    : PEAD (Bernard-Thomas) thường đo qua surprise số liệu; đo qua TÔNG tin tức (nws18_bee) là góc tiếp cận thay thế, làm mượt 5 ngày để bắt drift thay vì nhiễu một phiên.
+  FASTEXPR   : group_neutralize(rank(ts_mean(nws18_bee, 5)), sector)
+  Điểm local : 0.56  (originality=0.50, complexity=0.34)
+  Lý do đạt  : originality=0.50; complexity=0.34; dataset thay thế (option/news/social/analyst/graph); cú pháp/field/operator hợp lệ
+  Setting:
+    instrumentType = EQUITY
+    region = USA
+    universe = TOP3000
+    delay = 1
+    decay = 20
+    neutralization = SECTOR
+    truncation = 0.04
+    pasteurization = ON
+    unitHandling = VERIFY
+    nanHandling = OFF
+    language = FASTEXPR
+    visualization = False
+
+#3  [analyst-revision]
+  Giả thuyết : Tỉ lệ ròng phân tích viên nâng trừ hạ dự báo lợi nhuận (net earnings revision) dương kéo dài báo hiệu nâng kỳ vọng bền vững; giá điều chỉnh dần theo (revision drift).
+  Lý giải    : Revision momentum (Chan-Jegadeesh-Lakonishok): điều chỉnh dự báo có quán tính. Dùng chỉ báo net revision tổng hợp sẵn của sentiment1 thay vì tự tính từ fundamental — sạch và ít trùng.
+  FASTEXPR   : group_neutralize(rank(ts_mean(snt1_d1_netearningsrevision, 10)), sector)
+  Điểm local : 0.56  (originality=0.50, complexity=0.34)
+  Lý do đạt  : originality=0.50; complexity=0.34; dataset thay thế (option/news/social/analyst/graph); cú pháp/field/operator hợp lệ
+  Setting:
+    instrumentType = EQUITY
+    region = USA
+    universe = TOP3000
+    delay = 1
+    decay = 20
+    neutralization = SECTOR
+    truncation = 0.05
+    pasteurization = ON
+    unitHandling = VERIFY
+    nanHandling = OFF
+    language = FASTEXPR
+    visualization = False
+
+#4  [supply-chain-graph]
+  Giả thuyết : Tín hiệu lợi suất của khách hàng (customer return signal) lan truyền có độ trễ sang nhà cung cấp qua mạng chuỗi cung ứng; khách hàng diễn biến tốt báo hiệu nhà cung cấp hưởng lợi sau đó.
+  Lý giải    : Momentum lan truyền chuỗi cung ứng (Cohen-Frazzini 2008): thông tin khuếch tán chậm qua quan hệ kinh tế. Dữ liệu graph pv13 rất hiếm người khai thác nên gần như không tương quan với factor đại trà.
+  FASTEXPR   : group_neutralize(rank(ts_mean(pv13_custretsig_retsig, 5)), sector)
+  Điểm local : 0.56  (originality=0.50, complexity=0.34)
+  Lý do đạt  : originality=0.50; complexity=0.34; dataset thay thế (option/news/social/analyst/graph); cú pháp/field/operator hợp lệ
+  Setting:
+    instrumentType = EQUITY
+    region = USA
+    universe = TOP3000
+    delay = 1
+    decay = 10
+    neutralization = SECTOR
+    truncation = 0.02
+    pasteurization = ON
+    unitHandling = VERIFY
+    nanHandling = OFF
+    language = FASTEXPR
+    visualization = False
+
+#5  [social-attention]
+  Giả thuyết : Đột biến khối lượng thảo luận mạng xã hội đi kèm sentiment cực đoan thu hút nhà đầu tư cá nhân, đẩy giá lệch giá trị; tổ hợp buzz-spike x sentiment cao dự báo đảo chiều (dấu âm).
+  Lý giải    : Barber-Odean attention theory: cổ phiếu được chú ý quá mức bị mua đuổi rồi điều chỉnh. Z-score buzz 20 ngày cô lập 'spike' bất thường; nguồn socialmedia12 hiếm dùng nên trực giao factor truyền thống.
+  FASTEXPR   : group_neutralize(-rank(ts_zscore(scl12_buzz, 20) * scl12_sentiment), industry)
+  Điểm local : 0.35  (originality=0.25, complexity=0.50)
+  Lý do đạt  : originality=0.25; complexity=0.50; dataset thay thế (option/news/social/analyst/graph); cú pháp/field/operator hợp lệ
+  Setting:
+    instrumentType = EQUITY
+    region = USA
+    universe = TOP3000
+    delay = 1
+    decay = 40
+    neutralization = INDUSTRY
+    truncation = 0.03
+    pasteurization = ON
+    unitHandling = VERIFY
+    nanHandling = OFF
+    language = FASTEXPR
+    visualization = False
+
+#6  [vol-risk-premium]
+  Giả thuyết : Chênh lệch implied volatility 30 ngày trừ realized volatility 30 ngày (VRP) cao báo hiệu thị trường định giá rủi ro quá mức; cổ phiếu VRP cao thường cho lợi suất điều chỉnh rủi ro thấp hơn.
+  Lý giải    : Volatility risk premium (Bollerslev 2009, Carr-Wu 2009): người bán biến động đòi phí; VRP đo qua IV-RV phản ánh khẩu vị rủi ro, ít tương quan với tín hiệu giá thuần. Trung hòa ngành để cô lập hiệu ứng.
+  FASTEXPR   : group_neutralize(rank(implied_volatility_mean_30 - historical_volatility_30), industry)
+  Điểm local : 0.26  (originality=0.00, complexity=0.34)
+  Lý do đạt  : originality=0.00; complexity=0.34; dataset thay thế (option/news/social/analyst/graph); cú pháp/field/operator hợp lệ
+  Setting:
+    instrumentType = EQUITY
+    region = USA
+    universe = TOP3000
+    delay = 1
+    decay = 5
+    neutralization = INDUSTRY
+    truncation = 0.08
+    pasteurization = ON
+    unitHandling = VERIFY
+    nanHandling = OFF
+    language = FASTEXPR
+    visualization = False
+
+#7  [iv-skew]
+  Giả thuyết : Độ lệch IV put trừ IV call (risk reversal) lớn cho thấy nhà đầu tư trả giá cao để phòng hộ giảm giá; skew cực đoan thường đi trước đảo chiều.
+  Lý giải    : Option skew chứa thông tin định hướng (Xing-Zhang-Zhao 2010, Bali-Hovakimian): cầu phòng hộ phản ánh kỳ vọng đuôi trái, là tín hiệu phái sinh độc lập với động lượng giá. Dùng risk-reversal chuẩn ngành.
+  FASTEXPR   : group_neutralize(rank(implied_volatility_put_30 - implied_volatility_call_30), sector)
+  Điểm local : 0.26  (originality=0.00, complexity=0.34)
+  Lý do đạt  : originality=0.00; complexity=0.34; dataset thay thế (option/news/social/analyst/graph); cú pháp/field/operator hợp lệ
+  Setting:
+    instrumentType = EQUITY
+    region = USA
+    universe = TOP3000
+    delay = 1
+    decay = 5
+    neutralization = SECTOR
+    truncation = 0.08
+    pasteurization = ON
+    unitHandling = VERIFY
+    nanHandling = OFF
+    language = FASTEXPR
+    visualization = False
+
+#8  [analyst-divergence]
+  Giả thuyết : Khi phân tích viên nâng giá mục tiêu (net target) nhanh hơn nâng khuyến nghị (net rec), tồn tại lạc quan tiềm ẩn chưa phản ánh hết; phân kỳ dương dự báo nâng hạng tiếp theo.
+  Lý giải    : Giá mục tiêu phản ứng nhanh hơn thay đổi rating có ma sát; chênh lệch hai kênh là tín hiệu dẫn dắt (lead-lag) trong cùng bộ dữ liệu analyst, trực giao với factor giá.
+  FASTEXPR   : group_neutralize(rank(snt1_d1_nettargetpercent - snt1_d1_netrecpercent), industry)
+  Điểm local : 0.26  (originality=0.00, complexity=0.34)
+  Lý do đạt  : originality=0.00; complexity=0.34; dataset thay thế (option/news/social/analyst/graph); cú pháp/field/operator hợp lệ
+  Setting:
+    instrumentType = EQUITY
+    region = USA
+    universe = TOP3000
+    delay = 1
+    decay = 15
+    neutralization = INDUSTRY
+    truncation = 0.05
+    pasteurization = ON
+    unitHandling = VERIFY
+    nanHandling = OFF
+    language = FASTEXPR
+    visualization = False
+
+#9  [iv-term-structure]
+  Giả thuyết : Độ dốc cấu trúc kỳ hạn IV (90 ngày trừ 30 ngày) âm (backwardation) cho thấy căng thẳng ngắn hạn dồn nén; cổ phiếu backwardation mạnh có xu hướng phục hồi khi stress hạ nhiệt (dấu âm chuộng backwardation).
+  Lý giải    : Cấu trúc kỳ hạn biến động mang thông tin chu kỳ sợ hãi; backwardation hiếm và báo hiệu áp lực tạm thời. Tín hiệu này thuần phái sinh, gần như không trùng các factor PV phổ biến.
+  FASTEXPR   : group_neutralize(-rank(implied_volatility_mean_90 - implied_volatility_mean_30), industry)
+  Điểm local : 0.24  (originality=0.00, complexity=0.41)
+  Lý do đạt  : originality=0.00; complexity=0.41; dataset thay thế (option/news/social/analyst/graph); cú pháp/field/operator hợp lệ
+  Setting:
+    instrumentType = EQUITY
+    region = USA
+    universe = TOP3000
+    delay = 1
+    decay = 5
+    neutralization = INDUSTRY
+    truncation = 0.08
+    pasteurization = ON
+    unitHandling = VERIFY
+    nanHandling = OFF
+    language = FASTEXPR
+    visualization = False
+
+#10  [pcr-flow]
+  Giả thuyết : Thay đổi tỉ lệ open interest put/call 30 ngày phản ánh dịch chuyển dòng tiền phòng hộ; PCR tăng nhanh (bi quan dồn dập) thường bị điều chỉnh thái quá nên đảo chiều (dấu âm).
+  Lý giải    : PCR là chỉ báo tâm lý ngược (contrarian) kinh điển trên thị trường quyền chọn; lấy delta thay vì mức tuyệt đối để bắt thay đổi dòng tiền, tín hiệu trực giao với động lượng giá cổ phiếu.
+  FASTEXPR   : group_neutralize(-rank(ts_delta(pcr_oi_30, 5)), sector)
+  Điểm local : 0.24  (originality=0.00, complexity=0.41)
+  Lý do đạt  : originality=0.00; complexity=0.41; dataset thay thế (option/news/social/analyst/graph); cú pháp/field/operator hợp lệ
+  Setting:
+    instrumentType = EQUITY
+    region = USA
+    universe = TOP3000
+    delay = 1
+    decay = 10
+    neutralization = SECTOR
+    truncation = 0.06
+    pasteurization = ON
+    unitHandling = VERIFY
+    nanHandling = OFF
+    language = FASTEXPR
+    visualization = False
