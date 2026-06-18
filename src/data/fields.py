@@ -19,7 +19,15 @@ def _now() -> datetime:
 
 
 class FieldFetchError(RuntimeError):
-    """Lỗi khi tải data-fields từ WorldQuant."""
+    """Lỗi khi tải data-fields từ WorldQuant.
+
+    status_code: mã HTTP nếu lỗi đến từ phản hồi server (401/403/429/4xx/5xx);
+    None nếu lỗi không gắn với HTTP.
+    """
+
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass
@@ -182,11 +190,13 @@ class FieldRepository:
                 logger.error("GET /data-fields lỗi {}: {}", resp.status_code, resp.text[:500])
                 if resp.status_code == 429:
                     raise FieldFetchError(
-                        "Bị giới hạn tần suất (429) sau nhiều lần thử. Hãy chờ vài phút rồi tải lại."
+                        "Bị giới hạn tần suất (429) sau nhiều lần thử. Hãy chờ vài phút rồi tải lại.",
+                        status_code=429,
                     )
                 raise FieldFetchError(
                     f"Không tải được data-fields (HTTP {resp.status_code}). "
-                    "Kiểm tra region/universe/delay hợp lệ và tài khoản có quyền."
+                    "Kiểm tra region/universe/delay hợp lệ và tài khoản có quyền.",
+                    status_code=resp.status_code,
                 )
             payload = resp.json()
             results = payload.get("results", [])
@@ -234,6 +244,21 @@ class FieldRepository:
             state.total_count = count
             state.fetched_at = _now()
             state.status = "complete"
+            session.merge(state)
+            session.commit()
+        finally:
+            session.close()
+
+    def mark_no_access(self, region: str, universe: str, delay: int) -> None:
+        """Đánh dấu scope tài khoản không truy cập được (resume sẽ bỏ qua nhanh)."""
+        session: Session = self.session_factory()
+        try:
+            key = self._key(region, universe, delay)
+            state = session.get(FetchStateModel, key) or FetchStateModel(key=key)
+            state.entity = "data_fields"
+            state.region, state.universe, state.delay = region, universe, delay
+            state.fetched_at = _now()
+            state.status = "no_access"
             session.merge(state)
             session.commit()
         finally:

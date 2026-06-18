@@ -252,3 +252,38 @@ def test_fetch_operators_parse_arity():
     assert by_name["ts_mean"].arity == 2
     assert by_name["rank"].arity == 1
     assert len(repo.load_cached()) == 2
+
+
+def test_field_fetch_error_mang_status_code():
+    from src.data.fields import FieldFetchError
+
+    err = FieldFetchError("không có quyền", status_code=403)
+    assert err.status_code == 403
+    assert FieldFetchError("x").status_code is None
+
+
+def test_fetch_403_raise_kem_status_code():
+    from src.data.fields import FieldFetchError
+
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    client = FakeClient()
+    client.queue_get(FakeResponse(403, text="forbidden"))
+    repo = FieldRepository(client, sf)
+    try:
+        repo.fetch_all("USA", "TOP3000", 1)
+        assert False, "phải raise"
+    except FieldFetchError as exc:
+        assert exc.status_code == 403
+
+
+def test_mark_no_access_ghi_trang_thai():
+    from src.storage.models import FetchStateModel
+
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    repo = FieldRepository(None, sf)
+    repo.mark_no_access("EUR", "TOP400", 0)
+    state = repo.get_state("EUR", "TOP400", 0)
+    assert state is not None
+    assert state.status == "no_access"
