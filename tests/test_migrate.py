@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 
 from src.simulation.simulator import SimulationResult
 from src.storage.db import init_db, make_session_factory
-from src.storage.migrate import migrate_all
+from src.storage.migrate import migrate_all, _same_database
 from src.storage.models import AlphaModel, OperatorModel, SimulationModel
 from src.storage.repository import AlphaRepository
 
@@ -80,3 +80,26 @@ def test_migrate_all_bo_qua_bang_thieu_o_nguon():
     dst = _engine()
     counts = migrate_all(src, dst)
     assert counts["alphas"] == 0  # rỗng nhưng không lỗi
+
+
+def test_same_database_sqlite_cung_file_khac_chu():
+    assert _same_database("sqlite:///wq_alpha.db", "sqlite:///./wq_alpha.db") is True
+
+
+def test_same_database_sqlite_khac_file():
+    assert _same_database("sqlite:///a.db", "sqlite:///b.db") is False
+
+
+def test_same_database_sqlite_memory_khong_coi_la_cung():
+    # Mỗi in-memory DB là một DB riêng -> không chặn nhầm test/đường hợp lệ.
+    assert _same_database("sqlite:///:memory:", "sqlite:///:memory:") is False
+
+
+def test_same_database_postgres_giong_nhau():
+    assert (
+        _same_database(
+            "postgresql+psycopg://u:p@localhost:5432/wq",
+            "postgresql+psycopg://u:p@localhost:5432/wq",
+        )
+        is True
+    )

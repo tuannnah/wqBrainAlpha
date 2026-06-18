@@ -25,7 +25,7 @@ from src.data.universe_matrix import iter_scopes
 from src.data.warm_cache import warm_cache
 from src.simulation.simulator import Simulator
 from src.storage.db import init_db, make_engine, make_session_factory
-from src.storage.migrate import migrate_all
+from src.storage.migrate import migrate_all, _same_database
 from src.storage.repository import AlphaRepository, InvalidFieldRepository
 from src.pipeline.auto import (
     AutoEvent,
@@ -88,7 +88,7 @@ def migrate_sqlite(
     """Copy toàn bộ dữ liệu từ SQLite sang DB đích (Postgres), idempotent."""
     _setup_logging()
     dest_url = dest or settings.database_url
-    if dest_url == source:
+    if _same_database(source, dest_url):
         console.print("[red]❌ DB đích trùng DB nguồn — không có gì để migrate.[/red]")
         raise typer.Exit(code=1)
     counts = migrate_all(make_engine(source), make_engine(dest_url))
