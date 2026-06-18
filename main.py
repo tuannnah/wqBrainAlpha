@@ -21,6 +21,8 @@ from config.settings import settings
 from src.data.client import WQBrainClient
 from src.data.fields import FieldRepository
 from src.data.operators import OperatorRepository, count_positional_arity
+from src.data.universe_matrix import iter_scopes
+from src.data.warm_cache import warm_cache
 from src.simulation.simulator import Simulator
 from src.storage.db import init_db, make_engine, make_session_factory
 from src.storage.migrate import migrate_all
@@ -122,6 +124,48 @@ def probe_fields(
     )
     console.print(f"[dim]HTTP {resp.status_code}[/dim]")
     console.print_json(resp.text)
+
+
+@app.command("warm-cache")
+def warm_cache_cmd(
+    regions: str = typer.Option("", help="CSV region cần tải; rỗng = tất cả trong WQB_MATRIX"),
+    delays: str = typer.Option("0,1", help="CSV delay cần tải"),
+    force: bool = typer.Option(False, help="Tải lại tất cả, bỏ qua cache"),
+    sleep: float = typer.Option(2.0, help="Giây nghỉ giữa các scope có gọi API"),
+) -> None:
+    """Tải sẵn toàn bộ datafields + operators vào DB (resume được)."""
+    _setup_logging()
+    region_list = [r.strip() for r in regions.split(",") if r.strip()] or None
+    delay_list = [int(d.strip()) for d in delays.split(",") if d.strip()]
+
+    engine = init_db(make_engine())
+    sf = make_session_factory(engine)
+    client = _make_client()
+    client.authenticate()
+    field_repo = FieldRepository(client, sf)
+    op_repo = OperatorRepository(client, sf)
+
+    scopes = list(iter_scopes(regions=region_list, delays=delay_list))
+    console.print(f"[cyan]Bắt đầu warm-cache {len(scopes)} tổ hợp...[/cyan]")
+
+    def _on_event(kind: str, scope) -> None:
+        console.print(f"  [{kind}] {scope[0]}/{scope[1]}/delay={scope[2]}")
+
+    report = warm_cache(
+        field_repo, op_repo, scopes, force=force, sleep_s=sleep, on_event=_on_event
+    )
+
+    table = Table(title="Kết quả warm-cache")
+    table.add_column("Hạng mục")
+    table.add_column("Số lượng", justify="right")
+    table.add_row("Operators", str(report.operators))
+    table.add_row("Fetch mới", str(report.fetched))
+    table.add_row("Bỏ qua (đã cache)", str(report.skipped))
+    table.add_row("Không quyền", str(report.no_access))
+    table.add_row("Lỗi", str(len(report.errors)))
+    console.print(table)
+    for scope, msg in report.errors:
+        console.print(f"[red]  lỗi {scope}: {msg}[/red]")
 
 
 @app.command("fetch-fields")
