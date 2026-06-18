@@ -23,6 +23,7 @@ from src.data.fields import FieldRepository
 from src.data.operators import OperatorRepository, count_positional_arity
 from src.simulation.simulator import Simulator
 from src.storage.db import init_db, make_engine, make_session_factory
+from src.storage.migrate import migrate_all
 from src.storage.repository import AlphaRepository, InvalidFieldRepository
 from src.pipeline.auto import (
     AutoEvent,
@@ -75,6 +76,27 @@ def login(force: bool = typer.Option(False, help="Đăng nhập lại dù sessio
     client = _make_client()
     client.authenticate(force=force)
     console.print("[green]OK[/green]")
+
+
+@app.command("migrate-sqlite")
+def migrate_sqlite(
+    source: str = typer.Option("sqlite:///wq_alpha.db", help="URL DB nguồn (SQLite)"),
+    dest: str = typer.Option("", help="URL DB đích; rỗng = dùng DATABASE_URL"),
+) -> None:
+    """Copy toàn bộ dữ liệu từ SQLite sang DB đích (Postgres), idempotent."""
+    _setup_logging()
+    dest_url = dest or settings.database_url
+    if dest_url == source:
+        console.print("[red]❌ DB đích trùng DB nguồn — không có gì để migrate.[/red]")
+        raise typer.Exit(code=1)
+    counts = migrate_all(make_engine(source), make_engine(dest_url))
+    table = Table(title="Đã migrate")
+    table.add_column("Bảng")
+    table.add_column("Số rows", justify="right")
+    for name, n in counts.items():
+        table.add_row(name, str(n))
+    console.print(table)
+    console.print(f"[green]OK[/green] {source} -> {dest_url}")
 
 
 @app.command("probe-fields")
