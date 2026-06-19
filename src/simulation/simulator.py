@@ -18,6 +18,16 @@ _INVALID_FIELD_RE = re.compile(r"Invalid data field (\w+)")
 # WQ trả "Operator <op> does not support event inputs" khi field 'event' (dataset
 # news/earnings/analyst…) bị đưa vào operator chuẩn — không suy ra được từ type cache.
 _EVENT_OP_RE = re.compile(r"Operator (\w+) does not support event inputs")
+# Reason từ PreFilter khi field/hằng không nằm trong catalog (tiền-kiểm).
+_REJECTED_FIELD_RE = re.compile(r"Field/hằng không tồn tại: (\S+)")
+
+
+def extract_rejected_field(reason: str) -> str | None:
+    """Trích field id từ reason tiền-kiểm 'Field/hằng không tồn tại: X'; None nếu khác."""
+    if not reason:
+        return None
+    m = _REJECTED_FIELD_RE.search(reason)
+    return m.group(1) if m else None
 
 
 def extract_invalid_field(error: str) -> str | None:
@@ -142,6 +152,7 @@ class Simulator:
         sleep_func=time.sleep,
         time_func=time.monotonic,
         on_invalid_field=None,
+        pre_sim_validator=None,
     ):
         self.client = client
         self.rate_limiter = rate_limiter or RateLimiter()
@@ -149,6 +160,8 @@ class Simulator:
         self._time = time_func
         # callback(field_id) khi WQ báo field 'chết'/'event' — để blacklist tránh sinh lại.
         self.on_invalid_field = on_invalid_field
+        # callback(expr)->(ok, reason): chặn biểu thức field-bịa TRƯỚC khi tốn 1 lượt API.
+        self.pre_sim_validator = pre_sim_validator
         self._consecutive_auth_failures = 0
 
     def _build_body(self, expression: str, settings: dict | None) -> dict:
@@ -162,6 +175,17 @@ class Simulator:
         return body
 
     def simulate(self, expression: str, settings: dict | None = None) -> SimulationResult:
+        if self.pre_sim_validator is not None:
+            ok, reason = self.pre_sim_validator(expression)
+            if not ok:
+                logger.warning("Bỏ sim (tiền-kiểm): {} | expr={}", reason, expression)
+                bad = extract_rejected_field(reason)
+                if bad and self.on_invalid_field is not None:
+                    self.on_invalid_field(bad)
+                return SimulationResult(
+                    expression=expression, status="error",
+                    raw={"error": f"pre-sim reject: {reason}"},
+                )
         body = self._build_body(expression, settings)
 
         with self.rate_limiter:

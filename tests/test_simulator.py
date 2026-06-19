@@ -10,6 +10,7 @@ from src.simulation.simulator import (
     Simulator,
     extract_event_fields,
     extract_invalid_field,
+    extract_rejected_field,
 )
 from tests.fakes import FakeClient, FakeResponse
 
@@ -218,6 +219,41 @@ def test_auth_counter_reset_khi_loi_khac():
     )
     for _ in range(5):
         assert sim.simulate("rank(close)").status == "error"  # không raise
+
+
+def test_extract_rejected_field():
+    """Trích field id từ reason tiền-kiểm 'Field/hằng không tồn tại: X'; None nếu khác."""
+    assert extract_rejected_field("Field/hằng không tồn tại: foo_bar") == "foo_bar"
+    assert extract_rejected_field("Độ sâu > 6") is None
+    assert extract_rejected_field("") is None
+
+
+def test_pre_sim_validator_chan_truoc_khi_goi_api():
+    """validator trả (False, reason) -> KHÔNG gọi API, trả error, ghi field qua callback."""
+    client = FakeClient()  # không queue post nào: nếu gọi post sẽ IndexError
+    recorded: list[str] = []
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0,
+        on_invalid_field=recorded.append,
+        pre_sim_validator=lambda e: (False, "Field/hằng không tồn tại: foo_bar"),
+    )
+    result = sim.simulate("rank(foo_bar)")
+    assert all(c[0] != "POST" for c in client.calls)  # API không bị gọi
+    assert result.status == "error"
+    assert "pre-sim reject" in result.raw["error"]
+    assert recorded == ["foo_bar"]
+
+
+def test_pre_sim_validator_ok_thi_van_goi_api():
+    """validator pass -> đi tiếp tới POST như cũ."""
+    client = FakeClient()
+    client.queue_post(FakeResponse(500, text="server error"))  # lỗi để dừng sớm sau POST
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0,
+        pre_sim_validator=lambda e: (True, "ok"),
+    )
+    sim.simulate("rank(close)")
+    assert any(c[0] == "POST" for c in client.calls)
 
 
 def test_simulate_thieu_location_tra_error():
