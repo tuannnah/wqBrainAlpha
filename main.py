@@ -23,6 +23,7 @@ from src.data.fields import FieldRepository
 from src.data.operators import OperatorRepository, count_positional_arity
 from src.data.universe_matrix import iter_scopes
 from src.data.warm_cache import warm_cache
+from src.optimization.hybrid import HybridEngine
 from src.simulation.simulator import Simulator
 from src.storage.db import init_db, make_engine, make_session_factory
 from src.storage.migrate import migrate_all, _same_database
@@ -1115,110 +1116,112 @@ def _auto_run_direction_ga(client_box, session_factory, region, universe, delay,
     return run
 
 
-def _run_auto(engine, region, universe, delay, target_passes=3, max_sims=60,
-              max_directions=0, existing_client=None,
-              per_direction_sims: int | None = None,
-              swallow_errors: bool = False,
+def _make_refiner(session_factory, prefilter, region, universe, delay):
+    """Dựng AlphaRefiner (DeepSeek/router + AlphaTranslator có scope) cho LLM-in-loop."""
+    from src.llm.refiner import AlphaRefiner
+    from src.llm.translator import AlphaTranslator
+
+    deepseek = _make_router()
+    field_repo = FieldRepository(None, session_factory)
+    op_repo = OperatorRepository(None, session_factory)
+    translator = AlphaTranslator(deepseek, field_repo, op_repo, prefilter)
+    translator.set_scope(region=region, universe=universe, delay=delay)
+    return AlphaRefiner(deepseek, translator)
+
+
+def _run_hybrid_with_progress(engine):
+    """Chạy HybridEngine kèm thanh tiến trình (đếm sim + thế hệ)."""
+    from rich.progress import (
+        BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn,
+    )
+
+    with Progress(
+        SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+        BarColumn(), TimeElapsedColumn(), console=console, transient=True,
+    ) as progress:
+        task = progress.add_task("Hybrid: seed + tiến hóa...", total=None)
+
+        def on_simulation(n, expr, score):
+            progress.update(task, description=f"Hybrid: {n} sim, best gần nhất {score:.3f}"[:60])
+
+        def on_generation(stats):
+            progress.update(
+                task,
+                description=f"Hybrid gen {stats.generation} best={stats.best_score:.3f}"[:60],
+            )
+
+        return engine.run(on_generation=on_generation, on_simulation=on_simulation)
+
+
+def _run_auto(region, universe, delay, max_sims=0, generations=0,
+              existing_client=None, swallow_errors=False,
               decay=0, truncation=0.08, neutralization="SUBINDUSTRY"):
-    """Lõi toàn trình (hàm thuần, KHÔNG phải lệnh Typer nên gọi trực tiếp được).
+    """Toàn trình hybrid: login → cache → seed LLM → GA tiến hóa + LLM-in-loop → lưu DB.
 
-    Nhận giá trị scope cụ thể -> dựng AutoPipeline + engine AI/GA -> chạy -> in
-    bảng. Trả AutoResult, hoặc None nếu engine không hợp lệ.
-
-    per_direction_sims: nếu set, mỗi hướng dùng đúng N sim, KHÔNG còn chia
-    remaining // dirs_left (dùng cho menu 4/ai unlimited).
-    swallow_errors: truyền xuống AutoPipeline để dừng êm khi LLM hết token /
-    Ctrl+C, thay vì raise lên.
+    max_sims/generations = 0 nghĩa là VÔ HẠN (None). swallow_errors giữ để tương
+    thích chữ ký gọi từ menu; HybridEngine tự nuốt lỗi LLM nên không cần dùng.
+    Trả danh sách Node tốt nhất, hoặc None nếu thiếu điều kiện (chưa có fields).
     """
-    engine = str(engine).lower().strip()
-    if engine not in {"ai", "ga"}:
-        console.print("[red]engine chỉ nhận 'ai' hoặc 'ga'.[/red]")
-        return None
+    import random as _random
+
+    from src.generation.ast_utils import to_expression
+    from src.generation.template import TemplateGenerator
+    from src.decorrelation.zoo import ReferenceZoo
+    from src.simulation.config import SimConfig
+    from src.simulation.pre_filter import PreFilter
 
     engine_box = init_db(make_engine())
     session_factory = make_session_factory(engine_box)
-    client_box: dict = {}
-    per_direction_box = {"per_direction": per_direction_sims or max_sims}
-    from src.simulation.config import SimConfig
+
+    client = existing_client or _make_client()
+    if not getattr(client, "authenticated", False):
+        client.authenticate()
+
+    fields, operators, field_types, matrix_only_ops, operator_arity = _cached_symbols(session_factory)
+    if not fields:
+        console.print("[red]Chưa có fields — tải fields (menu 2) trước.[/red]")
+        return None
+
     sim_config = SimConfig(
-        region=region,
-        universe=universe,
-        delay=delay,
-        decay=decay,
-        truncation=truncation,
-        neutralization=neutralization,
+        region=region, universe=universe, delay=delay,
+        decay=decay, truncation=truncation, neutralization=neutralization,
+    )
+    pf = PreFilter(
+        known_operators=operators or None, known_fields=set(fields),
+        field_types=field_types, matrix_only_ops=matrix_only_ops,
+        operator_arity=operator_arity,
+    )
+    sim = Simulator(
+        client,
+        on_invalid_field=_make_invalid_field_recorder(session_factory, region, universe),
+    )
+    repo = AlphaRepository(session_factory)
+    zoo = ReferenceZoo.default(extra=[a.expression for a in repo.zoo(200)])
+    tgen = TemplateGenerator(fields, pf, rng=_random.Random())
+
+    engine = HybridEngine(
+        simulator=sim, prefilter=pf, fields=fields,
+        llm_generator=_make_llm_generator(session_factory, pf),
+        refiner=_make_refiner(session_factory, pf, region, universe, delay),
+        zoo=zoo, template_generator=tgen,
+        max_simulations=max_sims or None, generations=generations or None,
+        simulation_settings=sim_config.to_settings(),
     )
 
-    def prepare() -> PrepareInfo:
-        return _auto_prepare(
-            client_box, session_factory, region, universe, delay,
-            existing_client=existing_client,
-        )
+    best_nodes = _run_hybrid_with_progress(engine)
+    best_exprs = [to_expression(n) for n in best_nodes[:10]]
+    for expr in best_exprs:
+        repo.save_alpha(expr, source="hybrid")
 
-    def propose(n: int) -> list[str]:
-        if engine == "ga":
-            return [""]
-        from src.simulation.pre_filter import PreFilter
-        gen = _make_llm_generator(session_factory, PreFilter())
-        return gen.generate_ideas(n)
-
-    run_builder = _auto_run_direction_ai if engine == "ai" else _auto_run_direction_ga
-    run_direction_raw = run_builder(
-        client_box, session_factory, region, universe, delay, per_direction_box, sim_config
-    )
-
-    state = {"sims_used": 0, "dirs_total": 1}
-
-    def run_direction(direction: str) -> DirectionOutcome:
-        # Chia trần sim: phần còn lại / số hướng còn lại (hướng đầu không ăn hết).
-        # Khi per_direction_sims được set: dùng đúng giá trị đó, không chia.
-        if per_direction_sims is not None:
-            per_direction_box["per_direction"] = per_direction_sims
-        else:
-            remaining = max_sims - state["sims_used"]
-            dirs_left = max(1, state["dirs_total"])
-            per_direction_box["per_direction"] = max(1, remaining // dirs_left)
-        outcome = run_direction_raw(direction)
-        state["sims_used"] += outcome.sims_used
-        state["dirs_total"] = max(1, state["dirs_total"] - 1)
-        return outcome
-
-    def on_event(ev: AutoEvent) -> None:
-        if ev.kind == "directions":
-            state["dirs_total"] = max(1, len(ev.data.get("directions", [])))
-        logger.info("[auto:{}] {} | {}", ev.kind, ev.message, ev.data)
-        style = {"stop": "bold green", "prepare": "cyan"}.get(ev.kind, "")
-        console.print(f"[{style}]{ev.message}[/{style}]" if style else ev.message)
-
-    pipe = AutoPipeline(
-        prepare=prepare,
-        propose_directions=propose,
-        run_direction=run_direction,
-        target_passes=target_passes,
-        max_total_sims=max_sims,
-        max_directions=max_directions if engine == "ai" else 1,
-        on_event=on_event,
-        swallow_errors=swallow_errors,
-    )
-    result = pipe.run()
-
-    table = Table(title=f"Alpha đạt ngưỡng ({len(result.passed_alphas)}) — engine={engine}, dừng: {result.stop_reason}")
+    table = Table(title=f"Top alpha hybrid ({len(best_exprs)}) — {engine.simulations_used} sim")
     table.add_column("Expression", overflow="fold")
-    table.add_column("Sharpe", justify="right")
-    table.add_column("Fitness", justify="right")
-    table.add_column("Hướng nguồn", overflow="fold")
-    for p in result.passed_alphas:
-        table.add_row(
-            p.expression,
-            f"{p.sharpe:.3f}" if p.sharpe is not None else "—",
-            f"{p.fitness:.3f}" if p.fitness is not None else "—",
-            p.direction or "—",
-        )
+    for expr in best_exprs:
+        table.add_row(expr)
     console.print(table)
     console.print(
         "[dim]Đã lưu DB — xem bằng lệnh 'top'. CHƯA nộp; nộp bằng 'submit' khi muốn.[/dim]"
     )
-    return result
+    return best_nodes
 
 
 @app.command()
