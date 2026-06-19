@@ -227,11 +227,15 @@ class GeneticOptimizer:
                     new_pop.append(child)
 
                 if self.inject is not None and self.inject_every > 0 and (gen + 1) % self.inject_every == 0:
-                    for node in self.inject(scored):
+                    for i, node in enumerate(self.inject(scored)):
                         if len(new_pop) < self.population_size:
                             new_pop.append(node)
                         else:
-                            new_pop[-1] = node  # thay slot không-elite cuối
+                            # Ghi đè các slot không-elite từ cuối lên, mỗi Node một slot
+                            # riêng để không mất Node khi inject trả về nhiều phần tử.
+                            idx = self.population_size - 1 - i
+                            if idx >= self.elite_size:
+                                new_pop[idx] = node
 
                 population = new_pop
                 gen += 1

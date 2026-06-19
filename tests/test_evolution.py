@@ -177,7 +177,7 @@ def test_on_simulation_ton_trong_max_simulations():
     assert sims == list(range(1, opt.simulations_used + 1))
 
 
-def test_inject_them_node_moi_dung_nhip(monkeypatch):
+def test_inject_them_node_moi_dung_nhip():
     """inject được gọi mỗi inject_every thế hệ; Node trả về vào quần thể."""
     import random as _random
     from src.optimization.evolution import GeneticOptimizer
@@ -205,6 +205,40 @@ def test_inject_them_node_moi_dung_nhip(monkeypatch):
     assert len(inject_calls) == 2
     # Biểu thức được bơm xuất hiện trong các expression đã simulate.
     assert any("ts_mean(volume" in c for c in sim.calls)
+
+
+def test_inject_nhieu_node_khi_quan_the_day():
+    """inject() trả về 2 Node khác nhau khi new_pop đã đầy: CẢ HAI phải được
+    giữ lại ở thế hệ sau, không Node nào bị ghi đè mất (mỗi Node một slot
+    riêng, tính từ cuối quần thể lên, không đụng vùng elite)."""
+    import random as _random
+    from src.optimization.evolution import GeneticOptimizer
+    from src.generation.ast_utils import parse_expression
+
+    rng = _random.Random(0)
+    pf = PreFilter(known_operators=None, known_fields=None)
+    sim = FakeSimulator()
+    seed = parse_expression("rank(close)")
+
+    def inject(scored):
+        # Quần thể (population_size=4) đã đầy trước khi inject được gọi,
+        # nên 2 Node này phải chiếm 2 slot không-elite khác nhau.
+        return [
+            parse_expression("ts_mean(volume, 5)"),
+            parse_expression("ts_std_dev(volume, 10)"),
+        ]
+
+    opt = GeneticOptimizer(
+        simulator=sim, prefilter=pf, seed_factory=lambda: seed.copy(),
+        fields=["close", "volume"], scorer=lambda r: float(str(r).count("volume")),
+        population_size=4, generations=2, elite_size=1,
+        inject=inject, inject_every=1, rng=rng,
+    )
+    opt.run()
+    # Cả hai biểu thức bơm đều phải xuất hiện trong các expression đã simulate
+    # ở thế hệ kế tiếp — nếu code còn bug, biểu thức bơm đầu sẽ bị ghi đè mất.
+    assert any("ts_mean(volume" in c for c in sim.calls)
+    assert any("ts_std_dev(volume" in c for c in sim.calls)
 
 
 def test_generations_none_dung_theo_budget():
