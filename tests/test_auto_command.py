@@ -1,8 +1,8 @@
-"""Test lệnh `auto`, `simulate`, `run_ga`, `research` và menu `start` trong main.py.
+"""Test lệnh `auto`, `simulate`, `research` và menu `start` trong main.py.
 
 Bao gồm: _run_auto dựng HybridEngine đúng cách, lệnh `auto` không còn --engine
 (chỉ chạy hybrid), menu mục 4/5 gọi _run_auto với scope cụ thể (không phải
-OptionInfo của Typer), và các lệnh GA/research truyền đúng sim config.
+OptionInfo của Typer), và lệnh `research` truyền đúng sim config.
 """
 
 from __future__ import annotations
@@ -125,141 +125,6 @@ def test_simulate_command_truyen_day_du_sim_config(monkeypatch):
         "universe": "TOP1200",
         "config_key": "EUR|TOP1200|delay=0|INDUSTRY|decay=6|truncation=0.12",
     }
-
-
-def test_run_ga_with_progress_noi_callback_va_tra_ket_qua():
-    """_run_ga_with_progress phải gọi opt.run với on_generation/on_simulation
-    (để hiện tiến trình) và trả đúng kết quả của opt.run."""
-    from src.optimization.evolution import GenerationStats
-
-    captured = {}
-
-    class _FakeOpt:
-        def run(self, on_generation=None, on_simulation=None):
-            captured["has_gen"] = on_generation is not None
-            captured["has_sim"] = on_simulation is not None
-            # Mô phỏng vài lần gọi callback để chắc không vỡ (truy cập đúng field).
-            on_simulation(1, "rank(close)", 0.5)
-            on_generation(GenerationStats(0, 1.23, 0.4, "rank(close)"))
-            return ["node1", "node2"]
-
-    result = main._run_ga_with_progress(_FakeOpt(), total=3)
-
-    assert result == ["node1", "node2"]
-    assert captured == {"has_gen": True, "has_sim": True}
-
-
-def test_run_ga_truyen_fixed_sim_config_xuong_optimizer(monkeypatch):
-    import src.generation.template as template_mod
-    import src.optimization.evolution as evolution_mod
-
-    captured = {}
-
-    class _FakeTemplateGenerator:
-        def __init__(self, *a, **k):
-            pass
-
-        def generate(self, count):
-            return ["rank(close)"]
-
-    class _FakeOptimizer:
-        history = [type("_H", (), {"best_expression": "rank(close)"})()]
-        simulations_used = 0
-
-        def __init__(self, **kwargs):
-            captured["simulation_settings"] = kwargs.get("simulation_settings")
-
-        @staticmethod
-        def expr_to_node(expr):
-            return expr
-
-        def run(self):
-            return []
-
-    monkeypatch.setattr(main, "init_db", lambda e: e)
-    monkeypatch.setattr(main, "make_engine", lambda: None)
-    monkeypatch.setattr(main, "make_session_factory", lambda e: (lambda: None))
-    monkeypatch.setattr(main, "_cached_symbols", lambda sf: (["close"], {"rank"}, {"close": "MATRIX"}, {"rank"}, {"rank": 1}))
-    monkeypatch.setattr(main, "_make_client", lambda: _FakeClient())
-    monkeypatch.setattr(template_mod, "TemplateGenerator", _FakeTemplateGenerator)
-    monkeypatch.setattr(evolution_mod, "GeneticOptimizer", _FakeOptimizer)
-
-    main.run_ga(
-        population=1,
-        generations=1,
-        region="EUR",
-        universe="TOP1200",
-        delay=0,
-        decay=6,
-        truncation=0.12,
-        neutralization="industry",
-        seed_llm=False,
-        max_sims=0,
-    )
-
-    assert captured["simulation_settings"] == {
-        "region": "EUR",
-        "universe": "TOP1200",
-        "delay": 0,
-        "neutralization": "INDUSTRY",
-        "decay": 6,
-        "truncation": 0.12,
-    }
-
-
-def test_run_ga_truyen_operator_arity_vao_prefilter(monkeypatch):
-    import src.generation.template as template_mod
-    import src.optimization.evolution as evolution_mod
-
-    captured = {}
-
-    class _FakeTemplateGenerator:
-        def __init__(self, *a, **k):
-            pass
-
-        def generate(self, count):
-            return ["rank(close)"]
-
-    class _FakeOptimizer:
-        history = [type("_H", (), {"best_expression": "rank(close)"})()]
-        simulations_used = 0
-
-        def __init__(self, **kwargs):
-            captured["operator_arity"] = kwargs["prefilter"].operator_arity
-
-        @staticmethod
-        def expr_to_node(expr):
-            return expr
-
-        def run(self):
-            return []
-
-    monkeypatch.setattr(main, "init_db", lambda e: e)
-    monkeypatch.setattr(main, "make_engine", lambda: None)
-    monkeypatch.setattr(main, "make_session_factory", lambda e: (lambda: None))
-    monkeypatch.setattr(
-        main,
-        "_cached_symbols",
-        lambda sf: (["close"], {"rank"}, {"close": "MATRIX"}, {"rank"}, {"rank": 1}),
-    )
-    monkeypatch.setattr(main, "_make_client", lambda: _FakeClient())
-    monkeypatch.setattr(template_mod, "TemplateGenerator", _FakeTemplateGenerator)
-    monkeypatch.setattr(evolution_mod, "GeneticOptimizer", _FakeOptimizer)
-
-    main.run_ga(
-        population=1,
-        generations=1,
-        region="USA",
-        universe="TOP3000",
-        delay=1,
-        decay=0,
-        truncation=0.08,
-        neutralization="SUBINDUSTRY",
-        seed_llm=False,
-        max_sims=0,
-    )
-
-    assert captured["operator_arity"] == {"rank": 1}
 
 
 def test_research_truyen_fixed_sim_config_xuong_loop_builder(monkeypatch):

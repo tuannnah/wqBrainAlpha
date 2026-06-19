@@ -28,14 +28,7 @@ from src.simulation.simulator import Simulator
 from src.storage.db import init_db, make_engine, make_session_factory
 from src.storage.migrate import migrate_all, _same_database
 from src.storage.repository import AlphaRepository, InvalidFieldRepository
-from src.pipeline.auto import (
-    AutoEvent,
-    AutoPipeline,
-    DirectionOutcome,
-    PassedAlpha,
-    PrepareInfo,
-    passed_from_ga,
-)
+from src.pipeline.auto import PrepareInfo
 
 app = typer.Typer(help="WorldQuant Brain Auto-Alpha Tool")
 console = Console()
@@ -451,90 +444,6 @@ def generate(
     console.print(f"[green]Đã sinh {len(alphas)} alpha[/green] (method={method})")
 
 
-@app.command("run-ga")
-def run_ga(
-    population: int = typer.Option(30),
-    generations: int = typer.Option(10),
-    region: str = typer.Option(settings.default_region),
-    universe: str = typer.Option(settings.default_universe),
-    delay: int = typer.Option(settings.default_delay),
-    decay: int = typer.Option(0, "--decay", help="Fixed decay setting for GA simulations"),
-    truncation: float = typer.Option(0.08, "--truncation", help="Fixed truncation setting for GA simulations"),
-    neutralization: str = typer.Option("SUBINDUSTRY", "--neutralization", help="Fixed neutralization setting for GA simulations"),
-    seed_llm: bool = typer.Option(False, "--seed-llm", help="Trộn 50% seed từ DeepSeek"),
-    max_sims: int = typer.Option(0, "--max-sims", help="Trần số alpha mô phỏng (0 = không giới hạn, để test pipeline)"),
-) -> None:
-    """Chạy Genetic Algorithm tối ưu alpha."""
-    _setup_logging()
-    import random
-
-    from src.generation.template import TemplateGenerator
-    from src.optimization.evolution import GeneticOptimizer
-    from src.simulation.config import SimConfig
-    from src.simulation.pre_filter import PreFilter
-
-    engine = init_db(make_engine())
-    session_factory = make_session_factory(engine)
-    fields, operators, field_types, matrix_only_ops, operator_arity = _cached_symbols(session_factory)
-    if not fields:
-        console.print("[red]Chưa có fields — chạy fetch-fields trước.[/red]")
-        raise typer.Exit(code=1)
-
-    client = _make_client()
-    client.authenticate()
-    sim = Simulator(client)
-    sim_config = SimConfig(
-        region=region,
-        universe=universe,
-        delay=delay,
-        decay=decay,
-        truncation=truncation,
-        neutralization=neutralization,
-    )
-    pf = PreFilter(
-        known_operators=operators or None, known_fields=set(fields),
-        field_types=field_types, matrix_only_ops=matrix_only_ops,
-        operator_arity=operator_arity,
-    )
-    tgen = TemplateGenerator(fields, pf, rng=random.Random())
-
-    llm_pool: list[str] = []
-    if seed_llm:
-        llm_gen = _make_llm_generator(session_factory, pf)
-        ideas = llm_gen.generate_ideas(5)
-        for idea in ideas:
-            llm_pool.extend(llm_gen.generate(idea, n=2))
-        console.print(f"[cyan]LLM seed pool: {len(llm_pool)} alpha[/cyan]")
-
-    def seed_factory():
-        if llm_pool and random.random() < 0.5:
-            return GeneticOptimizer.expr_to_node(random.choice(llm_pool))
-        exprs = tgen.generate(1)
-        return GeneticOptimizer.expr_to_node(exprs[0] if exprs else f"rank({fields[0]})")
-
-    opt = GeneticOptimizer(
-        simulator=sim,
-        prefilter=pf,
-        seed_factory=seed_factory,
-        fields=fields,
-        population_size=population,
-        generations=generations,
-        max_simulations=max_sims or None,
-        simulation_settings=sim_config.to_settings(),
-    )
-    best = opt.run()
-
-    repo = AlphaRepository(session_factory)
-    from src.generation.ast_utils import to_expression
-
-    for node in best[:10]:
-        repo.save_alpha(to_expression(node), source="ga")
-    console.print(
-        f"[green]GA xong[/green] — {opt.simulations_used} lần mô phỏng — "
-        f"best: {opt.history[-1].best_expression}"
-    )
-
-
 def _make_deepseek(model: str | None = None):
     if settings.llm_backend == "agent":
         from src.llm.agent_bridge import AgentBridgeClient
@@ -830,38 +739,6 @@ def _run_research_with_progress(loop, direction, max_sims, mcts=False):
         return loop.run(direction, on_progress=on_progress)
 
 
-def _run_ga_with_progress(opt, total):
-    """Chạy GeneticOptimizer kèm thanh tiến trình (đếm sim + thế hệ)."""
-    from rich.progress import (
-        BarColumn,
-        Progress,
-        SpinnerColumn,
-        TextColumn,
-        TimeElapsedColumn,
-    )
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("sim {task.completed}/{task.total}"),
-        TimeElapsedColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("GA: khởi tạo quần thể...", total=max(1, total))
-
-        def on_sim(n, expr, score):
-            progress.update(task, completed=min(n, total))
-
-        def on_gen(stats):
-            progress.update(
-                task,
-                description=f"GA gen {stats.generation} best={stats.best_score:.3f}"[:60],
-            )
-
-        return opt.run(on_generation=on_gen, on_simulation=on_sim)
-
-
 @app.command("llm-generate")
 def llm_generate(
     idea: str = typer.Option(..., help="Ý tưởng alpha bằng ngôn ngữ tự nhiên"),
@@ -1038,82 +915,6 @@ def _auto_prepare(client_box: dict, session_factory, region, universe, delay,
     operators, _ = op_repo.ensure()
 
     return PrepareInfo(fields=len(fields), operators=len(operators))
-
-
-def _auto_run_direction_ai(client_box, session_factory, region, universe, delay, per_direction_box, sim_config):
-    """Trả callback run_direction cho engine AI."""
-    def run(direction: str) -> DirectionOutcome:
-        per_direction = per_direction_box["per_direction"]
-        loop, _deepseek = _make_research_loop(
-            session_factory, client_box["client"], region, universe, delay,
-            max_sims=per_direction, patience=3,
-            sim_config=sim_config,
-        )
-        # Hiển thị tiến trình (spinner + đếm sim + pha) để người dùng biết đang làm gì.
-        result = _run_research_with_progress(loop, direction, per_direction)
-        passed: list[PassedAlpha] = []
-        cand = result.best_candidate
-        if cand is not None and result.zoo_added > 0 and result.best_vector is not None:
-            d = result.best_vector.dimensions()
-            passed.append(
-                PassedAlpha(
-                    expression=cand.expression,
-                    sharpe=d.get("sharpe"),
-                    fitness=d.get("fitness"),
-                    direction=direction,
-                )
-            )
-        return DirectionOutcome(passed=passed, sims_used=result.sims_used)
-    return run
-
-
-def _auto_run_direction_ga(client_box, session_factory, region, universe, delay, per_direction_box, sim_config):
-    """Trả callback run_direction cho engine GA."""
-    import random
-
-    from src.generation.ast_utils import to_expression
-    from src.generation.template import TemplateGenerator
-    from src.optimization.evolution import GeneticOptimizer
-    from src.simulation.pre_filter import PreFilter
-
-    def run(direction: str) -> DirectionOutcome:
-        fields, operators, field_types, matrix_only_ops, operator_arity = _cached_symbols(session_factory)
-        pf = PreFilter(
-            known_operators=operators or None, known_fields=set(fields),
-            field_types=field_types, matrix_only_ops=matrix_only_ops,
-            operator_arity=operator_arity,
-        )
-        tgen = TemplateGenerator(fields, pf, rng=random.Random())
-        sim = Simulator(
-            client_box["client"],
-            on_invalid_field=_make_invalid_field_recorder(session_factory, region, universe),
-        )
-
-        def seed_factory():
-            exprs = tgen.generate(1)
-            return GeneticOptimizer.expr_to_node(exprs[0] if exprs else f"rank({fields[0]})")
-
-        results: dict = {}
-        original_simulate = sim.simulate
-
-        def simulate_capture(expr, **kwargs):
-            res = original_simulate(expr, **kwargs)
-            results[expr] = res
-            return res
-
-        sim.simulate = simulate_capture
-        per_direction = per_direction_box["per_direction"]
-        opt = GeneticOptimizer(
-            simulator=sim, prefilter=pf, seed_factory=seed_factory, fields=fields,
-            population_size=30, generations=10,
-            max_simulations=per_direction,
-            simulation_settings=sim_config.to_settings() if sim_config is not None else None,
-        )
-        best_nodes = _run_ga_with_progress(opt, per_direction)
-        best_exprs = [to_expression(n) for n in best_nodes]
-        passed = passed_from_ga(best_exprs, results)
-        return DirectionOutcome(passed=passed, sims_used=opt.simulations_used)
-    return run
 
 
 def _make_refiner(session_factory, prefilter, region, universe, delay):
