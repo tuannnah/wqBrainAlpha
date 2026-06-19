@@ -1226,21 +1226,19 @@ def _run_auto(region, universe, delay, max_sims=0, generations=0,
 
 @app.command()
 def auto(
-    engine: str = typer.Option("ai", help="ai | ga"),
     region: str = typer.Option(settings.default_region),
     universe: str = typer.Option(settings.default_universe),
     delay: int = typer.Option(settings.default_delay),
-    target_passes: int = typer.Option(3, "--target", help="Dừng khi đủ K alpha đạt ngưỡng"),
-    max_sims: int = typer.Option(60, "--max-sims", help="Trần cứng tổng số simulation"),
-    max_directions: int = typer.Option(0, "--directions", help="Số hướng nghiên cứu tối đa (0 = không giới hạn, engine ai)"),
+    max_sims: int = typer.Option(0, "--max-sims", help="Trần tổng simulation (0 = vô hạn)"),
+    generations: int = typer.Option(0, "--generations", help="Số thế hệ GA (0 = vô hạn)"),
     decay: int = typer.Option(0, "--decay", help="Decay simulation config"),
     truncation: float = typer.Option(0.08, "--truncation", help="Truncation simulation config"),
     neutralization: str = typer.Option("SUBINDUSTRY", "--neutralization", help="Neutralization simulation config"),
 ) -> None:
-    """Chạy toàn trình: login → cache → tìm/mô phỏng/cải thiện → log. KHÔNG nộp."""
+    """Chạy engine hybrid: login → cache → seed LLM → GA tiến hóa + LLM-in-loop. KHÔNG nộp."""
     _setup_logging()
     if _run_auto(
-        engine, region, universe, delay, target_passes, max_sims, max_directions,
+        region, universe, delay, max_sims=max_sims, generations=generations,
         decay=decay, truncation=truncation, neutralization=neutralization,
     ) is None:
         raise typer.Exit(code=1)
@@ -1300,11 +1298,6 @@ def _menu_operators(state: _MenuState) -> None:
     console.print(f"[green]Đã tải {len(operators)} operator.[/green]")
 
 
-def _menu_ask_engine() -> str:
-    raw = input("Engine [ai/ga, Enter=ai]: ").strip().lower()
-    return raw or "ai"
-
-
 def _menu_ask_sim_settings() -> dict:
     decay_raw = input("Decay [Enter=0]: ").strip()
     truncation_raw = input("Truncation [Enter=0.08]: ").strip()
@@ -1350,36 +1343,20 @@ def start() -> None:
             elif choice == "3":
                 _menu_operators(state)
             elif choice == "4":
-                engine = _menu_ask_engine()
                 sim_settings = _menu_ask_sim_settings()
-                if engine == "ai":
-                    # AI engine: chạy không giới hạn, chỉ dừng khi LLM hết token /
-                    # Ctrl+C. Không K-pass, không trần sim, không trần hướng.
-                    _run_auto(
-                        engine, state.region, state.universe, state.delay,
-                        target_passes=10**9,
-                        max_sims=10**18,
-                        max_directions=0,
-                        per_direction_sims=30,
-                        swallow_errors=True,
-                        existing_client=state.client,
-                        **sim_settings,
-                    )
-                else:
-                    _run_auto(
-                        engine, state.region, state.universe, state.delay,
-                        existing_client=state.client,
-                        **sim_settings,
-                    )
-            elif choice == "5":
-                engine = _menu_ask_engine()
-                sim_settings = _menu_ask_sim_settings()
-                console.print("[cyan]Thử luồng: tìm + mô phỏng tối đa 1 alpha...[/cyan]")
+                # Hybrid chạy vô hạn, chỉ dừng khi LLM hết token / Ctrl+C.
                 _run_auto(
-                    engine, state.region, state.universe, state.delay,
-                    target_passes=1, max_sims=1, max_directions=1,
-                    existing_client=state.client,
+                    state.region, state.universe, state.delay,
+                    swallow_errors=True, existing_client=state.client,
                     **sim_settings,
+                )
+            elif choice == "5":
+                sim_settings = _menu_ask_sim_settings()
+                console.print("[cyan]Thử luồng: seed + tiến hóa ngắn (trần nhỏ)...[/cyan]")
+                _run_auto(
+                    state.region, state.universe, state.delay,
+                    max_sims=5, generations=2,
+                    existing_client=state.client, **sim_settings,
                 )
             else:
                 console.print("[red]Lựa chọn không hợp lệ.[/red]")

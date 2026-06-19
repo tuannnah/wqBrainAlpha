@@ -1,7 +1,8 @@
-"""Test _run_auto truyền scope cụ thể (chống lỗi OptionInfo lọt vào cache key).
+"""Test lệnh `auto`, `simulate`, `run_ga`, `research` và menu `start` trong main.py.
 
-Regression: trước đây start() gọi lệnh Typer auto() như hàm thường -> region/
-universe/delay là typer OptionInfo -> cache key sai -> gọi API -> HTTP 400.
+Bao gồm: _run_auto dựng HybridEngine đúng cách, lệnh `auto` không còn --engine
+(chỉ chạy hybrid), menu mục 4/5 gọi _run_auto với scope cụ thể (không phải
+OptionInfo của Typer), và các lệnh GA/research truyền đúng sim config.
 """
 
 from __future__ import annotations
@@ -15,25 +16,6 @@ class _FakeClient:
 
     def authenticate(self, *a, **k):
         return None
-
-
-class _FakeFieldRepo:
-    scope = None
-
-    def __init__(self, *a, **k):
-        pass
-
-    def ensure(self, region, universe, delay, **k):
-        _FakeFieldRepo.scope = (region, universe, delay)
-        return ([1, 2, 3], False)
-
-
-class _FakeOpRepo:
-    def __init__(self, *a, **k):
-        pass
-
-    def ensure(self, force=False):
-        return ([1], False)
 
 
 class _FakeGen:
@@ -322,7 +304,7 @@ def test_research_truyen_fixed_sim_config_xuong_loop_builder(monkeypatch):
 
 def test_start_menu_truyen_sim_settings_xuong_run_auto(monkeypatch):
     captured = {}
-    answers = iter(["5", "ai", "6", "0.12", "industry", "0"])
+    answers = iter(["5", "6", "0.12", "industry", "0"])
 
     class _FakeState:
         region = "EUR"
@@ -334,10 +316,9 @@ def test_start_menu_truyen_sim_settings_xuong_run_auto(monkeypatch):
         def logged_in(self):
             return True
 
-    def _fake_run_auto(engine, region, universe, delay, **kwargs):
+    def _fake_run_auto(region, universe, delay, **kwargs):
         captured.update(
             {
-                "engine": engine,
                 "scope": (region, universe, delay),
                 "decay": kwargs["decay"],
                 "truncation": kwargs["truncation"],
@@ -354,9 +335,31 @@ def test_start_menu_truyen_sim_settings_xuong_run_auto(monkeypatch):
     main.start()
 
     assert captured == {
-        "engine": "ai",
         "scope": ("EUR", "TOP1200", 0),
         "decay": 6,
         "truncation": 0.12,
         "neutralization": "INDUSTRY",
     }
+
+
+def test_lenh_auto_khong_con_engine_option(monkeypatch):
+    """auto gọi _run_auto KHÔNG truyền engine; có --max-sims."""
+    import main
+    from typer.testing import CliRunner
+
+    called = {}
+
+    def fake_run_auto(region, universe, delay, max_sims=0, generations=0,
+                      existing_client=None, swallow_errors=False,
+                      decay=0, truncation=0.08, neutralization="SUBINDUSTRY"):
+        called["max_sims"] = max_sims
+        called["generations"] = generations
+        return ["node"]
+
+    monkeypatch.setattr(main, "_run_auto", fake_run_auto)
+    monkeypatch.setattr(main, "_setup_logging", lambda: None)
+    runner = CliRunner()
+    result = runner.invoke(main.app, ["auto", "--max-sims", "7", "--generations", "3"])
+    assert result.exit_code == 0, result.output
+    assert called["max_sims"] == 7
+    assert called["generations"] == 3
