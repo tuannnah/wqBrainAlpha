@@ -21,6 +21,18 @@ def _hyp():
     return Hypothesis("quan sát", "nền", "lý giải", "dùng close, cửa sổ 5")
 
 
+def test_suggest_fields_tra_field_that_gan_nhat():
+    """Field thật gần 'bad_field': cùng tiền tố dataset + trùng token đứng trước."""
+    fields = FakeSymbolRepo(["opt6_1dorhv_real", "opt6_close", "news12_sent", "close"])
+    ops = FakeSymbolRepo(["rank"])
+    pf = PreFilter(known_operators={"rank"}, known_fields={"close"})
+    tr = AlphaTranslator(FakeDeepSeek(), fields, ops, pf)
+
+    out = tr._suggest_fields("opt6_1dorhv")
+    assert "opt6_1dorhv_real" in out  # cùng tiền tố opt6_ + trùng token 1dorhv
+    assert out[0].startswith("opt6_")  # field cùng dataset đứng đầu, không phải 'close'
+
+
 def test_translate_qua_buoc_mo_ta_roi_bieu_thuc():
     ds = FakeDeepSeek(
         [
@@ -112,6 +124,47 @@ def test_prompt_cam_doi_so_co_ten_keyvalue():
     low = ds.calls[1][0].lower()
     assert "vị trí" in low  # đối số theo vị trí
     assert "key=value" in low or "std=" in low  # cảnh báo không dùng đối số có tên
+
+
+def test_prompt_neu_field_type_va_cach_giam_vector_truoc_matrix_ops():
+    """Log thực tế cho thấy LLM hay gọi ts_zscore/rank trực tiếp trên VECTOR field."""
+
+    class _Field:
+        def __init__(self, id, type):
+            self.id = id
+            self.type = type
+            self.description = ""
+            self.dataset_id = ""
+
+    class _FieldRepo:
+        def load_cached(self, region=None, universe=None, delay=None):
+            return [
+                _Field("close", "MATRIX"),
+                _Field("composite_sentiment_score_2", "VECTOR"),
+            ]
+
+    pf = PreFilter(
+        known_operators={"rank", "ts_zscore", "vec_avg", "vec_sum"},
+        known_fields={"close", "composite_sentiment_score_2"},
+        field_types={"close": "MATRIX", "composite_sentiment_score_2": "VECTOR"},
+        matrix_only_ops={"rank", "ts_zscore"},
+    )
+    tr = AlphaTranslator(
+        FakeDeepSeek([json.dumps({"description": "d"}), json.dumps({"expression": "rank(close)"})]),
+        _FieldRepo(),
+        FakeSymbolRepo(["rank", "ts_zscore", "vec_avg", "vec_sum"]),
+        pf,
+    )
+
+    h = Hypothesis("qs composite sentiment", "nền", "lý giải", "dùng composite_sentiment_score_2")
+    tr.translate(h)
+    expr_system = tr.deepseek.calls[1][0]
+
+    assert "VECTOR" in expr_system
+    assert "composite_sentiment_score_2" in expr_system
+    assert "vec_avg" in expr_system
+    assert "vec_sum" in expr_system
+    assert "ts_zscore(vec_avg(composite_sentiment_score_2)" in expr_system
 
 
 # ------------------------- chọn fields theo độ liên quan với hypothesis/mô tả

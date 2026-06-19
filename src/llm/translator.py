@@ -13,6 +13,7 @@ from loguru import logger
 
 from src.llm.hypothesis import Hypothesis
 from src.llm.jsonutil import extract_json
+from src.simulation.simulator import extract_rejected_field
 
 MAX_FIELDS_IN_PROMPT = 40
 MAX_REPAIR_ATTEMPTS = 3
@@ -89,19 +90,51 @@ class AlphaTranslator:
         scored.sort(key=lambda t: (-t[0], t[1]))
         return [fid for _, _, fid in scored[:MAX_FIELDS_IN_PROMPT]]
 
+    @staticmethod
+    def _field_type_context(selected_fields) -> str:
+        by_type: dict[str, list[str]] = {}
+        for field in selected_fields:
+            fid = getattr(field, "id", None)
+            ftype = (getattr(field, "type", "") or "").strip().upper()
+            if fid and ftype:
+                by_type.setdefault(ftype, []).append(fid)
+        if not by_type:
+            return ""
+
+        lines = ["FIELD TYPES (dung de tranh sai kieu input):"]
+        for ftype in ("MATRIX", "VECTOR", "GROUP", "EVENT"):
+            values = by_type.get(ftype)
+            if values:
+                lines.append(f"- {ftype}: {', '.join(values[:20])}")
+        vector_fields = by_type.get("VECTOR") or []
+        if vector_fields:
+            sample = vector_fields[0]
+            lines.append(
+                "QUY TAC VECTOR: khong goi truc tiep ts_zscore/ts_mean/ts_rank/rank tren VECTOR field. "
+                "Hay giam VECTOR ve MATRIX bang vec_avg(field) hoac vec_sum(field) truoc. "
+                f"Vi du: ts_zscore(vec_avg({sample}), 20), rank(vec_avg({sample}))."
+            )
+        return "\n".join(lines)
+
     def _symbol_context(self, text: str = "") -> str:
         operators = [o.name for o in self.operator_repo.load_cached() if getattr(o, "name", None)]
         cached_fields = self.field_repo.load_cached(**self._scope) if self._scope else self.field_repo.load_cached()
         fields = self._relevant_fields(cached_fields, text)
+        field_by_id = {getattr(f, "id", None): f for f in cached_fields if getattr(f, "id", None)}
+        selected_fields = [field_by_id[fid] for fid in fields if fid in field_by_id]
+        type_context = self._field_type_context(selected_fields)
         op_line = ", ".join(operators[:80]) or "rank, ts_delta, ts_mean, group_neutralize, ts_corr"
         field_line = ", ".join(fields) or "close, open, high, low, volume, vwap, returns"
         examples = "\n".join(f"- {e}" for e in FEWSHOT_EXAMPLES)
-        return (
+        context = (
             f"OPERATORS hợp lệ: {op_line}\n"
             f"FIELDS khả dụng: {field_line}\n"
             "GROUPS cho neutralize: market, sector, industry, subindustry\n"
             f"Ví dụ alpha hợp lệ:\n{examples}"
         )
+        if type_context:
+            context += f"\n{type_context}"
+        return context
 
     # ----------------------------------------------------------- step 1
     def _describe(self, hypothesis: Hypothesis) -> str:
@@ -135,6 +168,27 @@ class AlphaTranslator:
             "- Đối số chỉ là field/group đã liệt kê, biểu thức con, hoặc SỐ NGUYÊN.\n"
         )
 
+    def _suggest_fields(self, bad_field: str, limit: int = 5) -> list[str]:
+        """Field thật gần 'bad_field' nhất: ưu tiên cùng tiền tố dataset, rồi trùng token."""
+        cached = self.field_repo.load_cached(**self._scope) if self._scope else self.field_repo.load_cached()
+        bad_low = (bad_field or "").lower()
+        bad_prefix = bad_low.split("_", 1)[0]
+        bad_tokens = set(re.findall(r"[a-z0-9]+", bad_low))
+        scored = []
+        for f in cached:
+            fid = getattr(f, "id", None)
+            if not fid:
+                continue
+            fl = fid.lower()
+            score = 0
+            if bad_prefix and fl.startswith(bad_prefix):
+                score += 50
+            score += len(set(re.findall(r"[a-z0-9]+", fl)) & bad_tokens)
+            if score:
+                scored.append((score, fid))
+        scored.sort(key=lambda t: -t[0])
+        return [fid for _, fid in scored[:limit]]
+
     def _to_expression(self, description: str, relevance_text: str = "") -> str | None:
         system = (
             "Bạn là chuyên gia viết biểu thức FASTEXPR trên WorldQuant BRAIN.\n"
@@ -155,7 +209,13 @@ class AlphaTranslator:
             if ok:
                 return expr
             logger.info("Translator expr lỗi (lần {}): {} — {}", attempt + 1, expr, reason)
-            user = f'Biểu thức "{expr}" bị lỗi: {reason}. Sửa lại, trả JSON.'
+            bad = extract_rejected_field(reason)
+            hint = ""
+            if bad:
+                suggestions = self._suggest_fields(bad)
+                if suggestions:
+                    hint = f" Field có thật gần nhất: {', '.join(suggestions)}."
+            user = f'Biểu thức "{expr}" bị lỗi: {reason}.{hint} Sửa lại, trả JSON.'
         return None
 
     # ----------------------------------------------------------- public
