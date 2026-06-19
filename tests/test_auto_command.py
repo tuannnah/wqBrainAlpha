@@ -35,7 +35,7 @@ def test_run_auto_chay_hybrid_va_luu_db(monkeypatch):
         def __init__(self, **kw):
             captured["kw"] = kw
 
-        def run(self, on_generation=None, on_simulation=None, on_inject=None):
+        def run(self, on_generation=None, on_simulation=None):
             self.simulations_used = 3
             self.history = []
             from src.generation.ast_utils import parse_expression

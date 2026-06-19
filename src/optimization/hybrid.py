@@ -103,7 +103,7 @@ class HybridEngine:
         return inject
 
     # --------------------------------------------------------------------- run
-    def run(self, on_generation=None, on_simulation=None, on_inject=None) -> list[Node]:
+    def run(self, on_generation=None, on_simulation=None) -> list[Node]:
         pool = self._seed_pool()
 
         # Bọc simulator để bắt raw result theo expression (phục vụ inject).
