@@ -72,14 +72,17 @@ HybridEngine.run()
 | `AlphaRefiner` cần `AlphaTranslator` | Dịch mô tả → biểu thức | Tái dùng |
 
 ### Sửa `GeneticOptimizer`
-1. **Hook inject**: thêm callback tùy chọn `inject(scored_population) -> list[Node]` gọi mỗi
-   `inject_every` thế hệ; các Node trả về được thêm vào quần thể (thay thế cá thể yếu nhất để giữ
-   `population_size`). Khi `inject is None` → hành vi như cũ.
-2. **Chạy vô hạn**: khi `generations is None`, vòng `for gen in range(...)` đổi thành
-   `while not should_stop()`; thêm callback tùy chọn `should_stop() -> bool`. Khi `generations` là số
-   nguyên → hành vi như cũ (giới hạn theo số thế hệ).
-3. Cả hai thay đổi giữ tương thích ngược: mặc định `inject=None`, `should_stop=None`,
-   `generations=10` như hiện tại nên test GA cũ không đổi hành vi.
+1. **Hook inject**: thêm thuộc tính tùy chọn `inject` (callable(scored) -> list[Node]) + `inject_every`
+   (int, mặc định 0 = không bao giờ). Mỗi `inject_every` thế hệ, gọi `inject(scored)`; các Node trả về
+   được thêm vào `new_pop` (chèn vào các slot không-elite cuối để giữ `population_size`). Khi
+   `inject is None` hoặc `inject_every == 0` → hành vi như cũ.
+2. **Chạy vô hạn**: cho phép `generations: int | None`. Khi `generations is None`, vòng
+   `for gen in range(...)` đổi thành `while True` (đếm `gen` thủ công). Dừng do: `_budget_exhausted()`
+   (đã có sẵn, khi `max_simulations` được set) hoặc `KeyboardInterrupt`. Bọc thân vòng trong
+   `try/except KeyboardInterrupt: break` để Ctrl+C trả best-so-far thay vì ném ra ngoài; sau khi bắt
+   Ctrl+C, sắp xếp `population` theo điểm đã cache (không simulate thêm).
+3. Giữ tương thích ngược: mặc định `inject=None`, `inject_every=0`, `generations=10` như hiện tại nên
+   test GA cũ không đổi hành vi.
 
 ### `HybridEngine` (orchestrator mới)
 - Tham số: `simulator`, `prefilter`, `fields`, `llm_generator`, `refiner`, `zoo`, `scorer`,
@@ -91,12 +94,12 @@ HybridEngine.run()
   - `inject`: lấy `refine_top` cá thể tốt; với mỗi cá thể xác định chiều yếu nhất từ metrics đã
     cache → `refiner.refine(...)` → parse biểu thức → lọc PreFilter + ReferenceZoo (bỏ trùng/đồng
     dạng) → trả Node.
-  - **LLM 402 (hết token)**: set cờ nội bộ `_llm_disabled = True` → từ đó bỏ qua phần inject
-    (LLM-in-loop tắt), nhưng GA **vẫn tiếp tục** với quần thể hiện có. 402 KHÔNG làm `should_stop`
-    trả True.
-  - `should_stop`: chỉ trả True khi chạm `max_simulations` (nếu được set). Mặc định `None` → không
-    bao giờ tự dừng; vòng lặp chỉ kết thúc do **Ctrl+C** (`KeyboardInterrupt` bắt ở tầng CLI, không
-    qua `should_stop`).
+  - **LLM 402 (hết token)**: client ném `RuntimeError("Error code: 402 ...")`. `HybridEngine` bắt
+    `Exception` ở seed/inject, set cờ nội bộ `_llm_disabled = True` → từ đó `inject` trả `[]` (LLM-in-loop
+    tắt), nhưng GA **vẫn tiếp tục** với quần thể hiện có.
+  - **Dừng**: GA dừng do `_budget_exhausted()` (khi `max_simulations` set) hoặc `KeyboardInterrupt`
+    (Ctrl+C, bắt trong `GeneticOptimizer.run()`). Mặc định `max_simulations=None` + `generations=None`
+    → chạy đến khi Ctrl+C.
 
 ## 5. Dọn dẹp bề mặt (đúng "hợp nhất")
 
@@ -143,8 +146,9 @@ HybridEngine.run()
   - Biến thể trùng/đồng dạng zoo bị loại, không vào quần thể.
   - LLM ném 402 ở refine → GA vẫn tiến hóa tiếp (không raise, không dừng).
   - `max_simulations` nhỏ → kết thúc xác định; trả top hiện có.
-- `tests/test_evolution.py` (hoặc test GA hiện có): hook `inject` thêm Node đúng cách; chạy
-  `generations=None` dừng theo `should_stop`; mặc định (không hook) hành vi không đổi.
+- `tests/test_evolution.py`: hook `inject` thêm Node đúng mỗi `inject_every` thế hệ; chạy
+  `generations=None` dừng theo `max_simulations` (budget) và theo `KeyboardInterrupt`; mặc định
+  (không hook) hành vi không đổi.
 - `tests/test_auto_command.py`: xóa test nhánh ai/ga và test gắn `run-ga`; thay bằng test đường
   hybrid duy nhất cho `_run_auto`/`auto`/menu.
 
