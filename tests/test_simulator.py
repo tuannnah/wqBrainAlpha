@@ -256,6 +256,22 @@ def test_pre_sim_validator_ok_thi_van_goi_api():
     assert any(c[0] == "POST" for c in client.calls)
 
 
+def test_field_chet_giua_phien_bi_loai_ngay():
+    """Recorder loại field khỏi known_fields -> lần sau cùng phiên bị tiền-kiểm chặn."""
+    from src.simulation.pre_filter import PreFilter
+
+    pf = PreFilter(known_fields={"close", "dead_fld"}, known_operators={"rank"})
+
+    def recorder(field_id):
+        pf.known_fields.discard(field_id)
+
+    # trước khi loại: dead_fld còn hợp lệ
+    assert pf.check("rank(dead_fld)")[0] is True
+    recorder("dead_fld")  # mô phỏng WQ báo dead_fld chết giữa phiên
+    # sau khi loại: bị tiền-kiểm chặn, không tốn sim
+    assert pf.check("rank(dead_fld)")[0] is False
+
+
 def test_simulate_thieu_location_tra_error():
     client = FakeClient()
     client.queue_post(FakeResponse(201, headers={}))

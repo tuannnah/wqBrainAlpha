@@ -413,6 +413,21 @@ def _make_invalid_field_recorder(session_factory, region, universe):
     return record
 
 
+def _make_validated_simulator(client, pf, session_factory, region, universe):
+    """Dựng Simulator có cổng tiền-kiểm (pf.check) + recorder loại field chết khỏi
+    pf.known_fields ngay trong phiên (không thử lại) và ghi blacklist bền vững."""
+    record = _make_invalid_field_recorder(session_factory, region, universe)
+
+    def on_invalid_field(field_id: str) -> None:
+        if pf.known_fields is not None:
+            pf.known_fields.discard(field_id)
+        record(field_id)
+
+    return Simulator(
+        client, on_invalid_field=on_invalid_field, pre_sim_validator=pf.check
+    )
+
+
 @app.command()
 def generate(
     method: str = typer.Option("template", help="Phương pháp sinh (hiện hỗ trợ: template)"),
@@ -603,9 +618,7 @@ def _make_research_loop(
         hypothesis_gen=HypothesisGenerator(deepseek),
         translator=translator,
         refiner=refiner,
-        simulator=Simulator(
-            client, on_invalid_field=_make_invalid_field_recorder(session_factory, region, universe)
-        ),
+        simulator=_make_validated_simulator(client, pf, session_factory, region, universe),
         prefilter=pf,
         repo=repo,
         region=region,
@@ -992,10 +1005,7 @@ def _run_auto(region, universe, delay, max_sims=0, generations=0,
         field_types=field_types, matrix_only_ops=matrix_only_ops,
         operator_arity=operator_arity,
     )
-    sim = Simulator(
-        client,
-        on_invalid_field=_make_invalid_field_recorder(session_factory, region, universe),
-    )
+    sim = _make_validated_simulator(client, pf, session_factory, region, universe)
     repo = AlphaRepository(session_factory)
     zoo = ReferenceZoo.default(extra=[a.expression for a in repo.zoo(200)])
     tgen = TemplateGenerator(fields, pf, rng=_random.Random())
