@@ -190,12 +190,14 @@ def build_feedback_prompt(top_alphas, weak_fields) -> str:
 
 
 class LLMAlphaGenerator:
-    def __init__(self, deepseek, field_repo, operator_repo, prefilter, repo=None):
+    def __init__(self, deepseek, field_repo, operator_repo, prefilter, repo=None, blacklist=None):
         self.deepseek = deepseek
         self.field_repo = field_repo
         self.operator_repo = operator_repo
         self.prefilter = prefilter
         self.repo = repo  # AlphaRepository để lấy phản hồi (top alpha / failures); None -> không feedback
+        # Field WQ đã từ chối (chết/event) — cấm LLM nêu lại để khỏi tốn lượt sim.
+        self.blacklist = set(blacklist or ())
 
     def _feedback_context(self) -> str:
         """Ngữ cảnh phản hồi từ DB: top alpha để khai thác + field yếu để tránh."""
@@ -319,6 +321,13 @@ class LLMAlphaGenerator:
         themes = "\n".join(f"- {t}" for t in ALT_DATA_THEMES)
         cliches = "; ".join(CLICHE_PATTERNS)
         field_context = self._idea_field_context()
+        blacklist_line = ""
+        if self.blacklist:
+            cam = ", ".join(sorted(self.blacklist)[:50])
+            blacklist_line = (
+                "TUYỆT ĐỐI KHÔNG dùng field sau (WQ đã từ chối/chết): "
+                f"{cam}.\n"
+            )
         return (
             "Bạn là nhà nghiên cứu alpha định lượng trên WorldQuant BRAIN, săn tín "
             "hiệu ĐỘC ĐÁO có correlation thấp với các factor đại trà.\n"
@@ -330,6 +339,7 @@ class LLMAlphaGenerator:
             f"{themes}\n"
             "AVAILABLE NON-PRICE DATASETS/FIELDS from cache. Prefer these concrete IDs when they match the thesis:\n"
             f"{field_context}\n"
+            f"{blacklist_line}"
             "Mỗi ý tưởng là một câu ngắn nêu rõ NGUỒN DỮ LIỆU + hiện tượng kinh tế "
             "khai thác (không phải tên operator). Đa dạng nguồn, không lặp một mạch.\n"
             'Trả JSON đúng định dạng: {"ideas": ["...", "..."]}.'

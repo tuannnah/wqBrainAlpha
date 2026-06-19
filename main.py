@@ -570,9 +570,12 @@ def _make_llm_generator(session_factory, prefilter):
     deepseek = _make_deepseek()
     field_repo = FieldRepository(None, session_factory)
     op_repo = OperatorRepository(None, session_factory)
+    # blacklist field chết -> cấm LLM nêu lại trong prompt sinh ý tưởng.
+    blacklist = InvalidFieldRepository(session_factory).blacklist()
     # repo -> bộ sinh hướng đọc phản hồi từ DB (top alpha để khai thác, field yếu tránh).
     return LLMAlphaGenerator(
-        deepseek, field_repo, op_repo, prefilter, repo=AlphaRepository(session_factory)
+        deepseek, field_repo, op_repo, prefilter,
+        repo=AlphaRepository(session_factory), blacklist=blacklist,
     )
 
 
