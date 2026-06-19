@@ -54,11 +54,13 @@ class GeneticOptimizer:
     operators_by_arity: dict = field(default_factory=lambda: {k: list(v) for k, v in DEFAULT_OPERATORS_BY_ARITY.items()})
     param_choices: list = field(default_factory=lambda: list(DEFAULT_PARAM_CHOICES))
     population_size: int = 30
-    generations: int = 10
+    generations: int | None = 10  # None = chạy vô hạn (dừng do budget/Ctrl+C)
     crossover_rate: float = 0.4
     mutation_rate: float = 0.4
     elite_size: int = 2
     tournament_size: int = 3
+    inject: object = None       # callable(scored) -> list[Node]; None = không bơm
+    inject_every: int = 0       # >0: mỗi N thế hệ gọi inject() và bơm Node trả về
     max_depth: int = 6
     max_nodes: int = 30
     max_simulations: int | None = None  # trần số lần simulate thật (None = không giới hạn)
@@ -182,49 +184,62 @@ class GeneticOptimizer:
 
         on_generation(stats): gọi sau khi tổng kết mỗi thế hệ.
         on_simulation(n, expr, score): gọi mỗi lần simulate thật (qua evaluate).
+
+        generations=None -> chạy vô hạn, dừng do _budget_exhausted() hoặc Ctrl+C.
+        inject (mỗi inject_every thế hệ) -> bơm Node mới vào quần thể.
         """
         self._on_simulation = on_simulation
         population = self._seed_population()
+        gen = 0
+        try:
+            while self.generations is None or gen < self.generations:
+                scored = [(ind, self.evaluate(ind)) for ind in population]
+                scored.sort(key=lambda x: x[1], reverse=True)
 
-        for gen in range(self.generations):
-            scored = [(ind, self.evaluate(ind)) for ind in population]
-            scored.sort(key=lambda x: x[1], reverse=True)
-
-            valid = [s for _, s in scored if s != NEG_INF]
-            best = scored[0][1]
-            avg = sum(valid) / len(valid) if valid else NEG_INF
-            stats = GenerationStats(gen, best, avg, to_expression(scored[0][0]))
-            self.history.append(stats)
-            logger.info(
-                "Gen {}: best={:.4f} avg={:.4f} expr={}",
-                gen,
-                best,
-                avg,
-                stats.best_expression,
-            )
-            if on_generation is not None:
-                on_generation(stats)
-
-            if self._budget_exhausted():
+                valid = [s for _, s in scored if s != NEG_INF]
+                best = scored[0][1]
+                avg = sum(valid) / len(valid) if valid else NEG_INF
+                stats = GenerationStats(gen, best, avg, to_expression(scored[0][0]))
+                self.history.append(stats)
                 logger.info(
-                    "Đã đạt giới hạn {} simulation — dừng tiến hóa.", self.max_simulations
+                    "Gen {}: best={:.4f} avg={:.4f} expr={}",
+                    gen, best, avg, stats.best_expression,
                 )
-                break
+                if on_generation is not None:
+                    on_generation(stats)
 
-            elites = [ind.copy() for ind, _ in scored[: self.elite_size]]
-            new_pop = elites
-            while len(new_pop) < self.population_size:
-                r = self.rng.random()
-                if r < self.crossover_rate and len(scored) >= 2:
-                    child, _ = self.crossover(self._tournament(scored), self._tournament(scored))
-                elif r < self.crossover_rate + self.mutation_rate:
-                    child = self.mutate(self._tournament(scored))
-                else:
-                    child = self.seed_factory()
-                new_pop.append(child)
-            population = new_pop
+                if self._budget_exhausted():
+                    logger.info(
+                        "Đã đạt giới hạn {} simulation — dừng tiến hóa.", self.max_simulations
+                    )
+                    break
 
-        final = [(ind, self.evaluate(ind)) for ind in population]
+                elites = [ind.copy() for ind, _ in scored[: self.elite_size]]
+                new_pop = elites
+                while len(new_pop) < self.population_size:
+                    r = self.rng.random()
+                    if r < self.crossover_rate and len(scored) >= 2:
+                        child, _ = self.crossover(self._tournament(scored), self._tournament(scored))
+                    elif r < self.crossover_rate + self.mutation_rate:
+                        child = self.mutate(self._tournament(scored))
+                    else:
+                        child = self.seed_factory()
+                    new_pop.append(child)
+
+                if self.inject is not None and self.inject_every > 0 and (gen + 1) % self.inject_every == 0:
+                    for node in self.inject(scored):
+                        if len(new_pop) < self.population_size:
+                            new_pop.append(node)
+                        else:
+                            new_pop[-1] = node  # thay slot không-elite cuối
+
+                population = new_pop
+                gen += 1
+        except KeyboardInterrupt:
+            logger.info("Ctrl+C — dừng tiến hóa, trả best hiện có.")
+
+        # Sắp xếp theo điểm đã cache, KHÔNG simulate thêm (an toàn sau Ctrl+C/budget).
+        final = [(ind, self._cache.get(to_expression(ind), NEG_INF)) for ind in population]
         final.sort(key=lambda x: x[1], reverse=True)
         return [ind for ind, _ in final]
 

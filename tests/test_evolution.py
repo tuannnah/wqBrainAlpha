@@ -175,3 +175,53 @@ def test_on_simulation_ton_trong_max_simulations():
     opt.run(on_simulation=lambda n, expr, score: sims.append(n))
     assert opt.simulations_used <= 2
     assert sims == list(range(1, opt.simulations_used + 1))
+
+
+def test_inject_them_node_moi_dung_nhip(monkeypatch):
+    """inject được gọi mỗi inject_every thế hệ; Node trả về vào quần thể."""
+    import random as _random
+    from src.optimization.evolution import GeneticOptimizer
+    from src.generation.ast_utils import parse_expression, to_expression
+
+    rng = _random.Random(0)
+    pf = PreFilter(known_operators=None, known_fields=None)
+    sim = FakeSimulator()
+    seed = parse_expression("rank(close)")
+
+    inject_calls = []
+
+    def inject(scored):
+        inject_calls.append(len(scored))
+        return [parse_expression("ts_mean(volume, 5)")]
+
+    opt = GeneticOptimizer(
+        simulator=sim, prefilter=pf, seed_factory=lambda: seed.copy(),
+        fields=["close", "volume"], scorer=lambda r: float(str(r).count("volume")),
+        population_size=4, generations=4, elite_size=1,
+        inject=inject, inject_every=2, rng=rng,
+    )
+    opt.run()
+    # 4 thế hệ, inject_every=2 -> gọi sau gen index 1 và 3 => 2 lần.
+    assert len(inject_calls) == 2
+    # Biểu thức được bơm xuất hiện trong các expression đã simulate.
+    assert any("ts_mean(volume" in c for c in sim.calls)
+
+
+def test_generations_none_dung_theo_budget():
+    """generations=None: chạy đến khi chạm max_simulations rồi dừng."""
+    import random as _random
+    from src.optimization.evolution import GeneticOptimizer
+    from src.generation.ast_utils import parse_expression
+
+    pf = PreFilter(known_operators=None, known_fields=None)
+    sim = FakeSimulator()
+    seed = parse_expression("rank(close)")
+    opt = GeneticOptimizer(
+        simulator=sim, prefilter=pf, seed_factory=lambda: seed.copy(),
+        fields=["close"], scorer=lambda r: 1.0,
+        population_size=3, generations=None, max_simulations=5,
+        rng=_random.Random(0),
+    )
+    best = opt.run()
+    assert opt.simulations_used <= 6  # không vượt trần quá 1 quần thể
+    assert best  # vẫn trả danh sách Node
