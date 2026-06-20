@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from src.llm import expr_synth
 from src.simulation.pre_filter import PreFilter
-from tests.fakes import FakeSymbolRepo
+from tests.fakes import FakeDeepSeek, FakeSymbolRepo
 
 
 def test_autowrap_boc_vec_avg_leaf_vector_duoi_matrix_op():
@@ -106,3 +107,52 @@ def test_suggest_fields_uu_tien_cung_tien_to_dataset():
     out = expr_synth.suggest_fields(repo, scope=None, bad_field="opt6_1dorhv")
     assert "opt6_1dorhv_real" in out
     assert out[0].startswith("opt6_")
+
+
+def test_repair_tra_expr_khi_pass_lan_dau():
+    pf = PreFilter(known_operators={"rank"}, known_fields={"close"})
+    ds = FakeDeepSeek([json.dumps({"expression": "rank(close)"})])
+    out = expr_synth.repair_to_expression(
+        ds, pf, _FieldRepo([_Field("close")]), None, "sys", "usr", task=None
+    )
+    assert out == "rank(close)"
+    assert len(ds.calls) == 1
+
+
+def test_repair_autowrap_pass_khong_goi_lai_llm():
+    pf = PreFilter(
+        known_operators={"ts_zscore", "vec_avg"},
+        known_fields={"svec"},
+        field_types={"svec": "VECTOR"},
+        matrix_only_ops={"ts_zscore"},
+    )
+    ds = FakeDeepSeek([json.dumps({"expression": "ts_zscore(svec, 20)"})])
+    out = expr_synth.repair_to_expression(
+        ds, pf, _FieldRepo([_Field("svec", "VECTOR")]), None, "sys", "usr", task=None
+    )
+    assert out == "ts_zscore(vec_avg(svec), 20)"
+    assert len(ds.calls) == 1  # auto-wrap sửa, không cần round-trip thêm
+
+
+def test_repair_them_hint_field_khi_field_bia():
+    pf = PreFilter(known_operators={"rank"}, known_fields={"opt6_real"})
+    ds = FakeDeepSeek([
+        json.dumps({"expression": "rank(opt6_bia)"}),   # field bịa -> fail
+        json.dumps({"expression": "rank(opt6_real)"}),  # sửa lại hợp lệ
+    ])
+    out = expr_synth.repair_to_expression(
+        ds, pf, _FieldRepo([_Field("opt6_real")]), None, "sys", "usr", task=None
+    )
+    assert out == "rank(opt6_real)"
+    # lượt user thứ 2 phải chứa hint field thật gần nhất
+    assert "opt6_real" in ds.calls[1][1]
+
+
+def test_repair_tra_none_khi_het_retry():
+    pf = PreFilter(known_operators={"rank"}, known_fields={"close"})
+    ds = FakeDeepSeek([json.dumps({"expression": "bad_op(x)"})] * 5)
+    out = expr_synth.repair_to_expression(
+        ds, pf, _FieldRepo([_Field("close")]), None, "sys", "usr", task=None
+    )
+    assert out is None
+    assert len(ds.calls) == expr_synth.MAX_REPAIR_ATTEMPTS

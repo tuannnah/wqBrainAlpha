@@ -12,6 +12,8 @@ import re
 from loguru import logger
 
 from src.generation.ast_utils import Leaf, Node, parse_expression, to_expression
+from src.llm.jsonutil import extract_json
+from src.simulation.simulator import extract_rejected_field
 
 MAX_REPAIR_ATTEMPTS = 3
 MAX_FIELDS_IN_PROMPT = 40
@@ -179,3 +181,28 @@ def suggest_fields(field_repo, scope, bad_field: str, limit: int = 5) -> list[st
             scored.append((score, fid))
     scored.sort(key=lambda t: -t[0])
     return [fid for _, fid in scored[:limit]]
+
+
+def repair_to_expression(deepseek, prefilter, field_repo, scope, system, user, task) -> str | None:
+    """Vòng LLM -> auto-wrap -> prefilter.check -> retry kèm hint field thay thế."""
+    field_types = getattr(prefilter, "field_types", None)
+    matrix_only = getattr(prefilter, "matrix_only_ops", None)
+    for attempt in range(MAX_REPAIR_ATTEMPTS):
+        data = extract_json(deepseek.complete(system, user, json_mode=True, task=task))
+        expr = data.get("expression") if isinstance(data, dict) else None
+        if not expr:
+            user = 'Trả ĐÚNG JSON {"expression": "..."}.'
+            continue
+        expr = autowrap_vector_fields(expr, field_types, matrix_only)
+        ok, reason = prefilter.check(expr)
+        if ok:
+            return expr
+        logger.info("LLM expr lỗi (lần {}): {} — {}", attempt + 1, expr, reason)
+        bad = extract_rejected_field(reason)
+        hint = ""
+        if bad:
+            suggestions = suggest_fields(field_repo, scope, bad)
+            if suggestions:
+                hint = f" Field có thật gần nhất: {', '.join(suggestions)}."
+        user = f'Biểu thức "{expr}" bị lỗi: {reason}.{hint} Sửa lại, trả JSON.'
+    return None
