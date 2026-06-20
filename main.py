@@ -984,6 +984,7 @@ def _run_auto(region, universe, delay, max_sims=0, generations=0,
     from src.generation.ast_utils import to_expression
     from src.generation.template import TemplateGenerator
     from src.decorrelation.zoo import ReferenceZoo
+    from src.scoring.synergy import SynergyScorer
     from src.simulation.config import SimConfig
     from src.simulation.pre_filter import PreFilter
 
@@ -1018,6 +1019,9 @@ def _run_auto(region, universe, delay, max_sims=0, generations=0,
         llm_generator=_make_llm_generator(session_factory, pf),
         refiner=_make_refiner(session_factory, pf, region, universe, delay),
         zoo=zoo, template_generator=tgen,
+        # Hàm mục tiêu pool-aware (AlphaGen-adapted): thưởng alpha vừa qua chuẩn
+        # vừa độc đáo, loại hẳn sim lỗi. Dùng CHUNG zoo với inject -> một pool.
+        scorer=SynergyScorer(zoo=zoo),
         max_simulations=max_sims or None, generations=generations or None,
         simulation_settings=sim_config.to_settings(),
     )
