@@ -22,6 +22,9 @@ class AlphaRefiner:
     def __init__(self, deepseek, translator: AlphaTranslator):
         self.deepseek = deepseek
         self.translator = translator
+        # Trí nhớ biểu thức đã đề xuất -> không tái đề xuất y hệt (chống vòng lặp
+        # thoái hóa kiểu ts_mean(volume,5) bị bơm vô hạn trong log thật).
+        self._seen: set[str] = set()
 
     def refine(self, candidate: AlphaCandidate, metrics: dict, weak_dimension: str) -> AlphaCandidate | None:
         hint = DIMENSION_HINTS.get(weak_dimension, weak_dimension)
@@ -29,6 +32,9 @@ class AlphaRefiner:
         expression = self.translator._to_expression(description)
         if not expression:
             return None
+        if expression in self._seen:
+            return None  # đã thử rồi -> bỏ qua, để caller không tốn lượt sim/inject lặp
+        self._seen.add(expression)
         return AlphaCandidate(
             hypothesis=candidate.hypothesis,
             description=description,
@@ -51,6 +57,9 @@ class AlphaRefiner:
             f"Cần cải thiện: {hint}.\n"
             "Mô tả cách điều chỉnh tín hiệu để cải thiện đúng chiều này."
         )
+        if self._seen:
+            # Nhồi các biểu thức đã thử để LLM đa dạng hóa thay vì lặp lại.
+            user += "\nĐã thử (TRÁNH đề xuất lại y hệt): " + "; ".join(sorted(self._seen))
         data = extract_json(self.deepseek.complete(system, user, json_mode=True, task="refine"))
         if isinstance(data, dict) and data.get("description"):
             return str(data["description"])

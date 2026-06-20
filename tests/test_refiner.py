@@ -69,3 +69,34 @@ def test_refine_tra_none_khi_khong_sinh_duoc_bieu_thuc():
     )
     refiner = _setup(ds)
     assert refiner.refine(_candidate(), {"sharpe": 1.0}, "sharpe") is None
+
+
+def test_refine_khong_lap_bieu_thuc_da_thu():
+    """Trí nhớ: refiner đã đề xuất một biểu thức thì lần sau KHÔNG lặp y hệt
+    (gốc rễ ts_mean(volume,5) bị bơm lặp vô hạn trong log thật)."""
+    ds = FakeDeepSeek([
+        json.dumps({"description": "d1"}),
+        json.dumps({"expression": "rank(ts_mean(volume, 5))"}),
+        json.dumps({"description": "d2"}),
+        json.dumps({"expression": "rank(ts_mean(volume, 5))"}),  # lặp y hệt
+    ])
+    refiner = _setup(ds)
+    first = refiner.refine(_candidate(), {"sharpe": 1.0}, "sharpe")
+    second = refiner.refine(_candidate(), {"sharpe": 1.0}, "sharpe")
+    assert first is not None and first.expression == "rank(ts_mean(volume, 5))"
+    assert second is None  # đã thử -> không lặp lại
+
+
+def test_refine_nhoi_danh_sach_da_thu_vao_prompt():
+    """Biểu thức đã thử được nhồi vào prompt _propose để LLM tránh lặp."""
+    ds = FakeDeepSeek([
+        json.dumps({"description": "d1"}),
+        json.dumps({"expression": "rank(ts_mean(volume, 5))"}),
+        json.dumps({"description": "d2"}),
+        json.dumps({"expression": "rank(ts_delta(close, 10))"}),
+    ])
+    refiner = _setup(ds)
+    refiner.refine(_candidate(), {"sharpe": 1.0}, "sharpe")
+    refiner.refine(_candidate(), {"sharpe": 1.0}, "sharpe")
+    second_propose_user = ds.calls[2][1]  # _propose của lần refine thứ 2
+    assert "rank(ts_mean(volume, 5))" in second_propose_user
