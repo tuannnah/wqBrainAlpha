@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from loguru import logger
 
 from src.generation.ast_utils import Node, to_expression
+from src.generation.novel_ideas import NOVEL_ALPHAS
 from src.llm.hypothesis import Hypothesis
 from src.llm.translator import AlphaCandidate
 from src.optimization.evolution import GeneticOptimizer
@@ -57,12 +58,16 @@ class HybridEngine:
         except Exception as exc:  # 402 / lỗi LLM -> tắt LLM, dùng fallback
             logger.warning("LLM seed lỗi ({}) — tắt LLM-in-loop, dùng fallback.", exc)
             self._llm_disabled = True
+        # Sàn đa dạng: LUÔN trộn NOVEL_ALPHAS (alpha gốc, dataset thay thế, đã xác
+        # minh) để GA không khởi đầu/sụp về một điểm tầm thường — gốc rễ của
+        # rank(close) ×360 trong log thật khi seed pool sụp về ['rank(close)'].
+        pool.extend(c.expression for c in NOVEL_ALPHAS)
         # Khử trùng giữ thứ tự.
         pool = list(dict.fromkeys(p for p in pool if p))
         if not pool and self.template_generator is not None:
             pool = list(self.template_generator.generate(self.population_size))
         if not pool:
-            pool = [f"rank({self.fields[0]})"] if self.fields else ["rank(close)"]
+            pool = [c.expression for c in NOVEL_ALPHAS] or ["rank(close)"]
         return pool
 
     # ------------------------------------------------------------ inject hook

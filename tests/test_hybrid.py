@@ -126,3 +126,30 @@ def test_max_simulations_dung_xac_dinh():
     eng = _engine(generations=None, max_simulations=5)
     best = eng.run()
     assert best
+
+
+def test_seed_khong_sup_ve_rank_close():
+    """LLM tắt + không có template -> seed phải là NOVEL_ALPHAS đa dạng, KHÔNG
+    sụp về ['rank(close)'] (gốc rễ của rank(close) ×360 trong log thật)."""
+    from src.generation.novel_ideas import NOVEL_ALPHAS
+
+    eng = _engine(
+        llm_generator=FakeLLMGen(raise_on={"ideas"}),
+        template_generator=None,
+    )
+    pool = eng._seed_pool()
+    assert pool != ["rank(close)"]
+    assert len(pool) >= 5  # đa dạng, không sụp về 1 phần tử
+    novel_exprs = {c.expression for c in NOVEL_ALPHAS}
+    assert any(p in novel_exprs for p in pool)
+
+
+def test_seed_blend_novel_de_da_dang_khi_llm_ngheo():
+    """Ngay cả khi LLM chỉ sinh 1 expr nghèo nàn, seed pool vẫn được trộn thêm
+    NOVEL_ALPHAS để GA không khởi đầu trên một điểm tầm thường duy nhất."""
+    from src.generation.novel_ideas import NOVEL_ALPHAS
+
+    eng = _engine(llm_generator=FakeLLMGen(exprs=["rank(close)"]))
+    pool = eng._seed_pool()
+    novel_exprs = {c.expression for c in NOVEL_ALPHAS}
+    assert any(p in novel_exprs for p in pool)
