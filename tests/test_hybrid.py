@@ -144,6 +144,26 @@ def test_seed_khong_sup_ve_rank_close():
     assert any(p in novel_exprs for p in pool)
 
 
+def test_seed_loc_novel_field_chet_qua_prefilter():
+    """NOVEL seed dùng field bị prefilter từ chối (đã học chết/blacklist theo
+    account) phải bị loại khỏi seed pool, không vào quần thể."""
+    from src.generation.novel_ideas import NOVEL_ALPHAS
+
+    dead = "pv13_custretsig_retsig"  # chỉ xuất hiện trong 1 NOVEL alpha (supply-chain)
+    dead_expr = next(c.expression for c in NOVEL_ALPHAS if dead in c.expression)
+
+    class FieldBlockingPF:
+        def check(self, expr):
+            if dead in expr:
+                return False, f"Field/hằng không tồn tại: {dead}"
+            return True, ""
+
+    eng = _engine(prefilter=FieldBlockingPF(), use_llm_seed=False)
+    pool = eng._seed_pool()
+    assert dead_expr not in pool          # NOVEL chết bị loại
+    assert len(pool) >= 5                 # các NOVEL hợp lệ khác vẫn còn
+
+
 def test_no_llm_seed_bo_qua_llm_dung_novel():
     """use_llm_seed=False -> KHÔNG gọi LLM (chạy GA-thuần nhanh), seed từ
     NOVEL_ALPHAS, và tắt LLM-in-loop để inject không gọi refiner."""

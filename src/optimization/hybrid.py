@@ -67,13 +67,18 @@ class HybridEngine:
         # Sàn đa dạng: LUÔN trộn NOVEL_ALPHAS (alpha gốc, dataset thay thế, đã xác
         # minh) để GA không khởi đầu/sụp về một điểm tầm thường — gốc rễ của
         # rank(close) ×360 trong log thật khi seed pool sụp về ['rank(close)'].
-        pool.extend(c.expression for c in NOVEL_ALPHAS)
+        # Lọc qua prefilter: NOVEL dùng field đã-học-chết/blacklist theo account
+        # (hoặc sai kiểu VECTOR/MATRIX) bị loại, không vào quần thể.
+        novel_valid = [
+            c.expression for c in NOVEL_ALPHAS if self.prefilter.check(c.expression)[0]
+        ]
+        pool.extend(novel_valid)
         # Khử trùng giữ thứ tự.
         pool = list(dict.fromkeys(p for p in pool if p))
         if not pool and self.template_generator is not None:
             pool = list(self.template_generator.generate(self.population_size))
         if not pool:
-            pool = [c.expression for c in NOVEL_ALPHAS] or ["rank(close)"]
+            pool = novel_valid or ["rank(close)"]
         return pool
 
     # ------------------------------------------------------------ inject hook
