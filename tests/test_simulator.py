@@ -168,6 +168,15 @@ def test_extract_event_fields():
     assert extract_event_fields("Invalid number of inputs : 3", "rank(a, b, c)") == []
 
 
+def test_extract_event_fields_bo_qua_ten_group():
+    """Arg group (sector/industry/...) của group_* KHÔNG phải data field -> không
+    bị trích làm field chết (gốc rễ 'sector' lọt blacklist sai)."""
+    err = "Operator group_neutralize does not support event inputs."
+    fields = extract_event_fields(err, "group_neutralize(nws18_bee, sector)")
+    assert "sector" not in fields
+    assert fields == ["nws18_bee"]
+
+
 def test_simulate_blacklist_event_field():
     """WQ báo 'does not support event inputs' -> blacklist field event qua callback."""
     client = FakeClient()

@@ -21,6 +21,13 @@ _EVENT_OP_RE = re.compile(r"Operator (\w+) does not support event inputs")
 # Reason từ PreFilter khi field/hằng không nằm trong catalog (tiền-kiểm).
 _REJECTED_FIELD_RE = re.compile(r"Field/hằng không tồn tại: (\S+)")
 
+# Tên GROUP cho group_neutralize/group_* — là tham số phân nhóm, KHÔNG phải data
+# field nên không bao giờ là "field chết". Loại khỏi trích lỗi để không blacklist
+# nhầm (gốc rễ 'sector' lọt blacklist, chặn oan group_neutralize sau này).
+GROUP_FIELDS = frozenset(
+    {"market", "sector", "industry", "subindustry", "country", "exchange"}
+)
+
 
 def extract_rejected_field(reason: str) -> str | None:
     """Trích field id từ reason tiền-kiểm 'Field/hằng không tồn tại: X'; None nếu khác."""
@@ -55,7 +62,11 @@ def extract_event_fields(error: str, expression: str) -> list[str]:
     for node in all_subtrees(tree):
         if isinstance(node, Node) and node.op == op:
             for child in node.children:
-                if isinstance(child, Leaf) and isinstance(child.value, str):
+                if (
+                    isinstance(child, Leaf)
+                    and isinstance(child.value, str)
+                    and child.value not in GROUP_FIELDS
+                ):
                     out.append(child.value)
     return list(dict.fromkeys(out))  # khử trùng, giữ thứ tự
 
