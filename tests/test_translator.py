@@ -23,12 +23,9 @@ def _hyp():
 
 def test_suggest_fields_tra_field_that_gan_nhat():
     """Field thật gần 'bad_field': cùng tiền tố dataset + trùng token đứng trước."""
+    from src.llm import expr_synth
     fields = FakeSymbolRepo(["opt6_1dorhv_real", "opt6_close", "news12_sent", "close"])
-    ops = FakeSymbolRepo(["rank"])
-    pf = PreFilter(known_operators={"rank"}, known_fields={"close"})
-    tr = AlphaTranslator(FakeDeepSeek(), fields, ops, pf)
-
-    out = tr._suggest_fields("opt6_1dorhv")
+    out = expr_synth.suggest_fields(fields, None, "opt6_1dorhv")
     assert "opt6_1dorhv_real" in out  # cùng tiền tố opt6_ + trùng token 1dorhv
     assert out[0].startswith("opt6_")  # field cùng dataset đứng đầu, không phải 'close'
 
