@@ -122,6 +122,24 @@ CLICHE_IDEA_TERMS = (
 )
 
 
+# Metric LLM tự BỊA nhét vào text hướng (vd "(sharpe=2.1, fitness=0.92)"). Đây là
+# số bịa, KHÔNG phải đo thật — chỉ WQ-sim mới định nghĩa chất lượng. Tước sạch để
+# không nhiễm xuống downstream (tránh tin tưởng nhầm số ảo).
+_FAKE_METRIC_PAREN_RE = re.compile(
+    r"\s*\(\s*(?:sharpe|fitness|turnover|returns|ir)\b[^)]*\)", re.IGNORECASE
+)
+_FAKE_METRIC_BARE_RE = re.compile(
+    r"\s*\b(?:sharpe|fitness|turnover|returns|ir)\s*[=:]\s*[-+]?\d+(?:\.\d+)?", re.IGNORECASE
+)
+
+
+def _strip_fabricated_metrics(text: str) -> str:
+    """Bỏ mọi chú thích metric LLM tự bịa khỏi text ý tưởng, giữ phần nội dung."""
+    text = _FAKE_METRIC_PAREN_RE.sub("", text)
+    text = _FAKE_METRIC_BARE_RE.sub("", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
 def _ascii_lower(text: str) -> str:
     text = text.replace("\u0111", "d").replace("\u0110", "d")
     return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii").lower()
@@ -301,7 +319,8 @@ class LLMAlphaGenerator:
             ideas = data
         else:
             ideas = []
-        return [str(i).strip() for i in ideas if str(i).strip()]
+        cleaned = (_strip_fabricated_metrics(str(i)) for i in ideas)
+        return [i for i in cleaned if i]
 
     def _ideas_retry_prompt(self, n: int, rejected: list[str]) -> str:
         rejected_line = "; ".join(rejected[-8:]) or "generic price/volume ideas"
