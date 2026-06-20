@@ -6,23 +6,10 @@ from collections import Counter, defaultdict
 import re
 import unicodedata
 
-from loguru import logger
-
 from src.generation.ast_utils import iter_leaves, parse_expression
 from src.llm import expr_synth
 from src.llm.jsonutil import extract_json as _extract_json
 
-FEWSHOT_EXAMPLES = [
-    "rank(ts_delta(close, 5))",
-    "-rank(ts_zscore(volume, 20))",
-    "group_neutralize(rank(returns), sector)",
-    "rank(ts_mean(close, 5) - ts_mean(close, 20))",
-    "rank(ts_corr(close, volume, 20))",
-    "ts_rank(ts_delta(vwap, 10), 20)",
-]
-
-MAX_FIELDS_IN_PROMPT = 40
-MAX_REPAIR_ATTEMPTS = 3
 MAX_IDEA_ATTEMPTS = 3
 MAX_IDEA_DATASET_LINES = 8
 MAX_IDEA_FIELDS_PER_DATASET = 4
