@@ -972,7 +972,8 @@ def _run_hybrid_with_progress(engine):
 
 def _run_auto(region, universe, delay, max_sims=0, generations=0,
               existing_client=None, swallow_errors=False,
-              decay=0, truncation=0.08, neutralization="SUBINDUSTRY"):
+              decay=0, truncation=0.08, neutralization="SUBINDUSTRY",
+              no_llm_seed=False):
     """Toàn trình hybrid: login → cache → seed LLM → GA tiến hóa + LLM-in-loop → lưu DB.
 
     max_sims/generations = 0 nghĩa là VÔ HẠN (None). swallow_errors giữ để tương
@@ -1022,6 +1023,7 @@ def _run_auto(region, universe, delay, max_sims=0, generations=0,
         # Hàm mục tiêu pool-aware (AlphaGen-adapted): thưởng alpha vừa qua chuẩn
         # vừa độc đáo, loại hẳn sim lỗi. Dùng CHUNG zoo với inject -> một pool.
         scorer=SynergyScorer(zoo=zoo),
+        use_llm_seed=not no_llm_seed,
         max_simulations=max_sims or None, generations=generations or None,
         simulation_settings=sim_config.to_settings(),
     )
@@ -1052,12 +1054,14 @@ def auto(
     decay: int = typer.Option(0, "--decay", help="Decay simulation config"),
     truncation: float = typer.Option(0.08, "--truncation", help="Truncation simulation config"),
     neutralization: str = typer.Option("SUBINDUSTRY", "--neutralization", help="Neutralization simulation config"),
+    no_llm_seed: bool = typer.Option(False, "--no-llm-seed", help="Bỏ pha LLM seed (chậm/bịa field), chạy GA-thuần trên NOVEL+template"),
 ) -> None:
     """Chạy engine hybrid: login → cache → seed LLM → GA tiến hóa + LLM-in-loop. KHÔNG nộp."""
     _setup_logging()
     if _run_auto(
         region, universe, delay, max_sims=max_sims, generations=generations,
         decay=decay, truncation=truncation, neutralization=neutralization,
+        no_llm_seed=no_llm_seed,
     ) is None:
         raise typer.Exit(code=1)
 

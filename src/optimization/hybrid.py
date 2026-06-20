@@ -38,6 +38,7 @@ class HybridEngine:
     seed_ideas: int = 5
     per_idea: int = 2
     originality_min: float = 0.4
+    use_llm_seed: bool = True   # False -> bỏ pha LLM seed (chậm/bịa field), chạy GA-thuần
     population_size: int = 30
     generations: int | None = None
     max_simulations: int | None = None
@@ -51,13 +52,18 @@ class HybridEngine:
     # --------------------------------------------------------------- seed pool
     def _seed_pool(self) -> list[str]:
         pool: list[str] = []
-        try:
-            ideas = self.llm_generator.generate_ideas(self.seed_ideas)
-            for idea in ideas:
-                pool.extend(self.llm_generator.generate(idea, self.per_idea))
-        except Exception as exc:  # 402 / lỗi LLM -> tắt LLM, dùng fallback
-            logger.warning("LLM seed lỗi ({}) — tắt LLM-in-loop, dùng fallback.", exc)
+        if not self.use_llm_seed:
+            # Bỏ hẳn pha LLM seed (chậm qua CLI + hay bịa field) -> GA-thuần trên
+            # NOVEL+template. Tắt LLM-in-loop để inject không gọi refiner.
             self._llm_disabled = True
+        else:
+            try:
+                ideas = self.llm_generator.generate_ideas(self.seed_ideas)
+                for idea in ideas:
+                    pool.extend(self.llm_generator.generate(idea, self.per_idea))
+            except Exception as exc:  # 402 / lỗi LLM -> tắt LLM, dùng fallback
+                logger.warning("LLM seed lỗi ({}) — tắt LLM-in-loop, dùng fallback.", exc)
+                self._llm_disabled = True
         # Sàn đa dạng: LUÔN trộn NOVEL_ALPHAS (alpha gốc, dataset thay thế, đã xác
         # minh) để GA không khởi đầu/sụp về một điểm tầm thường — gốc rễ của
         # rank(close) ×360 trong log thật khi seed pool sụp về ['rank(close)'].

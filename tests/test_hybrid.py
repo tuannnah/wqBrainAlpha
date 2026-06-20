@@ -144,6 +144,27 @@ def test_seed_khong_sup_ve_rank_close():
     assert any(p in novel_exprs for p in pool)
 
 
+def test_no_llm_seed_bo_qua_llm_dung_novel():
+    """use_llm_seed=False -> KHÔNG gọi LLM (chạy GA-thuần nhanh), seed từ
+    NOVEL_ALPHAS, và tắt LLM-in-loop để inject không gọi refiner."""
+    from src.generation.novel_ideas import NOVEL_ALPHAS
+
+    class SpyLLM(FakeLLMGen):
+        ideas_calls = 0
+
+        def generate_ideas(self, n):
+            type(self).ideas_calls += 1
+            return super().generate_ideas(n)
+
+    spy = SpyLLM()
+    eng = _engine(llm_generator=spy, use_llm_seed=False)
+    pool = eng._seed_pool()
+    assert SpyLLM.ideas_calls == 0
+    assert eng._llm_disabled
+    novel = {c.expression for c in NOVEL_ALPHAS}
+    assert any(p in novel for p in pool)
+
+
 def test_seed_blend_novel_de_da_dang_khi_llm_ngheo():
     """Ngay cả khi LLM chỉ sinh 1 expr nghèo nàn, seed pool vẫn được trộn thêm
     NOVEL_ALPHAS để GA không khởi đầu trên một điểm tầm thường duy nhất."""

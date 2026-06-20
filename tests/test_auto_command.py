@@ -216,7 +216,8 @@ def test_lenh_auto_khong_con_engine_option(monkeypatch):
 
     def fake_run_auto(region, universe, delay, max_sims=0, generations=0,
                       existing_client=None, swallow_errors=False,
-                      decay=0, truncation=0.08, neutralization="SUBINDUSTRY"):
+                      decay=0, truncation=0.08, neutralization="SUBINDUSTRY",
+                      no_llm_seed=False):
         called["max_sims"] = max_sims
         called["generations"] = generations
         return ["node"]
