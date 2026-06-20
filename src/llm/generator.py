@@ -9,6 +9,7 @@ import unicodedata
 from loguru import logger
 
 from src.generation.ast_utils import iter_leaves, parse_expression
+from src.llm import expr_synth
 from src.llm.jsonutil import extract_json as _extract_json
 
 FEWSHOT_EXAMPLES = [
@@ -232,41 +233,26 @@ class LLMAlphaGenerator:
         weak = [w for w in weak if w not in top_fields]
         return build_feedback_prompt(top, weak)
 
-    def build_system_prompt(self) -> str:
-        operators = [o.name for o in self.operator_repo.load_cached() if o.name]
-        fields = [f.id for f in self.field_repo.load_cached() if f.id][:MAX_FIELDS_IN_PROMPT]
-        op_line = ", ".join(operators[:80]) if operators else "rank, ts_delta, ts_mean, group_neutralize, ts_corr, ts_zscore"
-        field_line = ", ".join(fields) if fields else "close, open, high, low, volume, vwap, returns"
-        examples = "\n".join(f"- {e}" for e in FEWSHOT_EXAMPLES)
+    def build_system_prompt(self, relevance_text: str = "") -> str:
+        context = expr_synth.build_symbol_context(
+            self.field_repo, self.operator_repo, self.prefilter, None, relevance_text
+        )
+        constraints = expr_synth.build_syntax_constraints(self.prefilter)
         return (
             "Bạn là chuyên gia thiết kế Alpha trên WorldQuant BRAIN, viết biểu thức FASTEXPR.\n"
             "Cú pháp: hàm(đối_số, ...), toán tử + - * /, rank chuẩn hóa cross-sectional, "
             "tiền tố ts_ là chuỗi thời gian với tham số cửa sổ là số nguyên.\n"
-            f"OPERATORS hợp lệ: {op_line}\n"
-            f"FIELDS khả dụng: {field_line}\n"
-            f"GROUPS cho neutralize: market, sector, industry, subindustry\n"
-            "Ví dụ alpha hợp lệ:\n"
-            f"{examples}\n"
+            f"{context}\n{constraints}{self._feedback_context()}"
             'Luôn trả về JSON đúng định dạng: {"expression": "...", "rationale": "..."}. '
             "Chỉ dùng operators và fields được liệt kê."
         )
 
     def _generate_one(self, idea: str) -> str | None:
-        system = self.build_system_prompt()
+        system = self.build_system_prompt(idea)
         user = f'Ý tưởng alpha: "{idea}". Sinh MỘT biểu thức FASTEXPR. Trả JSON.'
-        for attempt in range(MAX_REPAIR_ATTEMPTS):
-            content = self.deepseek.complete(system, user, json_mode=True)
-            data = _extract_json(content)
-            expr = data.get("expression") if isinstance(data, dict) else None
-            if not expr:
-                user = 'Trả ĐÚNG JSON {"expression": "...", "rationale": "..."}.'
-                continue
-            ok, reason = self.prefilter.check(expr)
-            if ok:
-                return expr
-            logger.info("LLM expr lỗi (lần {}): {} — {}", attempt + 1, expr, reason)
-            user = f'Biểu thức "{expr}" bị lỗi: {reason}. Sửa lại và trả JSON.'
-        return None
+        return expr_synth.repair_to_expression(
+            self.deepseek, self.prefilter, self.field_repo, None, system, user, task=None
+        )
 
     def generate(self, idea: str, n: int = 5) -> list[str]:
         results: list[str] = []

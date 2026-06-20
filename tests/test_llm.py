@@ -36,7 +36,7 @@ class FakeDeepSeek:
         self._responses = list(responses)
         self.calls = []
 
-    def complete(self, system, user, json_mode=True):
+    def complete(self, system, user, json_mode=True, task=None):
         self.calls.append((system, user))
         return self._responses.pop(0)
 
