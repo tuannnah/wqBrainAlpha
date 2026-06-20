@@ -69,10 +69,37 @@ tham số, không giữ state):
 | `build_symbol_context(field_repo, operator_repo, prefilter, scope, relevance_text="")` | translator `_symbol_context` + `_field_type_context` + `_relevant_fields` | Liệt kê operators/fields/groups + FIELD TYPES + QUY TẮC VECTOR |
 | `build_syntax_constraints(prefilter)` | translator `_syntax_constraints` | Ràng buộc độ sâu/node, đối số theo vị trí |
 | `suggest_fields(field_repo, scope, bad_field, limit=5)` | translator `_suggest_fields` | Gợi ý field thật gần field bịa nhất |
-| `repair_to_expression(deepseek, prefilter, field_repo, scope, system, user, task)` | translator `_to_expression` (vòng lặp) | Vòng LLM→prefilter→retry, kèm hint field thay thế |
+| `autowrap_vector_fields(expr, field_types, matrix_only_ops)` | MỚI | Tất định bọc `vec_avg(leaf)` quanh leaf VECTOR bị đưa thẳng vào matrix-only op |
+| `repair_to_expression(deepseek, prefilter, field_repo, scope, system, user, task)` | translator `_to_expression` (vòng lặp) | Vòng LLM→**auto-wrap**→prefilter→retry, kèm hint field thay thế |
 
 Hằng dùng chung chuyển vào module: `MAX_REPAIR_ATTEMPTS`, `FEWSHOT_EXAMPLES`
 (hiện trùng ở cả hai file).
+
+### Auto-wrap field VECTOR (sửa tất định)
+
+Bằng chứng từ log run thật 17:17–17:40 (xem mục 9): lớp lỗi VECTOR→MATRIX chiếm
+áp đảo (~22/29), LLM **dao động luẩn quẩn** khi sửa (ts_delta → last_diff_value →
+ts_delta) và mỗi lượt retry tốn ~15–20s, thường trả `None`. Dạy qua prompt
+không đủ. Nên thêm bước sửa **bằng code**, không cần round-trip LLM.
+
+`autowrap_vector_fields(expr, field_types, matrix_only_ops)`:
+- `parse_expression(expr)` → cây AST (dùng `src.generation.ast_utils`).
+- Đệ quy: với mỗi `Node` có `op ∈ matrix_only_ops`, mỗi con TRỰC TIẾP là `Leaf`
+  field có `field_types[name] == "VECTOR"` → thay bằng `Node("vec_avg", [leaf])`.
+  Điều kiện **khớp ĐÚNG** luật prefilter (`pre_filter._check_symbols`), nên mọi
+  ca prefilter sẽ từ chối đều được auto-wrap giải quyết.
+- `ast_utils.to_expression(tree)` → chuỗi biểu thức mới.
+- Default `vec_avg` (khớp gợi ý sẵn có của translator). Không suy đoán
+  `vec_sum/vec_max`.
+
+Gọi trong `repair_to_expression` NGAY sau khi nhận expr từ LLM, TRƯỚC
+`prefilter.check`. Nhờ vậy ngay output LLM lần đầu cũng được sửa, thường pass
+luôn với 0 round-trip thêm. Lớp prevention qua prompt (QUY TẮC VECTOR) **vẫn
+giữ** để giảm cả lỗi độ sâu lẫn lỗi VECTOR ngay từ đầu.
+
+**Độ sâu (theo quyết định):** `vec_avg` thêm 1 tầng → đôi khi đẩy quá
+`max_depth=7`; ta KHÔNG đụng `max_depth`. Ca dính độ sâu sau auto-wrap sẽ rơi
+về vòng LLM retry như cũ (prefilter trả "Độ sâu > N"). Chấp nhận phần dư này.
 
 ### Chọn field liên quan
 
@@ -89,7 +116,8 @@ Hàm chung tự bao try/except chữ ký như `generator._cached_fields` đang l
 
 ## 4. Thay đổi theo file
 
-- **`src/llm/expr_synth.py`** (mới): 4 hàm + 2 hằng ở trên.
+- **`src/llm/expr_synth.py`** (mới): 5 hàm + 2 hằng ở trên (gồm
+  `autowrap_vector_fields`).
 - **`src/llm/translator.py`**: xoá `_field_type_context`, `_symbol_context`,
   `_syntax_constraints`, `_suggest_fields`; `_to_expression` gọi
   `expr_synth.repair_to_expression(...)`; bỏ hằng trùng, import từ `expr_synth`.
@@ -109,14 +137,15 @@ generator.generate(idea)                 translator.translate(hypothesis)
         +---------------------+--------------------+
                               v
               expr_synth.repair_to_expression(deepseek, prefilter, ...)
-                  loop: complete → extract_json → prefilter.check
+                  loop: complete → extract_json → AUTO-WRAP vec_avg → prefilter.check
                         fail → extract_rejected_field → suggest_fields → hint → retry
 ```
 
 Với log đang lỗi: `editorial_commentary_sentiment_2`,
 `aggregate_option_open_interest_2` được đánh dấu VECTOR trong prompt + ví dụ
-`ts_zscore(vec_avg(field), 20)` → LLM không áp `ts_*` thẳng; nếu lỡ sai, hint
-repair chỉ đúng `vec_avg/vec_sum` thay vì để LLM mò.
+`ts_zscore(vec_avg(field), 20)` → LLM ít áp `ts_*` thẳng (prevention); nếu vẫn
+lỡ sai, auto-wrap bọc `vec_avg` ngay bằng code (0 round-trip) thay vì để LLM mò
+và dao động.
 
 ## 6. Test (TDD)
 
@@ -125,7 +154,11 @@ repair chỉ đúng `vec_avg/vec_sum` thay vì để LLM mò.
   VECTOR" + dòng `FIELD TYPES`; không có VECTOR → không chèn.
 - `repair_to_expression`: (a) trả expr ngay khi prefilter pass lần 1; (b) lý do
   là field bịa → lượt retry kế có hint field thay thế; (c) trả `None` sau
-  `MAX_REPAIR_ATTEMPTS`.
+  `MAX_REPAIR_ATTEMPTS`; (d) LLM trả expr có VECTOR áp thẳng matrix-op → auto-wrap
+  sửa và pass ngay, KHÔNG gọi LLM thêm.
+- `autowrap_vector_fields`: (a) bọc `vec_avg` đúng leaf VECTOR dưới matrix-only op;
+  (b) không đụng leaf VECTOR đã nằm trong `vec_avg`/ngoài matrix-op; (c) không đụng
+  field MATRIX/hằng số; (d) bọc đủ nhiều leaf VECTOR trong cùng biểu thức.
 - `suggest_fields`: field cùng tiền tố dataset xếp trên field chỉ trùng token.
 
 **Cập nhật:**
@@ -143,3 +176,26 @@ repair chỉ đúng `vec_avg/vec_sum` thay vì để LLM mò.
 - Generator đổi cách chọn field là thay đổi hành vi → cần sửa test tương ứng.
 - Translator output phải bất biến (chỉ dời code) — kiểm bằng test `translate`
   hiện có.
+- Auto-wrap dùng `parse_expression` + `to_expression`: biểu thức không parse được
+  → bỏ qua auto-wrap, giữ nguyên expr cho prefilter báo lỗi parse (không nuốt lỗi).
+- `to_expression` chuẩn hoá lại chuỗi (vd thêm ngoặc cho binary op) → biểu thức
+  hợp lệ sẵn cũng bị viết lại; chấp nhận, vì vẫn tương đương ngữ nghĩa.
+- `vec_avg` thêm độ sâu → ca dính `max_depth` rơi về LLM retry (đã quyết, không
+  đụng `max_depth`).
+
+## 8. Bằng chứng (log run thật 2026-06-20 17:17–17:40)
+
+Phân loại 29 lỗi `src.llm.generator` trong một run:
+
+| Lớp lỗi | Số ca | Spec xử lý bằng |
+|---|---|---|
+| VECTOR→MATRIX (ts_delta/rank/ts_zscore/ts_mean/scale/ts_rank/ts_delay/...) | ~22 | prompt QUY TẮC VECTOR + **auto-wrap** |
+| Field bịa (không tồn tại) | 4 | `suggest_fields` hint |
+| Độ sâu > 7 | 3 | (không đụng — để LLM retry) |
+
+Hai hiện tượng quyết định việc thêm auto-wrap:
+- **Dao động:** dòng 2062→2064→2066 lặp `ts_delta → last_diff_value → ts_delta`,
+  feedback văn bản không dạy được `vec_avg`.
+- **vec_avg đụng trần độ sâu:** dòng 2060 LLM bọc `vec_avg` đúng nhưng dính
+  "Độ sâu > 7" → minh hoạ vì sao không nên ép LLM tự bọc qua prompt khi đã có
+  cách sửa tất định bằng code.
