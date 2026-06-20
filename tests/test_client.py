@@ -30,10 +30,11 @@ def test_session_con_han_bo_qua_dang_nhap():
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/authentication":
+            # GET /authentication = kiểm phiên còn hạn (200); POST = đăng nhập mới.
+            if request.method == "GET":
+                return httpx.Response(200, json={"user": {"id": "u1"}})
             state["auth_calls"] += 1
             return httpx.Response(201)
-        if request.url.path == "/users/self/":
-            return httpx.Response(200, json={"id": "u1"})
         return httpx.Response(404)
 
     # Session file có sẵn cookie -> client coi như đã có phiên.
@@ -242,12 +243,14 @@ def test_authenticate_tu_doi_va_thu_lai_khi_429(capsys):
 
 
 def test_khong_gui_cookie_cu_khi_doi_tai_khoan():
-    """Bug: .wq_session chứa cookie 't' cũ (tài khoản khác). _load_session set
-    cookie KHÔNG kèm domain -> sau login httpx giữ CẢ HAI cookie 't' (cũ domain=''
-    + mới do server set) và gửi cả hai lên. WQ đọc cookie 't' ĐẦU TIÊN (token cũ)
-    -> 401 'Incorrect authentication credentials' ở mọi endpoint bảo vệ.
+    """Bug: .wq_session chứa cookie 't' cũ (đã hết hạn). _load_session set cookie
+    với domain='api.worldquantbrain.com' (KHÔNG dấu chấm). Server thật lại trả
+    `Set-Cookie: t=...; Domain=api.worldquantbrain.com` -> cookielib lưu dưới
+    domain='.api.worldquantbrain.com' (CÓ dấu chấm) -> KHÁC khóa jar -> httpx giữ
+    CẢ HAI cookie 't' và gửi cả hai. WQ đọc cookie 't' cũ ĐẦU TIÊN -> 401
+    'Incorrect authentication credentials' ở mọi endpoint bảo vệ -> lặp vô tận.
 
-    Sau sửa: chỉ gửi đúng cookie 't' mới mà server vừa set.
+    Sau sửa (clear cookie trước khi re-auth): chỉ gửi đúng cookie 't' mới.
     """
     import json
 
@@ -258,7 +261,14 @@ def test_khong_gui_cookie_cu_khi_doi_tai_khoan():
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/authentication":
-            return httpx.Response(201, headers={"set-cookie": "t=FRESH_TOKEN; Path=/"})
+            # Tái hiện server THẬT: Set-Cookie kèm thuộc tính Domain= -> cookielib
+            # lưu với '.' đầu domain, khác khóa với cookie nạp từ file.
+            return httpx.Response(
+                201,
+                headers={
+                    "set-cookie": "t=FRESH_TOKEN; Domain=api.worldquantbrain.com; Path=/"
+                },
+            )
         # Endpoint bảo vệ: nếu token cũ còn được gửi -> WQ trả 401.
         seen["cookie_header"] = request.headers.get("cookie", "")
         if "STALE_TOKEN_TAI_KHOAN_CU" in seen["cookie_header"]:
@@ -269,6 +279,31 @@ def test_khong_gui_cookie_cu_khi_doi_tai_khoan():
     resp = client.get("/data-fields")
     assert resp.status_code == 200, f"cookie gửi lên: {seen['cookie_header']!r}"
     assert seen["cookie_header"] == "t=FRESH_TOKEN"
+
+
+def test_is_session_valid_dung_endpoint_authentication():
+    """Bug: is_session_valid() gọi '/users/self/' (có '/' cuối) -> server THẬT trả
+    404 (đúng path là '/users/self' hoặc '/authentication') -> hàm luôn trả False
+    -> không bao giờ tái dùng session -> ép re-auth mỗi lần (gây churn token + bug
+    nhân đôi cookie). Sau sửa: dùng '/authentication' (200 nếu phiên còn hạn).
+    """
+    state = {"auth_check": 0, "self_slash": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authentication":
+            state["auth_check"] += 1
+            return httpx.Response(200, json={"user": {"id": "u1"}})
+        if request.url.path == "/users/self/":
+            # Server thật 404 cho path có '/' cuối -> KHÔNG được dùng để kiểm phiên.
+            state["self_slash"] += 1
+            return httpx.Response(404, json={"detail": "Not found."})
+        return httpx.Response(404)
+
+    client = _client_with(handler)
+    client.client.cookies.set("t", "VALID_TOKEN")
+    assert client.is_session_valid() is True
+    assert state["auth_check"] == 1
+    assert state["self_slash"] == 0  # KHÔNG đụng tới path 404
 
 
 def test_get_tu_reauth_khi_session_het_han():

@@ -100,9 +100,13 @@ class WQBrainClient:
         return len(self.client.cookies.jar) > 0
 
     def is_session_valid(self) -> bool:
-        """Kiểm tra session cookie còn dùng được qua GET /users/self/."""
+        """Kiểm tra session cookie còn dùng được qua GET /authentication.
+
+        Dùng /authentication (không phải /users/self/): path '/users/self/' có '/'
+        cuối bị server trả 404 -> luôn coi là hết hạn -> ép re-auth mỗi lần.
+        """
         try:
-            resp = self.client.get("/users/self/")
+            resp = self.client.get("/authentication")
         except httpx.RequestError:
             return False
         return resp.status_code == 200
@@ -145,6 +149,13 @@ class WQBrainClient:
             logger.success("Session còn hạn, bỏ qua đăng nhập")
             print("✅ Dùng lại phiên đăng nhập trước.")
             return
+
+        # Sắp đăng nhập đầy đủ: XÓA cookie cũ nạp từ file trước khi POST. Server
+        # trả `Set-Cookie: t=...; Domain=api.worldquantbrain.com` -> cookielib lưu
+        # domain '.api...' (có dấu chấm), KHÁC khóa với cookie file (không dấu chấm)
+        # -> hai cookie 't' cùng tồn tại, gửi cả hai, WQ đọc cái cũ hỏng trước -> 401
+        # lặp vô tận. Clear để chỉ còn đúng cookie mới server vừa set.
+        self.client.cookies.clear()
 
         resp = self._authenticate_with_backoff()
 
