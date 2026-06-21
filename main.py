@@ -605,7 +605,7 @@ def _make_pool_corr_fn(client):
 def _make_research_loop(
     session_factory, client, region, universe, delay, max_sims, patience,
     align=True, regularize=False, penalty_lambda=0.3, sim_config=None,
-    oos_min_ratio=None,
+    oos_min_ratio=None, deflate_haircut=0.0,
 ):
     """Lắp RefinementLoop GĐ2 với DeepSeek + Simulator thật. Trả (loop, deepseek)."""
     from src.decorrelation.similarity import avoid_subtree_canons
@@ -661,8 +661,9 @@ def _make_research_loop(
         # (1) Self-correlation với pool là ràng buộc hạng nhất: gate crowded sau sim
         # + đưa vào điểm để best né đỉnh đông (dùng đúng endpoint chặn-nộp của WQ).
         pool_corr_fn=_make_pool_corr_fn(client),
-        # (4) OOS gate chống overfit IS (None = tắt).
+        # (4) OOS gate + deflated-sharpe chống overfit IS (None/0 = tắt).
         oos_min_ratio=oos_min_ratio,
+        deflate_haircut=deflate_haircut,
     )
     return loop, deepseek
 
@@ -727,6 +728,7 @@ def research(
     penalty_lambda: float = typer.Option(0.3, "--lambda", help="Hệ số λ cho số hạng phạt điều chuẩn"),
     mcts: bool = typer.Option(False, "--mcts/--greedy", help="Dùng MCTS (giữ nhiều nhánh, UCB) thay vòng greedy (T6.1)"),
     oos_ratio: float = typer.Option(0.0, "--oos-ratio", help="Tỉ lệ OOS/IS sharpe tối thiểu để gắn passed (0 = tắt) (review 4)"),
+    deflate: float = typer.Option(0.0, "--deflate", help="Hệ số haircut điểm theo budget sim đã dùng — chống overfit IS (0 = tắt) (review 4b)"),
 ) -> None:
     """GĐ2: vòng lặp AI — sinh giả thuyết → mô phỏng → tinh chỉnh tham lam."""
     _setup_logging()
@@ -751,6 +753,7 @@ def research(
         session_factory, client, region, universe, delay, max_sims, no_improve,
         align, regularize, penalty_lambda, sim_config=sim_config,
         oos_min_ratio=(oos_ratio if oos_ratio > 0 else None),
+        deflate_haircut=deflate,
     )
     result = _run_research_with_progress(loop, direction, max_sims, mcts=mcts)
     _render_research_result(result, deepseek)

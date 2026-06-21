@@ -78,6 +78,7 @@ class RefinementLoop:
         pool_corr_fn=None,
         max_pool_corr: float = 0.70,
         oos_min_ratio: float | None = None,
+        deflate_haircut: float = 0.0,
     ):
         self.hypothesis_gen = hypothesis_gen
         self.translator = translator
@@ -105,6 +106,9 @@ class RefinementLoop:
         self.max_pool_corr = max_pool_corr
         # Tỉ lệ OOS/IS sharpe tối thiểu để gắn passed. None = tắt (tương thích ngược).
         self.oos_min_ratio = oos_min_ratio
+        # Hệ số haircut điểm theo tỉ lệ budget sim đã dùng (deflated sharpe): candidate
+        # nhìn càng muộn bị phạt càng nặng -> chống khai thác IS qua nhiều lần thử. 0 = tắt.
+        self.deflate_haircut = deflate_haircut
         self.sims_used = 0
         self.zoo_added = 0
 
@@ -113,16 +117,22 @@ class RefinementLoop:
         """Điểm dùng để so sánh best. Bật regularize -> điểm điều chuẩn (T4.4),
         gộp phạt độ độc đáo/khớp giả thuyết/độ phức tạp; tắt -> total thô.
         Chiều không đo được (không zoo/aligner) coi như điểm tốt (phạt 0)."""
-        if not self.regularize:
-            return vector.total
-        pen = Penalties.from_scores(
-            originality=1.0 if originality is None else originality,
-            alignment=1.0 if alignment is None else alignment,
-            complexity=complexity_penalty(expr),
-        )
-        return regularized_score(
-            vector.total, pen, weights=self.penalty_weights, lambda_=self.penalty_lambda
-        )
+        if self.regularize:
+            pen = Penalties.from_scores(
+                originality=1.0 if originality is None else originality,
+                alignment=1.0 if alignment is None else alignment,
+                complexity=complexity_penalty(expr),
+            )
+            base = regularized_score(
+                vector.total, pen, weights=self.penalty_weights, lambda_=self.penalty_lambda
+            )
+        else:
+            base = vector.total
+        # Deflated sharpe: trừ haircut theo tỉ lệ budget sim đã tiêu (review 4b). Candidate
+        # đánh giá muộn (sims_used cao) bị phạt nặng hơn -> phải vượt best cũ một biên thật.
+        if self.deflate_haircut > 0 and self.max_simulations > 0:
+            base -= self.deflate_haircut * (self.sims_used / self.max_simulations)
+        return base
 
     def _evaluate(self, candidate, parent_id: str | None) -> _Eval | None:
         expr = candidate.expression

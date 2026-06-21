@@ -582,6 +582,36 @@ def test_loop_oos_tat_mac_dinh_tuong_thich_nguoc():
     assert res.zoo_added >= 1
 
 
+# ------------------------------------------ (4b) deflated-sharpe theo testing budget
+def test_loop_deflate_giu_seed_khi_cai_thien_mong_manh():
+    """Bật deflate: refine nhìn muộn (sims_used cao) bị haircut nặng hơn -> cải thiện
+    mong manh không đủ soán best (chống khai thác IS qua nhiều lần nhìn)."""
+    scores = {"rank(close)": 1.5, "rank(ts_mean(close, 5))": 1.55}
+    sim = FakeSimulator(results=lambda e: _result(e, scores[e]))
+    repo = _repo()
+    refiner = _FakeRefiner(["rank(ts_mean(close, 5))"])
+    loop = _loop(
+        _FakeTranslator("rank(close)"), refiner, sim, repo,
+        max_simulations=10, no_improve_patience=1, deflate_haircut=0.5,
+    )
+    res = loop.run("X")
+    assert res.best_candidate.expression == "rank(close)"
+
+
+def test_loop_khong_deflate_thi_cai_thien_mong_manh_van_thang():
+    """deflate=0 (mặc định) -> cải thiện biên nhỏ vẫn soán best (tương thích ngược)."""
+    scores = {"rank(close)": 1.5, "rank(ts_mean(close, 5))": 1.55}
+    sim = FakeSimulator(results=lambda e: _result(e, scores[e]))
+    repo = _repo()
+    refiner = _FakeRefiner(["rank(ts_mean(close, 5))"])
+    loop = _loop(
+        _FakeTranslator("rank(close)"), refiner, sim, repo,
+        max_simulations=10, no_improve_patience=1,
+    )
+    res = loop.run("X")
+    assert res.best_candidate.expression == "rank(ts_mean(close, 5))"
+
+
 # --------------------------------------------------------- T6.1 MCTS
 def test_run_mcts_tim_duoc_alpha_tot_hon_seed():
     """MCTS khám phá nhiều nhánh, trả về alpha điểm cao nhất."""
