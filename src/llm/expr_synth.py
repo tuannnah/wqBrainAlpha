@@ -236,7 +236,7 @@ def suggest_fields(field_repo, scope, bad_field: str, limit: int = 5, pinned=Non
     return result
 
 
-def repair_to_expression(deepseek, prefilter, field_repo, scope, system, user, task) -> str | None:
+def repair_to_expression(deepseek, prefilter, field_repo, scope, system, user, task, pinned=None) -> str | None:
     """Vòng LLM -> auto-wrap -> prefilter.check -> retry kèm hint field thay thế."""
     field_types = getattr(prefilter, "field_types", None)
     matrix_only = getattr(prefilter, "matrix_only_ops", None)
@@ -254,8 +254,11 @@ def repair_to_expression(deepseek, prefilter, field_repo, scope, system, user, t
         bad = extract_rejected_field(reason)
         hint = ""
         if bad:
-            suggestions = suggest_fields(field_repo, scope, bad)
+            suggestions = suggest_fields(field_repo, scope, bad, pinned=pinned)
             if suggestions:
                 hint = f" Field có thật gần nhất: {', '.join(suggestions)}."
+            if pinned:
+                allowed = ", ".join([p for p in pinned if isinstance(p, str)][:MAX_FIELDS_IN_PROMPT])
+                hint += f" CHỈ được dùng các field: {allowed}."
         user = f'Biểu thức "{expr}" bị lỗi: {reason}.{hint} Sửa lại, trả JSON.'
     return None

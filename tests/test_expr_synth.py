@@ -191,6 +191,21 @@ def test_repair_tra_none_khi_het_retry():
     assert len(ds.calls) == expr_synth.MAX_REPAIR_ATTEMPTS
 
 
+def test_repair_pinned_tai_tiem_palette_vao_prompt():
+    pf = PreFilter(known_operators={"rank"}, known_fields={"pcr_oi_30"})
+    ds = FakeDeepSeek([
+        json.dumps({"expression": "rank(asset_growth_rate)"}),  # field bịa -> fail
+        json.dumps({"expression": "rank(pcr_oi_30)"}),          # sửa hợp lệ
+    ])
+    out = expr_synth.repair_to_expression(
+        ds, pf, _FieldRepo([_Field("pcr_oi_30")]), None, "sys", "usr",
+        task=None, pinned=["pcr_oi_30"],
+    )
+    assert out == "rank(pcr_oi_30)"
+    assert "pcr_oi_30" in ds.calls[1][1]
+    assert "CHỈ được dùng" in ds.calls[1][1]
+
+
 def test_retrieve_palette_field_lien_quan_dung_dau():
     repo = _FieldRepo([
         _Field("pcr_oi_30", description="put call ratio open interest"),
