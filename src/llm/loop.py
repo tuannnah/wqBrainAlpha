@@ -195,7 +195,8 @@ class RefinementLoop:
                 on_progress(LoopProgress(self.sims_used, best_total, phase, detail))
 
         emit("hypothesis", 0.0, research_direction)
-        hypothesis = self.hypothesis_gen.generate(research_direction)
+        palette = self.translator.field_palette(research_direction)
+        hypothesis = self.hypothesis_gen.generate(research_direction, palette)
         seed = self.translator.translate(hypothesis)
         if seed is None:
             self.repo.record_failure("", "syntax", "không dịch được giả thuyết", "llm")
@@ -272,7 +273,8 @@ class RefinementLoop:
                 on_progress(LoopProgress(self.sims_used, best_total, phase, detail))
 
         emit("hypothesis", 0.0, research_direction)
-        hypothesis = self.hypothesis_gen.generate(research_direction)
+        palette = self.translator.field_palette(research_direction)
+        hypothesis = self.hypothesis_gen.generate(research_direction, palette)
         seed = self.translator.translate(hypothesis)
         if seed is None:
             self.repo.record_failure("", "syntax", "không dịch được giả thuyết", "llm")

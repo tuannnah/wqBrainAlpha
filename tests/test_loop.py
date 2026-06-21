@@ -27,7 +27,7 @@ def _prefilter():
 
 
 class _FakeHyp:
-    def generate(self, direction):
+    def generate(self, direction, palette=None):
         return Hypothesis("o", "b", "r", "s")
 
 
@@ -35,11 +35,17 @@ class _FakeTranslator:
     def __init__(self, expr):
         self.expr = expr
 
+    def field_palette(self, text):
+        return []
+
     def translate(self, hyp):
         return AlphaCandidate(hyp, "mô tả gốc", self.expr)
 
 
 class _FakeTranslatorNone:
+    def field_palette(self, text):
+        return []
+
     def translate(self, hyp):
         return None
 
@@ -465,3 +471,31 @@ def test_run_mcts_seed_loi_tra_ket_qua_rong():
     loop = _loop(_FakeTranslatorNone(), _FakeRefiner([]), sim, repo, max_simulations=10)
     res = loop.run_mcts("X", iterations=5)
     assert res.best_candidate is None
+
+
+# ---------------------------------------------- T8: ground field qua palette
+def test_loop_truyen_palette_tu_translator_vao_hypothesis():
+    """Loop phải lấy palette từ translator.field_palette rồi truyền vào
+    hypothesis_gen.generate -> giả thuyết được ground bằng field thật."""
+    captured = {}
+
+    class _SpyHyp:
+        def generate(self, direction, palette=None):
+            captured["palette"] = palette
+            return Hypothesis("o", "b", "r", "s")
+
+    class _SpyTranslator:
+        def field_palette(self, text):
+            return ["pcr_oi_30"]
+
+        def translate(self, hyp):
+            return AlphaCandidate(hyp, "mô tả", "rank(close)")
+
+    sim = FakeSimulator(default=_result("rank(close)", 1.5))
+    loop = RefinementLoop(
+        hypothesis_gen=_SpyHyp(), translator=_SpyTranslator(), refiner=_FakeRefiner([]),
+        simulator=sim, prefilter=_prefilter(), repo=_repo(),
+        region="USA", universe="TOP3000", max_simulations=1,
+    )
+    loop.run("flow quyền chọn")
+    assert captured["palette"] == ["pcr_oi_30"]
