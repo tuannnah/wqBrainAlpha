@@ -698,6 +698,22 @@ def test_loop_refine_nham_regime_fit_khi_fragile():
     assert captured == ["regime_fit"]
 
 
+# ------------------------------------------ (nhỏ) margin cải thiện best
+def test_loop_improve_margin_chan_cai_thien_nho():
+    """improve_margin: refine cải thiện < biên yêu cầu -> không soán best (chống bám
+    những cải thiện vi mô dễ là nhiễu IS)."""
+    scores = {"rank(close)": 1.5, "rank(ts_mean(close, 5))": 1.52}
+    sim = FakeSimulator(results=lambda e: _result(e, scores[e]))
+    repo = _repo()
+    refiner = _FakeRefiner(["rank(ts_mean(close, 5))"])
+    loop = _loop(
+        _FakeTranslator("rank(close)"), refiner, sim, repo,
+        max_simulations=10, no_improve_patience=1, improve_margin=0.1,
+    )
+    res = loop.run("X")
+    assert res.best_candidate.expression == "rank(close)"
+
+
 # --------------------------------------------------------- T6.1 MCTS
 def test_run_mcts_tim_duoc_alpha_tot_hon_seed():
     """MCTS khám phá nhiều nhánh, trả về alpha điểm cao nhất."""

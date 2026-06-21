@@ -641,6 +641,7 @@ def _make_research_loop(
     session_factory, client, region, universe, delay, max_sims, patience,
     align=True, regularize=False, penalty_lambda=0.3, sim_config=None,
     oos_min_ratio=None, deflate_haircut=0.0, regime_min=None, align_gate=True,
+    improve_margin=0.0,
 ):
     """Lắp RefinementLoop GĐ2 với DeepSeek + Simulator thật. Trả (loop, deepseek)."""
     from src.decorrelation.similarity import avoid_subtree_canons
@@ -703,6 +704,7 @@ def _make_research_loop(
         # (3) Regime gate: sàn Sharpe năm tệ nhất (None = tắt). Chỉ lắp pnl_fn khi bật.
         pnl_fn=(_make_pnl_fn(client) if regime_min else None),
         regime_min=regime_min,
+        improve_margin=improve_margin,
     )
     return loop, deepseek
 
@@ -770,6 +772,7 @@ def research(
     oos_ratio: float = typer.Option(0.0, "--oos-ratio", help="Tỉ lệ OOS/IS sharpe tối thiểu để gắn passed (0 = tắt) (review 4)"),
     deflate: float = typer.Option(0.0, "--deflate", help="Hệ số haircut điểm theo budget sim đã dùng — chống overfit IS (0 = tắt) (review 4b)"),
     min_annual_sharpe: float = typer.Option(0.0, "--min-annual-sharpe", help="Sàn Sharpe năm tệ nhất — loại alpha mỏng manh theo regime (0 = tắt) (review 3)"),
+    improve_margin: float = typer.Option(0.0, "--improve-margin", help="Biên cải thiện tương đối tối thiểu để soán best (vd 0.1 = 10%; 0 = tắt)"),
 ) -> None:
     """GĐ2: vòng lặp AI — sinh giả thuyết → mô phỏng → tinh chỉnh tham lam."""
     _setup_logging()
@@ -797,6 +800,7 @@ def research(
         oos_min_ratio=(oos_ratio if oos_ratio > 0 else None),
         deflate_haircut=deflate,
         regime_min=(min_annual_sharpe if min_annual_sharpe > 0 else None),
+        improve_margin=improve_margin,
     )
     result = _run_research_with_progress(loop, direction, max_sims, mcts=mcts)
     _render_research_result(result, deepseek)

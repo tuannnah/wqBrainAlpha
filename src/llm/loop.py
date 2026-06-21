@@ -90,6 +90,7 @@ class RefinementLoop:
         pnl_fn=None,
         regime_min: float | None = None,
         regime_target: float = 1.0,
+        improve_margin: float = 0.0,
     ):
         self.hypothesis_gen = hypothesis_gen
         self.translator = translator
@@ -129,6 +130,9 @@ class RefinementLoop:
         self.pnl_fn = pnl_fn
         self.regime_min = regime_min
         self.regime_target = regime_target
+        # Biên cải thiện tương đối tối thiểu để soán best (thay epsilon vô cùng nhỏ):
+        # cải thiện vi mô thường là nhiễu IS, không đáng đổi best. 0 = giữ epsilon cũ.
+        self.improve_margin = improve_margin
         self.sims_used = 0
         self.zoo_added = 0
 
@@ -327,7 +331,8 @@ class RefinementLoop:
             if ev is None:
                 break  # hết trần sim giữa chừng
             step += 1
-            improved = ev.effective_total > best_ev.effective_total + 1e-9
+            threshold = max(1e-9, self.improve_margin * abs(best_ev.effective_total))
+            improved = ev.effective_total > best_ev.effective_total + threshold
             history.append(
                 {"step": step, "action": "refine", "dimension": weak, "total": ev.vector.total,
                  "expression": cand.expression, "accepted": improved}
