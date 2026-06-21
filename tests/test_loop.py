@@ -322,6 +322,28 @@ def test_loop_loai_alpha_trung_cau_truc_zoo_truoc_sim():
     assert "duplicate" in cats
 
 
+def test_loop_default_originality_loai_alpha_gan_trung():
+    """Ngưỡng originality mặc định phải đủ chặt: alpha độc đáo 0.30 (similarity 0.70)
+    là gần-trùng -> bị loại trước sim. (Review (2): 0.20 cũ quá lỏng.)"""
+
+    class _FixedZoo:
+        def originality(self, expr):
+            return 0.30
+
+    sim = FakeSimulator(results=lambda e: _result(e, 1.8))
+    repo = _repo()
+    # KHÔNG truyền min_originality -> dùng default của loop.
+    loop = _loop(
+        _FakeTranslator("rank(close)"), _FakeRefiner([]), sim, repo,
+        max_simulations=10, zoo=_FixedZoo(),
+    )
+    res = loop.run("X")
+    assert len(sim.calls) == 0
+    assert res.best_candidate is None
+    cats = {f.category for f in repo.recent_failures(10)}
+    assert "duplicate" in cats
+
+
 def test_loop_giu_alpha_doc_dao_qua_prefilter():
     """Alpha độc đáo (operator khác hẳn zoo) vẫn được sim bình thường."""
     from src.decorrelation.zoo import ReferenceZoo

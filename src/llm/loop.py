@@ -65,7 +65,10 @@ class RefinementLoop:
         max_simulations: int = 20,
         no_improve_patience: int = 3,
         zoo=None,
-        min_originality: float = 0.2,
+        # 0.35 = loại gần-trùng tới similarity 0.65 (0.20 cũ lọt tới 0.80 — quá lỏng).
+        # AST chỉ là prefilter cấu trúc rẻ; corr-với-pool sau sim (gate 'crowded') mới
+        # là ràng buộc nộp thật.
+        min_originality: float = 0.35,
         aligner=None,
         min_alignment: float = 0.5,
         regularize: bool = False,
