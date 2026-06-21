@@ -165,11 +165,16 @@ def _field_type_context(selected_fields) -> str:
     return "\n".join(lines)
 
 
-def build_symbol_context(field_repo, operator_repo, prefilter, scope, relevance_text: str = "") -> str:
+def build_symbol_context(
+    field_repo, operator_repo, prefilter, scope, relevance_text: str = "", pinned=None
+) -> str:
     operators = [o.name for o in operator_repo.load_cached() if getattr(o, "name", None)]
     cached_fields = _load_cached(field_repo, scope)
-    fields = _relevant_fields(cached_fields, relevance_text)
     field_by_id = {getattr(f, "id", None): f for f in cached_fields if getattr(f, "id", None)}
+    if pinned:
+        fields = [fid for fid in dict.fromkeys(pinned) if fid in field_by_id][:MAX_FIELDS_IN_PROMPT]
+    else:
+        fields = _relevant_fields(cached_fields, relevance_text)
     selected_fields = [field_by_id[fid] for fid in fields if fid in field_by_id]
     type_context = _field_type_context(selected_fields)
     op_line = ", ".join(operators[:80]) or "rank, ts_delta, ts_mean, group_neutralize, ts_corr"
@@ -183,6 +188,8 @@ def build_symbol_context(field_repo, operator_repo, prefilter, scope, relevance_
     )
     if type_context:
         context += f"\n{type_context}"
+    if pinned:
+        context += "\nTUYỆT ĐỐI chỉ dùng field trong danh sách FIELDS trên; KHÔNG bịa tên field mới."
     return context
 
 

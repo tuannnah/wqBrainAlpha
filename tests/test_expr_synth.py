@@ -91,6 +91,26 @@ def test_build_symbol_context_khong_vector_thi_khong_chen_quy_tac():
     assert "QUY TAC VECTOR" not in out
 
 
+def test_build_symbol_context_pinned_chi_liet_field_ghim():
+    repo = _FieldRepo([_Field("pcr_oi_30"), _Field("close"), _Field("volume")])
+    ops = FakeSymbolRepo(["rank"])
+    pf = PreFilter(known_operators={"rank"}, known_fields={"pcr_oi_30", "close", "volume"})
+    out = expr_synth.build_symbol_context(repo, ops, pf, None, "bất kỳ", pinned=["pcr_oi_30"])
+    assert "pcr_oi_30" in out
+    # field ngoài palette ghim không được liệt vào dòng FIELDS
+    field_line = [ln for ln in out.splitlines() if ln.startswith("FIELDS khả dụng")][0]
+    assert "volume" not in field_line
+    assert "KHÔNG bịa" in out
+
+
+def test_build_symbol_context_pinned_none_giu_hanh_vi_cu():
+    repo = _FieldRepo([_Field("close", "MATRIX"), _Field("svec", "VECTOR")])
+    ops = FakeSymbolRepo(["rank", "ts_zscore", "vec_avg", "vec_sum"])
+    pf = PreFilter(known_operators={"rank"}, known_fields={"close", "svec"})
+    out = expr_synth.build_symbol_context(repo, ops, pf, scope=None, relevance_text="svec")
+    assert "KHÔNG bịa" not in out  # không có câu ghim khi pinned=None
+
+
 def test_build_syntax_constraints_lay_gioi_han_tu_prefilter():
     pf = PreFilter(known_operators={"rank"}, max_depth=6, max_nodes=30)
     out = expr_synth.build_syntax_constraints(pf)
