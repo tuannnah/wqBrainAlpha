@@ -16,7 +16,13 @@ from src.scoring.filter import blocking_dimensions
 from src.scoring.filter import passes as default_filter
 from src.scoring.metrics import normalize
 from src.scoring.regularized import Penalties, PenaltyWeights, regularized_score
-from src.scoring.vector import ScoreVector, score_vector, weakest_dimension, with_pool_corr
+from src.scoring.vector import (
+    ScoreVector,
+    score_vector,
+    weakest_dimension,
+    with_pool_corr,
+    with_regime_fit,
+)
 from src.simulation.config import SimConfig
 
 
@@ -46,6 +52,7 @@ class _Eval:
     passed: bool
     effective_total: float = 0.0  # điểm dùng để so sánh best (điều chuẩn nếu bật, else = vector.total)
     pool_corr: float | None = None  # self-corr với pool (đo sau sim); None = chưa/không đo
+    regime_blocked: bool = False    # năm tệ nhất dưới ngưỡng -> refine nhắm regime_fit
 
 
 class RefinementLoop:
@@ -79,6 +86,9 @@ class RefinementLoop:
         max_pool_corr: float = 0.70,
         oos_min_ratio: float | None = None,
         deflate_haircut: float = 0.0,
+        pnl_fn=None,
+        regime_min: float | None = None,
+        regime_target: float = 1.0,
     ):
         self.hypothesis_gen = hypothesis_gen
         self.translator = translator
@@ -109,6 +119,11 @@ class RefinementLoop:
         # Hệ số haircut điểm theo tỉ lệ budget sim đã dùng (deflated sharpe): candidate
         # nhìn càng muộn bị phạt càng nặng -> chống khai thác IS qua nhiều lần thử. 0 = tắt.
         self.deflate_haircut = deflate_haircut
+        # Đo regime: pnl_fn(wq_alpha_id) -> [(date, daily_pnl)]; regime_min = sàn Sharpe
+        # năm tệ nhất (None = tắt). regime_target chuẩn hoá regime_fit.
+        self.pnl_fn = pnl_fn
+        self.regime_min = regime_min
+        self.regime_target = regime_target
         self.sims_used = 0
         self.zoo_added = 0
 
@@ -227,6 +242,26 @@ class RefinementLoop:
                     f"OOS sharpe không đạt {self.oos_min_ratio:.2f}×IS", "llm",
                 )
 
+        # Regime gate (review 3): metric tổng có thể đẹp nhờ vài năm tốt che một năm sập.
+        # Tính Sharpe theo năm; năm tệ nhất dưới sàn -> mỏng manh theo regime -> loại.
+        regime_blocked = False
+        if passed and self.pnl_fn is not None and self.regime_min is not None and result.alpha_id:
+            from src.scoring.regime import min_annual_sharpe, regime_fit, yearly_sharpe
+
+            pnl = self.pnl_fn(result.alpha_id)
+            if pnl:
+                yearly = yearly_sharpe(pnl)
+                vector = with_regime_fit(vector, regime_fit(yearly, target=self.regime_target))
+                if min_annual_sharpe(yearly) < self.regime_min:
+                    gated = True
+                    regime_blocked = True
+                    passed = False
+                    self.repo.record_failure(
+                        expr, "regime_fragile",
+                        f"Sharpe năm tệ nhất {min_annual_sharpe(yearly):.2f} < sàn {self.regime_min:.2f}",
+                        "llm",
+                    )
+
         if passed:
             self.zoo_added += 1
         elif result.status == "error" or metrics_missing:
@@ -237,7 +272,7 @@ class RefinementLoop:
         else:
             self.repo.record_failure(expr, "low_score", "; ".join(reasons) or result.status, "llm")
         eff = self._effective_total(vector, expr, originality, alignment)
-        return _Eval(vector, normalize(result), alpha_id, passed, eff, pool_corr)
+        return _Eval(vector, normalize(result), alpha_id, passed, eff, pool_corr, regime_blocked)
 
     # ---------------------------------------------------------------- run
     def run(self, research_direction: str, on_progress=None) -> LoopResult:
@@ -273,12 +308,12 @@ class RefinementLoop:
             # Nhắm chiều yếu nhất TRONG SỐ các chiều đang chặn hard filter (vd
             # fitness) để hướng refine về biên cần vượt; alpha đã đạt -> chiều yếu
             # nhất tuyệt đối như cũ.
-            weak = weakest_dimension(
-                best_ev.vector,
-                restrict=blocking_dimensions(
-                    best_ev.metrics, pool_corr=best_ev.pool_corr, max_pool_corr=self.max_pool_corr
-                ),
+            restrict = blocking_dimensions(
+                best_ev.metrics, pool_corr=best_ev.pool_corr, max_pool_corr=self.max_pool_corr
             )
+            if best_ev.regime_blocked:
+                restrict.add("regime_fit")
+            weak = weakest_dimension(best_ev.vector, restrict=restrict)
             cand = self.refiner.refine(best_cand, best_ev.metrics, weak)
             if cand is None:
                 patience += 1

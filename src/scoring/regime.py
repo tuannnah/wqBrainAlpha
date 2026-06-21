@@ -17,10 +17,17 @@ def _clamp01(x: float) -> float:
 
 
 def _year_of(date) -> int:
-    """Lấy năm từ 'YYYY-...' (chuỗi) hoặc int năm."""
+    """Lấy năm từ 'YYYY-...' (chuỗi), int năm, hoặc epoch (giây/mili-giây)."""
     if isinstance(date, str):
         return int(date[:4])
-    return int(date)
+    d = int(date)
+    if d > 9999:  # epoch, không phải số năm trực tiếp
+        import datetime
+
+        if d > 10**12:  # mili-giây -> giây
+            d //= 1000
+        return datetime.datetime.utcfromtimestamp(d).year
+    return d
 
 
 def _sharpe(daily: list[float]) -> float:

@@ -132,11 +132,12 @@ def test_research_truyen_fixed_sim_config_xuong_loop_builder(monkeypatch):
 
     def _fake_builder(session_factory, client, region, universe, delay, max_sims, patience,
                       align=True, regularize=False, penalty_lambda=0.3, sim_config=None,
-                      oos_min_ratio=None, deflate_haircut=0.0):
+                      oos_min_ratio=None, deflate_haircut=0.0, regime_min=None):
         captured["scope"] = (region, universe, delay)
         captured["sim_config"] = sim_config
         captured["oos_min_ratio"] = oos_min_ratio
         captured["deflate_haircut"] = deflate_haircut
+        captured["regime_min"] = regime_min
         return object(), object()
 
     monkeypatch.setattr(main, "init_db", lambda e: e)
@@ -159,11 +160,13 @@ def test_research_truyen_fixed_sim_config_xuong_loop_builder(monkeypatch):
         neutralization="industry",
         oos_ratio=0.0,
         deflate=0.0,
+        min_annual_sharpe=0.0,
     )
 
     assert captured["scope"] == ("EUR", "TOP1200", 0)
     assert captured["oos_min_ratio"] is None  # oos_ratio=0 -> tắt gate
     assert captured["deflate_haircut"] == 0.0
+    assert captured["regime_min"] is None
     assert captured["sim_config"] == SimConfig(
         region="EUR",
         universe="TOP1200",

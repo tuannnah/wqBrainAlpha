@@ -612,6 +612,75 @@ def test_loop_khong_deflate_thi_cai_thien_mong_manh_van_thang():
     assert res.best_candidate.expression == "rank(ts_mean(close, 5))"
 
 
+# ------------------------------------------ (3) regime robustness gate
+_PNL_FRAGILE = [
+    ("2020-01-01", 1.0), ("2020-02-01", 1.1), ("2020-03-01", 0.9),
+    ("2021-01-01", -0.5), ("2021-02-01", -0.6), ("2021-03-01", -0.4),  # năm lỗ
+]
+_PNL_ROBUST = [
+    ("2020-01-01", 1.0), ("2020-02-01", 1.1), ("2020-03-01", 0.9),
+    ("2021-01-01", 1.0), ("2021-02-01", 1.1), ("2021-03-01", 0.9),
+]
+
+
+def test_loop_regime_fragile_bi_loai():
+    """Metrics IS đẹp nhưng có năm sập (min annual sharpe thấp) -> regime_fragile, không zoo."""
+    sim = FakeSimulator(results=lambda e: _result(e, 1.8))
+    repo = _repo()
+    loop = _loop(
+        _FakeTranslator("rank(close)"), _FakeRefiner([]), sim, repo,
+        max_simulations=1, no_improve_patience=1,
+        pnl_fn=lambda wq_id: _PNL_FRAGILE, regime_min=0.5,
+    )
+    res = loop.run("X")
+    assert res.zoo_added == 0
+    cats = {f.category for f in repo.recent_failures(10)}
+    assert "regime_fragile" in cats
+    assert "low_score" not in cats
+
+
+def test_loop_regime_ben_van_pass():
+    sim = FakeSimulator(results=lambda e: _result(e, 1.8))
+    repo = _repo()
+    loop = _loop(
+        _FakeTranslator("rank(close)"), _FakeRefiner([]), sim, repo,
+        max_simulations=1, no_improve_patience=1,
+        pnl_fn=lambda wq_id: _PNL_ROBUST, regime_min=0.5,
+    )
+    res = loop.run("X")
+    assert res.zoo_added >= 1
+
+
+def test_loop_regime_tat_mac_dinh_tuong_thich():
+    sim = FakeSimulator(results=lambda e: _result(e, 1.8))
+    repo = _repo()
+    loop = _loop(
+        _FakeTranslator("rank(close)"), _FakeRefiner([]), sim, repo,
+        max_simulations=1, no_improve_patience=1,
+    )
+    res = loop.run("X")
+    assert res.zoo_added >= 1
+
+
+def test_loop_refine_nham_regime_fit_khi_fragile():
+    """Năm sập là thứ chặn duy nhất -> refine nhắm 'regime_fit'."""
+    captured = []
+
+    class _RecRefiner:
+        def refine(self, candidate, metrics, weak_dimension):
+            captured.append(weak_dimension)
+            return None
+
+    sim = FakeSimulator(results=lambda e: _result(e, 1.8))
+    loop = _loop(
+        _FakeTranslator("rank(close)"), _RecRefiner(), sim, _repo(),
+        max_simulations=10, no_improve_patience=1,
+        pnl_fn=lambda wq_id: _PNL_FRAGILE, regime_min=0.5,
+    )
+    loop.run("X")
+    assert captured == ["regime_fit"]
+
+
 # --------------------------------------------------------- T6.1 MCTS
 def test_run_mcts_tim_duoc_alpha_tot_hon_seed():
     """MCTS khám phá nhiều nhánh, trả về alpha điểm cao nhất."""

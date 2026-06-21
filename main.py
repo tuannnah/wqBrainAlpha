@@ -602,10 +602,45 @@ def _make_pool_corr_fn(client):
     return _pool_corr
 
 
+def _make_pnl_fn(client):
+    """Helper lấy daily PnL của một alpha từ WQ recordset (review 3). WQ trả PnL TÍCH
+    LUỸ -> diff thành gia số ngày. Trả [(date, daily_pnl)] hoặc None khi lỗi/rỗng."""
+
+    def _pnl(wq_alpha_id):
+        try:
+            resp = client.get(f"/alphas/{wq_alpha_id}/recordsets/pnl")
+            if resp.status_code not in (200, 201):
+                return None
+            payload = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Không lấy được PnL cho {}: {}", wq_alpha_id, exc)
+            return None
+        records = payload.get("records") or []
+        props = (payload.get("schema") or {}).get("properties") or []
+        date_i, pnl_i = 0, 1
+        for i, p in enumerate(props):
+            name = (p.get("name") or "").lower() if isinstance(p, dict) else ""
+            if name == "date":
+                date_i = i
+            elif "pnl" in name:
+                pnl_i = i
+        out, prev = [], None
+        for row in records:
+            if not isinstance(row, (list, tuple)) or len(row) <= max(date_i, pnl_i):
+                continue
+            cum = float(row[pnl_i])
+            if prev is not None:
+                out.append((row[date_i], cum - prev))
+            prev = cum
+        return out or None
+
+    return _pnl
+
+
 def _make_research_loop(
     session_factory, client, region, universe, delay, max_sims, patience,
     align=True, regularize=False, penalty_lambda=0.3, sim_config=None,
-    oos_min_ratio=None, deflate_haircut=0.0,
+    oos_min_ratio=None, deflate_haircut=0.0, regime_min=None,
 ):
     """Lắp RefinementLoop GĐ2 với DeepSeek + Simulator thật. Trả (loop, deepseek)."""
     from src.decorrelation.similarity import avoid_subtree_canons
@@ -664,6 +699,9 @@ def _make_research_loop(
         # (4) OOS gate + deflated-sharpe chống overfit IS (None/0 = tắt).
         oos_min_ratio=oos_min_ratio,
         deflate_haircut=deflate_haircut,
+        # (3) Regime gate: sàn Sharpe năm tệ nhất (None = tắt). Chỉ lắp pnl_fn khi bật.
+        pnl_fn=(_make_pnl_fn(client) if regime_min else None),
+        regime_min=regime_min,
     )
     return loop, deepseek
 
@@ -729,6 +767,7 @@ def research(
     mcts: bool = typer.Option(False, "--mcts/--greedy", help="Dùng MCTS (giữ nhiều nhánh, UCB) thay vòng greedy (T6.1)"),
     oos_ratio: float = typer.Option(0.0, "--oos-ratio", help="Tỉ lệ OOS/IS sharpe tối thiểu để gắn passed (0 = tắt) (review 4)"),
     deflate: float = typer.Option(0.0, "--deflate", help="Hệ số haircut điểm theo budget sim đã dùng — chống overfit IS (0 = tắt) (review 4b)"),
+    min_annual_sharpe: float = typer.Option(0.0, "--min-annual-sharpe", help="Sàn Sharpe năm tệ nhất — loại alpha mỏng manh theo regime (0 = tắt) (review 3)"),
 ) -> None:
     """GĐ2: vòng lặp AI — sinh giả thuyết → mô phỏng → tinh chỉnh tham lam."""
     _setup_logging()
@@ -754,6 +793,7 @@ def research(
         align, regularize, penalty_lambda, sim_config=sim_config,
         oos_min_ratio=(oos_ratio if oos_ratio > 0 else None),
         deflate_haircut=deflate,
+        regime_min=(min_annual_sharpe if min_annual_sharpe > 0 else None),
     )
     result = _run_research_with_progress(loop, direction, max_sims, mcts=mcts)
     _render_research_result(result, deepseek)

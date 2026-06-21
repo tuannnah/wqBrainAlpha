@@ -21,6 +21,12 @@ DIMENSION_HINTS = {
         "factor phổ biến, hoặc đổi sang dataset/conditioning khác. KHÔNG chỉ winsorize/scale "
         "(không đổi tương quan). Mục tiêu là phần dư trực giao, không phải tinh chỉnh số."
     ),
+    "regime_fit": (
+        "tăng độ ỔN ĐỊNH theo năm (alpha hiện có năm sập): bớt phụ thuộc một chế độ "
+        "thị trường — chuẩn hoá/neutralize theo thời gian, thêm điều kiện bền (vd lọc "
+        "thanh khoản/biến động), hoặc dùng tín hiệu ít theo chu kỳ. Mục tiêu là Sharpe "
+        "dương ở MỌI năm, không chỉ trung bình cao."
+    ),
 }
 
 
