@@ -15,6 +15,12 @@ DIMENSION_HINTS = {
     "fitness": "tăng Fitness (chất lượng tín hiệu sau phí)",
     "turnover_fit": "đưa turnover về mức hợp lý (giảm giao dịch: làm mượt/decay tín hiệu)",
     "drawdown_fit": "giảm drawdown (kiểm soát rủi ro, bớt tập trung)",
+    "pool_fit": (
+        "GIẢM tương quan với pool đã có (alpha hiện quá giống rổ — không nộp được): "
+        "bọc tín hiệu bằng regression_neut/vector_neut để bóc phần chồng lấn với "
+        "factor phổ biến, hoặc đổi sang dataset/conditioning khác. KHÔNG chỉ winsorize/scale "
+        "(không đổi tương quan). Mục tiêu là phần dư trực giao, không phải tinh chỉnh số."
+    ),
 }
 
 

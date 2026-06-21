@@ -15,14 +15,26 @@ SHARPE_TARGET = 2.0
 FITNESS_TARGET = 1.5
 TARGET_TURNOVER = 0.3
 DRAWDOWN_LIMIT = 0.20
+# Trần self-correlation với pool: corr >= mốc này -> pool_fit = 0 (crowded, không nộp được).
+CORR_LIMIT = 0.70
 
-# Trọng số gộp về điểm tổng (khớp tinh thần scorer cũ: sharpe>fitness>=phụ).
+# Trọng số gộp về điểm tổng. pool_fit (độ trực giao với pool) là chiều HẠNG NHẤT:
+# trọng số ngang fitness để best-selection kéo ra khỏi đỉnh đông, không chỉ là phạt phụ.
 WEIGHTS = {
-    "sharpe": 0.40,
-    "fitness": 0.30,
-    "drawdown_fit": 0.15,
-    "turnover_fit": 0.15,
+    "sharpe": 0.30,
+    "fitness": 0.25,
+    "pool_fit": 0.25,
+    "drawdown_fit": 0.10,
+    "turnover_fit": 0.10,
 }
+
+
+def _pool_fit(pool_corr: float | None) -> float:
+    """Độ trực giao với pool: 1.0 khi không đo được/corr=0, giảm tuyến tính tới 0
+    tại CORR_LIMIT. corr >= CORR_LIMIT -> 0 (crowded)."""
+    if pool_corr is None:
+        return 1.0
+    return _clamp01(1.0 - abs(pool_corr) / CORR_LIMIT)
 
 
 def _clamp01(x: float) -> float:
@@ -36,6 +48,7 @@ class ScoreVector:
     turnover_fit: float  # 1 khi đúng target, giảm khi lệch
     drawdown_fit: float  # 1 khi drawdown=0, 0 khi >= DRAWDOWN_LIMIT
     total: float
+    pool_fit: float = 1.0  # độ trực giao với pool (1 = không trùng, 0 = crowded)
 
     def dimensions(self) -> dict[str, float]:
         return {
@@ -43,22 +56,41 @@ class ScoreVector:
             "fitness": self.fitness,
             "turnover_fit": self.turnover_fit,
             "drawdown_fit": self.drawdown_fit,
+            "pool_fit": self.pool_fit,
         }
 
 
-def score_vector(source) -> ScoreVector:
+def _total(sharpe, fitness, turnover_fit, drawdown_fit, pool_fit) -> float:
+    return (
+        WEIGHTS["sharpe"] * sharpe
+        + WEIGHTS["fitness"] * fitness
+        + WEIGHTS["pool_fit"] * pool_fit
+        + WEIGHTS["drawdown_fit"] * drawdown_fit
+        + WEIGHTS["turnover_fit"] * turnover_fit
+    )
+
+
+def score_vector(source, pool_corr: float | None = None) -> ScoreVector:
     m = normalize(source)
     sharpe = _clamp01(m["sharpe"] / SHARPE_TARGET)
     fitness = _clamp01(m["fitness"] / FITNESS_TARGET)
     turnover_fit = _clamp01(1 - abs(m["turnover"] - TARGET_TURNOVER) / TARGET_TURNOVER)
     drawdown_fit = _clamp01(1 - m["drawdown"] / DRAWDOWN_LIMIT)
-    total = (
-        WEIGHTS["sharpe"] * sharpe
-        + WEIGHTS["fitness"] * fitness
-        + WEIGHTS["drawdown_fit"] * drawdown_fit
-        + WEIGHTS["turnover_fit"] * turnover_fit
+    pool_fit = _pool_fit(pool_corr)
+    total = _total(sharpe, fitness, turnover_fit, drawdown_fit, pool_fit)
+    return ScoreVector(sharpe, fitness, turnover_fit, drawdown_fit, total, pool_fit)
+
+
+def with_pool_corr(vector: ScoreVector, pool_corr: float | None) -> ScoreVector:
+    """Trả vector mới với pool_fit cập nhật theo `pool_corr` (đo sau sim), total tính
+    lại. Dùng khi self-correlation chỉ lấy được SAU khi có WQ alpha_id."""
+    pool_fit = _pool_fit(pool_corr)
+    total = _total(
+        vector.sharpe, vector.fitness, vector.turnover_fit, vector.drawdown_fit, pool_fit
     )
-    return ScoreVector(sharpe, fitness, turnover_fit, drawdown_fit, total)
+    return ScoreVector(
+        vector.sharpe, vector.fitness, vector.turnover_fit, vector.drawdown_fit, total, pool_fit
+    )
 
 
 def weakest_dimension(

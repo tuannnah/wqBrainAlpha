@@ -34,11 +34,19 @@ def passes(source, thresholds: FilterThresholds | None = None) -> tuple[bool, li
     return (len(reasons) == 0, reasons)
 
 
-def blocking_dimensions(source, thresholds: FilterThresholds | None = None) -> set[str]:
+def blocking_dimensions(
+    source,
+    thresholds: FilterThresholds | None = None,
+    pool_corr: float | None = None,
+    max_pool_corr: float = 0.70,
+) -> set[str]:
     """Tập tên chiều ScoreVector đang KHÔNG đạt ngưỡng hard filter.
 
     Dùng để refiner nhắm đúng chiều chặn việc pass (đặc biệt fitness), thay vì
-    chiều có điểm chuẩn-hoá thấp nhất tuyệt đối. Rỗng nghĩa là alpha đã đạt."""
+    chiều có điểm chuẩn-hoá thấp nhất tuyệt đối. Rỗng nghĩa là alpha đã đạt.
+
+    `pool_corr` (self-correlation với pool, đo sau sim): vượt `max_pool_corr` ->
+    thêm 'pool_fit' để refiner nhắm khử trùng (residual neutralize). None -> bỏ qua."""
     t = thresholds or FilterThresholds()
     m = normalize(source)
     dims: set[str] = set()
@@ -50,4 +58,6 @@ def blocking_dimensions(source, thresholds: FilterThresholds | None = None) -> s
         dims.add("turnover_fit")
     if m["drawdown"] >= t.max_drawdown:
         dims.add("drawdown_fit")
+    if pool_corr is not None and abs(pool_corr) >= max_pool_corr:
+        dims.add("pool_fit")
     return dims

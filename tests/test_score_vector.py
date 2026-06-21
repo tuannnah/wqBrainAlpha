@@ -67,6 +67,54 @@ def test_blocking_dimensions_map_dung_chieu_fail():
     ) == set()
 
 
+# ---------------------------------------- (1) pool-correlation thành chiều hạng nhất
+def test_score_vector_khong_corr_thi_pool_fit_mac_dinh_1():
+    """Không truyền pool_corr -> pool_fit = 1.0 (trực giao hoàn toàn, không phạt)."""
+    v = score_vector({"sharpe": 1.5, "fitness": 1.2, "turnover": 0.3, "drawdown": 0.1})
+    assert v.pool_fit == 1.0
+    assert "pool_fit" in v.dimensions()
+
+
+def test_score_vector_corr_cao_giam_pool_fit_va_total():
+    """Correlation với pool cao -> pool_fit thấp -> total giảm (corr vào objective)."""
+    m = {"sharpe": 1.5, "fitness": 1.2, "turnover": 0.3, "drawdown": 0.1}
+    base = score_vector(m)
+    crowded = score_vector(m, pool_corr=0.65)
+    assert crowded.pool_fit < base.pool_fit
+    assert crowded.total < base.total
+
+
+def test_with_pool_corr_cap_nhat_pool_fit_va_total_giu_chieu_khac():
+    """with_pool_corr: cập nhật pool_fit + total cho vector đã tính, giữ nguyên chiều khác."""
+    from src.scoring.vector import with_pool_corr
+
+    v = score_vector({"sharpe": 1.5, "fitness": 1.2, "turnover": 0.3, "drawdown": 0.1})
+    v2 = with_pool_corr(v, 0.70)  # >= CORR_LIMIT -> pool_fit = 0
+    assert v2.pool_fit == 0.0
+    assert v2.total < v.total
+    assert v2.sharpe == v.sharpe and v2.fitness == v.fitness
+
+
+def test_weakest_dimension_nham_pool_fit_khi_crowded():
+    """restrict = {pool_fit} (corr là thứ duy nhất đang chặn) -> nhắm pool_fit."""
+    v = score_vector(
+        {"sharpe": 1.8, "fitness": 1.4, "turnover": 0.3, "drawdown": 0.02}, pool_corr=0.68
+    )
+    assert weakest_dimension(v, restrict={"pool_fit"}) == "pool_fit"
+
+
+def test_blocking_dimensions_them_pool_fit_khi_corr_vuot_nguong():
+    from src.scoring.filter import blocking_dimensions
+
+    m = {"sharpe": 1.5, "fitness": 1.4, "turnover": 0.3, "drawdown": 0.05}
+    # metrics đạt hết, nhưng corr vượt ngưỡng -> pool_fit là chiều chặn.
+    assert blocking_dimensions(m, pool_corr=0.80) == {"pool_fit"}
+    # corr dưới ngưỡng -> không chặn.
+    assert blocking_dimensions(m, pool_corr=0.50) == set()
+    # không truyền corr -> tương thích ngược.
+    assert blocking_dimensions(m) == set()
+
+
 def test_score_vector_nhan_simulation_result_object():
     from src.simulation.simulator import SimulationResult
 
