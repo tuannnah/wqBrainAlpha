@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -37,9 +38,13 @@ LOG_DIR = Path("logs")
 
 
 def _setup_logging() -> None:
-    LOG_DIR.mkdir(exist_ok=True)
     logger.remove()
     logger.add(sys.stderr, level="INFO")
+    # WQ_NO_FILE_LOG: bỏ file sink (conftest đặt khi chạy test) để không ghi
+    # đè log production bằng nhiễu fixture.
+    if os.environ.get("WQ_NO_FILE_LOG"):
+        return
+    LOG_DIR.mkdir(exist_ok=True)
     logger.add(LOG_DIR / "wq_alpha_{time:YYYY-MM-DD}.log", rotation="10 MB", retention="14 days")
 
 
@@ -579,6 +584,24 @@ def _make_llm_generator(session_factory, prefilter):
     )
 
 
+def _make_pool_corr_fn(client):
+    """Đóng gói CorrelationChecker của WQ thành callback (wq_alpha_id -> self-corr|None)
+    cho RefinementLoop. Đây chính là con số chặn-nộp thật của nền tảng. Lỗi hạ tầng
+    (exception) -> None để loop không chặn nhầm trên trục trặc tạm thời."""
+    from src.submission.correlation import CorrelationChecker
+
+    checker = CorrelationChecker(client)
+
+    def _pool_corr(wq_alpha_id):
+        try:
+            return checker.max_self_correlation(wq_alpha_id)
+        except Exception as exc:  # noqa: BLE001 — trục trặc mạng không nên giết vòng
+            logger.warning("Không đo được self-corr cho {}: {}", wq_alpha_id, exc)
+            return None
+
+    return _pool_corr
+
+
 def _make_research_loop(
     session_factory, client, region, universe, delay, max_sims, patience,
     align=True, regularize=False, penalty_lambda=0.3, sim_config=None,
@@ -634,6 +657,9 @@ def _make_research_loop(
         regularize=regularize,
         penalty_lambda=penalty_lambda,
         sim_config=sim_config,
+        # (1) Self-correlation với pool là ràng buộc hạng nhất: gate crowded sau sim
+        # + đưa vào điểm để best né đỉnh đông (dùng đúng endpoint chặn-nộp của WQ).
+        pool_corr_fn=_make_pool_corr_fn(client),
     )
     return loop, deepseek
 
@@ -660,13 +686,14 @@ def _render_research_result(result, deepseek) -> None:
     console.print(htab)
 
     stab = Table(title="Điểm đa chiều (chuẩn hoá)")
-    for name in ("sharpe", "fitness", "turnover_fit", "drawdown_fit"):
+    for name in ("sharpe", "fitness", "pool_fit", "turnover_fit", "drawdown_fit"):
         stab.add_column(name, justify="right")
     stab.add_column("total", justify="right")
     d = vec.dimensions()
     stab.add_row(
-        f"{d['sharpe']:.2f}", f"{d['fitness']:.2f}", f"{d['turnover_fit']:.2f}",
-        f"{d['drawdown_fit']:.2f}", f"[bold]{vec.total:.3f}[/bold]",
+        f"{d['sharpe']:.2f}", f"{d['fitness']:.2f}", f"{d['pool_fit']:.2f}",
+        f"{d['turnover_fit']:.2f}", f"{d['drawdown_fit']:.2f}",
+        f"[bold]{vec.total:.3f}[/bold]",
     )
     console.print(stab)
 
@@ -1120,14 +1147,47 @@ def _menu_operators(state: _MenuState) -> None:
     console.print(f"[green]Đã tải {len(operators)} operator.[/green]")
 
 
+# Menu neutralization: SUBINDUSTRY đứng đầu = mặc định (Enter). Thứ tự từ hẹp → rộng.
+_NEUTRALIZATION_MENU = [
+    "SUBINDUSTRY",
+    "INDUSTRY",
+    "SECTOR",
+    "MARKET",
+    "COUNTRY",
+    "EXCHANGE",
+    "NONE",
+]
+
+
+def _menu_ask_neutralization() -> str:
+    """Hỏi neutralization qua menu chọn số (đỡ gõ sai), vẫn cho gõ tên trực tiếp."""
+    from src.simulation.config import VALID_NEUTRALIZATIONS
+
+    console.print("Neutralization:")
+    for i, opt in enumerate(_NEUTRALIZATION_MENU, 1):
+        suffix = "  [mặc định]" if i == 1 else ""
+        console.print(f"  {i}) {opt}{suffix}")
+    raw = input("Chọn [Enter=1=SUBINDUSTRY]: ").strip()
+    if not raw:
+        return "SUBINDUSTRY"
+    if raw.isdigit() and 1 <= int(raw) <= len(_NEUTRALIZATION_MENU):
+        return _NEUTRALIZATION_MENU[int(raw) - 1]
+    # Cho phép gõ thẳng tên option (vd "industry") để tương thích thói quen cũ.
+    up = raw.upper()
+    if up in VALID_NEUTRALIZATIONS:
+        return up
+    console.print(f"[yellow]Không hợp lệ '{raw}', dùng SUBINDUSTRY.[/yellow]")
+    return "SUBINDUSTRY"
+
+
 def _menu_ask_sim_settings() -> dict:
     decay_raw = input("Decay [Enter=0]: ").strip()
     truncation_raw = input("Truncation [Enter=0.08]: ").strip()
-    neutralization_raw = input("Neutralization [Enter=SUBINDUSTRY]: ").strip()
+    neutralization = _menu_ask_neutralization()
     return {
         "decay": int(decay_raw or "0"),
         "truncation": float(truncation_raw or "0.08"),
-        "neutralization": (neutralization_raw or "SUBINDUSTRY").upper(),
+        "neutralization": neutralization,
     }
 
 
