@@ -100,6 +100,45 @@ def _relevant_fields(cached_fields, text: str) -> list[str]:
     return [fid for _, _, fid in scored[:MAX_FIELDS_IN_PROMPT]]
 
 
+# Token gợi ý dataset thay thế (option/news/social/analyst/graph) để độn palette
+# khi xếp hạng từ-vựng không đủ min_k field liên quan.
+ALT_THEME_TOKENS = {
+    "option", "implied", "iv", "put", "call", "skew", "pcr", "news", "event",
+    "sentiment", "novelty", "social", "buzz", "scl", "analyst", "revision",
+    "target", "recommendation", "supply", "graph", "competitor", "customer",
+}
+
+
+def retrieve_field_palette(field_repo, scope, text, k: int = 20, min_k: int = 8) -> list:
+    """Palette field THẬT liên quan `text`, trả đối tượng field. Đảm bảo không rỗng
+    khi cache không rỗng: thiếu thì độn theo theme alt-data rồi thứ tự cache."""
+    cached = _load_cached(field_repo, scope)
+    by_id = {getattr(f, "id", None): f for f in cached if getattr(f, "id", None)}
+    ranked_ids = _relevant_fields(cached, text)
+    out = [by_id[fid] for fid in ranked_ids[:k] if fid in by_id]
+    if len(out) >= min_k:
+        return out
+    chosen = {getattr(f, "id", None) for f in out}
+
+    def _pad(candidates):
+        for f in candidates:
+            fid = getattr(f, "id", None)
+            if fid and fid not in chosen:
+                out.append(f)
+                chosen.add(fid)
+                if len(out) >= min_k:
+                    return True
+        return False
+
+    themed = [
+        f for f in cached
+        if _tokens(f"{getattr(f, 'id', '')} {getattr(f, 'description', '') or ''}") & ALT_THEME_TOKENS
+    ]
+    if not _pad(themed):
+        _pad(cached)
+    return out
+
+
 def _field_type_context(selected_fields) -> str:
     by_type: dict[str, list[str]] = {}
     for field in selected_fields:

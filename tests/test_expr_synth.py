@@ -156,3 +156,23 @@ def test_repair_tra_none_khi_het_retry():
     )
     assert out is None
     assert len(ds.calls) == expr_synth.MAX_REPAIR_ATTEMPTS
+
+
+def test_retrieve_palette_field_lien_quan_dung_dau():
+    repo = _FieldRepo([
+        _Field("pcr_oi_30", description="put call ratio open interest"),
+        _Field("close"), _Field("volume"),
+    ])
+    out = expr_synth.retrieve_field_palette(repo, None, "put call open interest", min_k=1)
+    assert out[0].id == "pcr_oi_30"
+
+
+def test_retrieve_palette_khong_khop_van_khong_rong():
+    repo = _FieldRepo([_Field(f"f{i}") for i in range(10)])
+    out = expr_synth.retrieve_field_palette(repo, None, "asset growth rate", min_k=8)
+    assert len(out) >= 8
+    assert all(getattr(f, "id", None) for f in out)
+
+
+def test_retrieve_palette_cache_rong_tra_rong():
+    assert expr_synth.retrieve_field_palette(_FieldRepo([]), None, "bất kỳ") == []
