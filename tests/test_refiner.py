@@ -21,6 +21,21 @@ def _candidate():
     return AlphaCandidate(Hypothesis("o", "b", "r", "s"), "mô tả gốc", "rank(ts_delta(close, 5))")
 
 
+def test_refiner_turnover_hint_theo_toc_do_signal():
+    """Hint turnover phải biết tốc độ signal: turnover cao (fast) cảnh báo không làm
+    mượt mù; turnover thấp khuyên tăng độ nhạy. (Review 6.)"""
+    from src.llm.refiner import DIMENSION_HINTS
+
+    r = AlphaRefiner(deepseek=None, translator=None)
+    hint_fast = r._dimension_hint("turnover_fit", {"turnover": 0.95})
+    hint_slow = r._dimension_hint("turnover_fit", {"turnover": 0.005})
+    assert hint_fast != hint_slow
+    # fast signal: cảnh báo smoothing/decay phá returns
+    assert "decay" in hint_fast.lower() or "mượt" in hint_fast.lower()
+    # chiều khác giữ nguyên hint tĩnh
+    assert r._dimension_hint("sharpe", {"turnover": 0.5}) == DIMENSION_HINTS["sharpe"]
+
+
 def test_refine_prompt_chua_chieu_yeu_va_alpha_hien_tai():
     ds = FakeDeepSeek(
         [

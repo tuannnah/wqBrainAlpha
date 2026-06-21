@@ -9,11 +9,15 @@ from __future__ import annotations
 from src.llm.jsonutil import extract_json
 from src.llm.translator import AlphaCandidate, AlphaTranslator
 
+# Ngưỡng turnover (khớp FilterThresholds) để chọn hint theo tốc độ signal.
+TURNOVER_HIGH = 0.70
+TURNOVER_LOW = 0.01
+
 # Gợi ý cải thiện theo từng chiều của ScoreVector.
 DIMENSION_HINTS = {
     "sharpe": "tăng Sharpe (tín hiệu ổn định, ít nhiễu hơn)",
     "fitness": "tăng Fitness (chất lượng tín hiệu sau phí)",
-    "turnover_fit": "đưa turnover về mức hợp lý (giảm giao dịch: làm mượt/decay tín hiệu)",
+    "turnover_fit": "đưa turnover về mức hợp lý theo tốc độ tín hiệu",
     "drawdown_fit": "giảm drawdown (kiểm soát rủi ro, bớt tập trung)",
     "pool_fit": (
         "GIẢM tương quan với pool đã có (alpha hiện quá giống rổ — không nộp được): "
@@ -38,8 +42,29 @@ class AlphaRefiner:
         # thoái hóa kiểu ts_mean(volume,5) bị bơm vô hạn trong log thật).
         self._seen: set[str] = set()
 
+    def _dimension_hint(self, weak_dimension: str, metrics: dict) -> str:
+        """Hint cải thiện cho một chiều. Riêng turnover_fit phụ thuộc TỐC ĐỘ tín hiệu
+        (review 6): với tín hiệu nhanh (turnover cao), làm mượt/decay thô phá returns
+        nhanh hơn phá turnover (fitness ∝ √(|ret|/turnover)) — gậy ông đập lưng ông."""
+        if weak_dimension == "turnover_fit":
+            turnover = metrics.get("turnover", 0.5)
+            if turnover > TURNOVER_HIGH:
+                return (
+                    "giảm turnover NHƯNG giữ sức mạnh tín hiệu: đây là tín hiệu NHANH, "
+                    "làm mượt/decay thô sẽ phá returns nhanh hơn phá turnover. Ưu tiên lọc "
+                    "nhiễu/chọn lõi tín hiệu ổn định hoặc giảm tần suất giao dịch có chọn lọc, "
+                    "KHÔNG decay mù toàn cục."
+                )
+            if turnover < TURNOVER_LOW:
+                return (
+                    "tăng độ nhạy/độ phân tán tín hiệu (turnover quá thấp, alpha gần như "
+                    "không giao dịch — có thể đã bị làm mượt quá tay)."
+                )
+            return "đưa turnover về vùng hợp lý mà không hi sinh chất lượng tín hiệu"
+        return DIMENSION_HINTS.get(weak_dimension, weak_dimension)
+
     def refine(self, candidate: AlphaCandidate, metrics: dict, weak_dimension: str) -> AlphaCandidate | None:
-        hint = DIMENSION_HINTS.get(weak_dimension, weak_dimension)
+        hint = self._dimension_hint(weak_dimension, metrics)
         description = self._propose(candidate, metrics, hint)
         expression = self.translator._to_expression(description)
         if not expression:
