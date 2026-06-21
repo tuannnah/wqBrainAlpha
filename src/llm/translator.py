@@ -39,7 +39,7 @@ class AlphaTranslator:
         self._scope = {"region": region, "universe": universe, "delay": delay}
 
     def field_palette(self, text: str) -> list:
-        """Palette field THẬT liên quan `text`, theo đúng scope đang đặt (T6.7)."""
+        """Palette field THẬT liên quan `text`, theo đúng scope đang đặt (T6.4)."""
         return expr_synth.retrieve_field_palette(self.field_repo, self._scope, text)
 
     def _avoid_context(self) -> str:
