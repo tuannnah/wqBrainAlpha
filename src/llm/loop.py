@@ -16,7 +16,7 @@ from src.scoring.filter import blocking_dimensions
 from src.scoring.filter import passes as default_filter
 from src.scoring.metrics import normalize
 from src.scoring.regularized import Penalties, PenaltyWeights, regularized_score
-from src.scoring.vector import ScoreVector, score_vector, weakest_dimension
+from src.scoring.vector import ScoreVector, score_vector, weakest_dimension, with_pool_corr
 from src.simulation.config import SimConfig
 
 
@@ -45,6 +45,7 @@ class _Eval:
     alpha_id: str | None  # None khi cache hit (không lưu lại)
     passed: bool
     effective_total: float = 0.0  # điểm dùng để so sánh best (điều chuẩn nếu bật, else = vector.total)
+    pool_corr: float | None = None  # self-corr với pool (đo sau sim); None = chưa/không đo
 
 
 class RefinementLoop:
@@ -71,6 +72,8 @@ class RefinementLoop:
         penalty_lambda: float = 0.3,
         penalty_weights: PenaltyWeights | None = None,
         sim_config: SimConfig | None = None,
+        pool_corr_fn=None,
+        max_pool_corr: float = 0.70,
     ):
         self.hypothesis_gen = hypothesis_gen
         self.translator = translator
@@ -93,6 +96,9 @@ class RefinementLoop:
         self.regularize = regularize
         self.penalty_lambda = penalty_lambda
         self.penalty_weights = penalty_weights or PenaltyWeights()
+        # Hàm đo self-correlation với pool (wq_alpha_id -> float|None). None = tắt gate.
+        self.pool_corr_fn = pool_corr_fn
+        self.max_pool_corr = max_pool_corr
         self.sims_used = 0
         self.zoo_added = 0
 
@@ -174,15 +180,35 @@ class RefinementLoop:
         # sim hoàn tất nhưng không ra metric, vd operator lỗi). Không phải alpha
         # điểm thấp, nên ghi sim_error để LLM tránh lặp, không thổi phồng low_score.
         metrics_missing = result.sharpe is None and result.fitness is None
+
+        # Self-correlation với pool (ràng buộc chặn-nộp thật). Chỉ đo cho alpha ĐÃ đạt
+        # metrics — alpha kém thì khỏi tốn lượt API. Vượt ngưỡng -> crowded: đẹp số
+        # nhưng không nộp được -> loại khỏi zoo và đưa corr vào điểm để best né đỉnh đông.
+        pool_corr = None
+        crowded = False
+        if passed and self.pool_corr_fn is not None and result.alpha_id:
+            pool_corr = self.pool_corr_fn(result.alpha_id)
+            if pool_corr is not None:
+                vector = with_pool_corr(vector, pool_corr)
+                if abs(pool_corr) >= self.max_pool_corr:
+                    crowded = True
+                    passed = False
+                    self.repo.record_failure(
+                        expr, "crowded",
+                        f"self-corr {pool_corr:.2f} >= ngưỡng {self.max_pool_corr:.2f}", "llm",
+                    )
+
         if passed:
             self.zoo_added += 1
         elif result.status == "error" or metrics_missing:
             detail = result.raw.get("error") if isinstance(result.raw, dict) else None
             self.repo.record_failure(expr, "sim_error", str(detail or result.status), "llm")
+        elif crowded:
+            pass  # đã ghi 'crowded' ở trên, không dán nhãn low_score chồng lên
         else:
             self.repo.record_failure(expr, "low_score", "; ".join(reasons) or result.status, "llm")
         eff = self._effective_total(vector, expr, originality, alignment)
-        return _Eval(vector, normalize(result), alpha_id, passed, eff)
+        return _Eval(vector, normalize(result), alpha_id, passed, eff, pool_corr)
 
     # ---------------------------------------------------------------- run
     def run(self, research_direction: str, on_progress=None) -> LoopResult:
@@ -219,7 +245,10 @@ class RefinementLoop:
             # fitness) để hướng refine về biên cần vượt; alpha đã đạt -> chiều yếu
             # nhất tuyệt đối như cũ.
             weak = weakest_dimension(
-                best_ev.vector, restrict=blocking_dimensions(best_ev.metrics)
+                best_ev.vector,
+                restrict=blocking_dimensions(
+                    best_ev.metrics, pool_corr=best_ev.pool_corr, max_pool_corr=self.max_pool_corr
+                ),
             )
             cand = self.refiner.refine(best_cand, best_ev.metrics, weak)
             if cand is None:

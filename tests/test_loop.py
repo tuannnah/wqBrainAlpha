@@ -439,6 +439,81 @@ def test_loop_bat_regularize_thi_phat_phuc_tap_giu_alpha_don_gian():
     assert res.best_candidate.expression == _REG_SEED
 
 
+# ------------------------------------------ (1) pool-correlation gate + objective
+def test_loop_crowded_bi_loai_khong_vao_zoo():
+    """Alpha đẹp metrics nhưng self-corr với pool >= ngưỡng -> crowded, KHÔNG vào zoo,
+    ghi failure 'crowded' (không dán nhãn low_score sai)."""
+    sim = FakeSimulator(results=lambda e: _result(e, 1.8))
+    repo = _repo()
+    loop = _loop(
+        _FakeTranslator("rank(close)"), _FakeRefiner([]), sim, repo,
+        max_simulations=1, no_improve_patience=1,
+        pool_corr_fn=lambda wq_id: 0.9, max_pool_corr=0.70,
+    )
+    res = loop.run("X")
+    assert len(sim.calls) == 1       # vẫn sim để biết metrics
+    assert res.zoo_added == 0        # nhưng không vào zoo
+    cats = {f.category for f in repo.recent_failures(10)}
+    assert "crowded" in cats
+    assert "low_score" not in cats
+
+
+def test_loop_corr_thap_van_pass_va_vao_zoo():
+    sim = FakeSimulator(results=lambda e: _result(e, 1.8))
+    repo = _repo()
+    loop = _loop(
+        _FakeTranslator("rank(close)"), _FakeRefiner([]), sim, repo,
+        max_simulations=1, no_improve_patience=1,
+        pool_corr_fn=lambda wq_id: 0.1, max_pool_corr=0.70,
+    )
+    res = loop.run("X")
+    assert res.zoo_added >= 1
+
+
+def test_loop_khong_pool_corr_fn_thi_tuong_thich_nguoc():
+    sim = FakeSimulator(results=lambda e: _result(e, 1.8))
+    repo = _repo()
+    loop = _loop(_FakeTranslator("rank(close)"), _FakeRefiner([]), sim, repo, max_simulations=1)
+    res = loop.run("X")
+    assert res.zoo_added >= 1
+
+
+def test_loop_chi_goi_corr_cho_alpha_pass_metrics():
+    """Alpha fail hard-filter (sharpe thấp) -> không tốn API self-corr."""
+    calls = []
+
+    def corr_fn(wq_id):
+        calls.append(wq_id)
+        return 0.1
+
+    sim = FakeSimulator(results=lambda e: _result(e, 0.2))  # sharpe 0.2 < 1.25 -> fail
+    loop = _loop(
+        _FakeTranslator("rank(close)"), _FakeRefiner([]), sim, _repo(),
+        max_simulations=1, no_improve_patience=1, pool_corr_fn=corr_fn,
+    )
+    loop.run("X")
+    assert calls == []
+
+
+def test_loop_refine_nham_pool_fit_khi_crowded():
+    """Metrics đạt nhưng corr cao -> chiều chặn duy nhất là pool_fit -> refine nhắm 'pool_fit'."""
+    captured = []
+
+    class _RecRefiner:
+        def refine(self, candidate, metrics, weak_dimension):
+            captured.append(weak_dimension)
+            return None
+
+    sim = FakeSimulator(results=lambda e: _result(e, 1.8))  # metrics pass
+    loop = _loop(
+        _FakeTranslator("rank(close)"), _RecRefiner(), sim, _repo(),
+        max_simulations=10, no_improve_patience=1,
+        pool_corr_fn=lambda wq_id: 0.9, max_pool_corr=0.70,
+    )
+    loop.run("X")
+    assert captured == ["pool_fit"]
+
+
 # --------------------------------------------------------- T6.1 MCTS
 def test_run_mcts_tim_duoc_alpha_tot_hon_seed():
     """MCTS khám phá nhiều nhánh, trả về alpha điểm cao nhất."""
