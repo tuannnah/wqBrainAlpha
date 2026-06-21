@@ -70,14 +70,31 @@ class HypothesisGenerator:
     def __init__(self, deepseek):
         self.deepseek = deepseek
 
-    def generate(self, research_direction: str) -> Hypothesis:
+    def generate(self, research_direction: str, palette=None) -> Hypothesis:
         user = (
             f'Hướng nghiên cứu: "{research_direction}". '
             "Đề xuất một giả thuyết alpha mới, cụ thể, có thể kiểm chứng. Trả JSON 4 phần."
         )
-        content = self.deepseek.complete(SYSTEM_PROMPT, user, json_mode=True, task="hypothesis")
+        system = SYSTEM_PROMPT
+        palette_ids: list[str] = []
+        if palette:
+            palette_ids = [getattr(f, "id", None) for f in palette if getattr(f, "id", None)]
+            listing = "\n".join(
+                f"- {getattr(f, 'id', '')}: {(getattr(f, 'description', '') or '')[:60]}"
+                for f in palette if getattr(f, "id", None)
+            )
+            system = (
+                SYSTEM_PROMPT
+                + "\nFIELD CÓ THẬT (chỉ nêu ID lấy ĐÚNG từ danh sách này):\n" + listing
+                + '\nTrả thêm khoá "fields" = danh sách ID field bạn dùng; '
+                "implementation_spec phải nêu chính các field ID đó."
+            )
+        content = self.deepseek.complete(system, user, json_mode=True, task="hypothesis")
         data = extract_json(content)
         if not isinstance(data, dict):
             logger.warning("Hypothesis: không parse được JSON, trả rỗng.")
-            return Hypothesis()
-        return Hypothesis.from_dict(data)
+            return Hypothesis(fields=ground_fields(None, palette_ids)) if palette_ids else Hypothesis()
+        h = Hypothesis.from_dict(data)
+        if palette_ids:
+            h.fields = ground_fields(data.get("fields"), palette_ids)
+        return h

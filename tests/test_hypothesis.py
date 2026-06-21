@@ -88,3 +88,43 @@ def test_ground_fields_rong_tra_tuple_rong():
 
 def test_hypothesis_co_field_mac_dinh_rong():
     assert Hypothesis("a", "b", "c", "d").fields == ()
+
+
+class _PField:
+    def __init__(self, id, description=""):
+        self.id = id
+        self.description = description
+
+
+def test_generate_ground_fields_tu_palette():
+    payload = {
+        "observation": "o", "background": "b", "economic_rationale": "r",
+        "implementation_spec": "dùng pcr_oi_30", "fields": ["pcr_oi_30", "bia_field"],
+    }
+    ds = FakeDeepSeek([json.dumps(payload)])
+    h = HypothesisGenerator(ds).generate("flow quyền chọn", palette=[_PField("pcr_oi_30"), _PField("scl12_buzz")])
+    # min_k=2: chỉ "pcr_oi_30" hợp lệ -> augment thêm "scl12_buzz" từ palette.
+    assert h.fields[0] == "pcr_oi_30"
+    assert "bia_field" not in h.fields
+
+
+def test_generate_palette_liet_ke_vao_prompt():
+    ds = FakeDeepSeek([json.dumps({"observation": "o"})])
+    HypothesisGenerator(ds).generate("x", palette=[_PField("pcr_oi_30", "put call ratio")])
+    system, _ = ds.calls[0]
+    assert "pcr_oi_30" in system
+    assert "fields" in system
+
+
+def test_generate_thieu_khoa_fields_augment_tu_palette():
+    ds = FakeDeepSeek([json.dumps({"observation": "o"})])  # không có "fields"
+    h = HypothesisGenerator(ds).generate("x", palette=[_PField("a"), _PField("b"), _PField("c")])
+    assert len(h.fields) >= 2  # augment tới min_k=2
+
+
+def test_generate_khong_palette_giu_hanh_vi_cu():
+    ds = FakeDeepSeek([json.dumps({"observation": "o"})])
+    h = HypothesisGenerator(ds).generate("x")
+    assert h.fields == ()
+    system, _ = ds.calls[0]
+    assert "fields" not in system
