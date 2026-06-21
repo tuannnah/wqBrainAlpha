@@ -115,6 +115,31 @@ def test_blocking_dimensions_them_pool_fit_khi_corr_vuot_nguong():
     assert blocking_dimensions(m) == set()
 
 
+# ----------------------------------------------- (3) regime robustness thành chiều
+def test_score_vector_khong_regime_thi_mac_dinh_1():
+    v = score_vector({"sharpe": 1.5, "fitness": 1.2, "turnover": 0.3, "drawdown": 0.1})
+    assert v.regime_fit == 1.0
+    assert "regime_fit" in v.dimensions()
+
+
+def test_score_vector_regime_yeu_giam_total():
+    m = {"sharpe": 1.5, "fitness": 1.2, "turnover": 0.3, "drawdown": 0.1}
+    base = score_vector(m)
+    fragile = score_vector(m, regime=0.2)
+    assert fragile.regime_fit == 0.2
+    assert fragile.total < base.total
+
+
+def test_with_regime_fit_giu_pool_fit():
+    from src.scoring.vector import with_regime_fit
+
+    v = score_vector({"sharpe": 1.5, "fitness": 1.2, "turnover": 0.3, "drawdown": 0.1}, pool_corr=0.5)
+    v2 = with_regime_fit(v, 0.3)
+    assert v2.regime_fit == 0.3
+    assert v2.pool_fit == v.pool_fit  # giữ nguyên chiều pool
+    assert v2.total < v.total
+
+
 def test_score_vector_nhan_simulation_result_object():
     from src.simulation.simulator import SimulationResult
 

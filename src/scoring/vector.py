@@ -18,14 +18,15 @@ DRAWDOWN_LIMIT = 0.20
 # Trần self-correlation với pool: corr >= mốc này -> pool_fit = 0 (crowded, không nộp được).
 CORR_LIMIT = 0.70
 
-# Trọng số gộp về điểm tổng. pool_fit (độ trực giao với pool) là chiều HẠNG NHẤT:
-# trọng số ngang fitness để best-selection kéo ra khỏi đỉnh đông, không chỉ là phạt phụ.
+# Trọng số gộp về điểm tổng. pool_fit (trực giao với pool) và regime_fit (ổn định
+# theo năm) là hai chiều "nộp được / bền" hạng nhất, không phải phạt phụ.
 WEIGHTS = {
-    "sharpe": 0.30,
-    "fitness": 0.25,
+    "sharpe": 0.25,
+    "fitness": 0.20,
     "pool_fit": 0.25,
-    "drawdown_fit": 0.10,
-    "turnover_fit": 0.10,
+    "regime_fit": 0.15,
+    "drawdown_fit": 0.075,
+    "turnover_fit": 0.075,
 }
 
 
@@ -48,7 +49,8 @@ class ScoreVector:
     turnover_fit: float  # 1 khi đúng target, giảm khi lệch
     drawdown_fit: float  # 1 khi drawdown=0, 0 khi >= DRAWDOWN_LIMIT
     total: float
-    pool_fit: float = 1.0  # độ trực giao với pool (1 = không trùng, 0 = crowded)
+    pool_fit: float = 1.0    # độ trực giao với pool (1 = không trùng, 0 = crowded)
+    regime_fit: float = 1.0  # độ ổn định theo năm (1 = bền mọi năm, 0 = có năm sập)
 
     def dimensions(self) -> dict[str, float]:
         return {
@@ -57,28 +59,33 @@ class ScoreVector:
             "turnover_fit": self.turnover_fit,
             "drawdown_fit": self.drawdown_fit,
             "pool_fit": self.pool_fit,
+            "regime_fit": self.regime_fit,
         }
 
 
-def _total(sharpe, fitness, turnover_fit, drawdown_fit, pool_fit) -> float:
+def _total(sharpe, fitness, turnover_fit, drawdown_fit, pool_fit, regime_fit) -> float:
     return (
         WEIGHTS["sharpe"] * sharpe
         + WEIGHTS["fitness"] * fitness
         + WEIGHTS["pool_fit"] * pool_fit
+        + WEIGHTS["regime_fit"] * regime_fit
         + WEIGHTS["drawdown_fit"] * drawdown_fit
         + WEIGHTS["turnover_fit"] * turnover_fit
     )
 
 
-def score_vector(source, pool_corr: float | None = None) -> ScoreVector:
+def score_vector(
+    source, pool_corr: float | None = None, regime: float | None = None
+) -> ScoreVector:
     m = normalize(source)
     sharpe = _clamp01(m["sharpe"] / SHARPE_TARGET)
     fitness = _clamp01(m["fitness"] / FITNESS_TARGET)
     turnover_fit = _clamp01(1 - abs(m["turnover"] - TARGET_TURNOVER) / TARGET_TURNOVER)
     drawdown_fit = _clamp01(1 - m["drawdown"] / DRAWDOWN_LIMIT)
     pool_fit = _pool_fit(pool_corr)
-    total = _total(sharpe, fitness, turnover_fit, drawdown_fit, pool_fit)
-    return ScoreVector(sharpe, fitness, turnover_fit, drawdown_fit, total, pool_fit)
+    regime_fit = 1.0 if regime is None else _clamp01(regime)
+    total = _total(sharpe, fitness, turnover_fit, drawdown_fit, pool_fit, regime_fit)
+    return ScoreVector(sharpe, fitness, turnover_fit, drawdown_fit, total, pool_fit, regime_fit)
 
 
 def with_pool_corr(vector: ScoreVector, pool_corr: float | None) -> ScoreVector:
@@ -86,10 +93,26 @@ def with_pool_corr(vector: ScoreVector, pool_corr: float | None) -> ScoreVector:
     lại. Dùng khi self-correlation chỉ lấy được SAU khi có WQ alpha_id."""
     pool_fit = _pool_fit(pool_corr)
     total = _total(
-        vector.sharpe, vector.fitness, vector.turnover_fit, vector.drawdown_fit, pool_fit
+        vector.sharpe, vector.fitness, vector.turnover_fit, vector.drawdown_fit,
+        pool_fit, vector.regime_fit,
     )
     return ScoreVector(
-        vector.sharpe, vector.fitness, vector.turnover_fit, vector.drawdown_fit, total, pool_fit
+        vector.sharpe, vector.fitness, vector.turnover_fit, vector.drawdown_fit,
+        total, pool_fit, vector.regime_fit,
+    )
+
+
+def with_regime_fit(vector: ScoreVector, regime: float) -> ScoreVector:
+    """Trả vector mới với regime_fit cập nhật (đo từ Sharpe theo năm sau sim), giữ
+    nguyên pool_fit và các chiều khác, total tính lại."""
+    regime_fit = _clamp01(regime)
+    total = _total(
+        vector.sharpe, vector.fitness, vector.turnover_fit, vector.drawdown_fit,
+        vector.pool_fit, regime_fit,
+    )
+    return ScoreVector(
+        vector.sharpe, vector.fitness, vector.turnover_fit, vector.drawdown_fit,
+        total, vector.pool_fit, regime_fit,
     )
 
 
