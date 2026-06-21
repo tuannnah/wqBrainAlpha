@@ -111,6 +111,16 @@ def test_build_symbol_context_pinned_none_giu_hanh_vi_cu():
     assert "KHÔNG bịa" not in out  # không có câu ghim khi pinned=None
 
 
+def test_build_symbol_context_pinned_khong_co_trong_cache_khong_chen_cam_bia():
+    repo = _FieldRepo([_Field("close")])
+    ops = FakeSymbolRepo(["rank"])
+    pf = PreFilter(known_operators={"rank"}, known_fields={"close"})
+    out = expr_synth.build_symbol_context(repo, ops, pf, None, "bất kỳ", pinned=["khong_ton_tai"])
+    # pinned không khớp field nào trong cache -> fields rỗng -> field_line rơi về default
+    # chung -> KHÔNG được chèn câu cấm-bịa (vì nó sẽ mâu thuẫn với danh sách default đó)
+    assert "KHÔNG bịa" not in out
+
+
 def test_build_syntax_constraints_lay_gioi_han_tu_prefilter():
     pf = PreFilter(known_operators={"rank"}, max_depth=6, max_nodes=30)
     out = expr_synth.build_syntax_constraints(pf)

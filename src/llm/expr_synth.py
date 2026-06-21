@@ -188,7 +188,7 @@ def build_symbol_context(
     )
     if type_context:
         context += f"\n{type_context}"
-    if pinned:
+    if pinned and fields:
         context += "\nTUYỆT ĐỐI chỉ dùng field trong danh sách FIELDS trên; KHÔNG bịa tên field mới."
     return context
 
