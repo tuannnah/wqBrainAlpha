@@ -131,9 +131,11 @@ def test_research_truyen_fixed_sim_config_xuong_loop_builder(monkeypatch):
     captured = {}
 
     def _fake_builder(session_factory, client, region, universe, delay, max_sims, patience,
-                      align=True, regularize=False, penalty_lambda=0.3, sim_config=None):
+                      align=True, regularize=False, penalty_lambda=0.3, sim_config=None,
+                      oos_min_ratio=None):
         captured["scope"] = (region, universe, delay)
         captured["sim_config"] = sim_config
+        captured["oos_min_ratio"] = oos_min_ratio
         return object(), object()
 
     monkeypatch.setattr(main, "init_db", lambda e: e)
@@ -154,9 +156,11 @@ def test_research_truyen_fixed_sim_config_xuong_loop_builder(monkeypatch):
         decay=6,
         truncation=0.12,
         neutralization="industry",
+        oos_ratio=0.0,
     )
 
     assert captured["scope"] == ("EUR", "TOP1200", 0)
+    assert captured["oos_min_ratio"] is None  # oos_ratio=0 -> tắt gate
     assert captured["sim_config"] == SimConfig(
         region="EUR",
         universe="TOP1200",
@@ -229,3 +233,31 @@ def test_lenh_auto_khong_con_engine_option(monkeypatch):
     assert result.exit_code == 0, result.output
     assert called["max_sims"] == 7
     assert called["generations"] == 3
+
+
+def test_menu_neutralization_chon_theo_so(monkeypatch):
+    """Menu neutralization: chọn bằng số trả về đúng tên option."""
+    # Option số 1 là mặc định SUBINDUSTRY; chọn số khác (vd MARKET) phải đúng.
+    idx = main._NEUTRALIZATION_MENU.index("MARKET") + 1
+    monkeypatch.setattr("builtins.input", lambda prompt="": str(idx))
+    assert main._menu_ask_neutralization() == "MARKET"
+
+
+def test_menu_neutralization_enter_dung_mac_dinh(monkeypatch):
+    """Bỏ trống (Enter) → mặc định SUBINDUSTRY."""
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    assert main._menu_ask_neutralization() == "SUBINDUSTRY"
+
+
+def test_menu_neutralization_van_cho_go_ten(monkeypatch):
+    """Vẫn cho gõ tên trực tiếp (không phân biệt hoa thường)."""
+    monkeypatch.setattr("builtins.input", lambda prompt="": "industry")
+    assert main._menu_ask_neutralization() == "INDUSTRY"
+
+
+def test_menu_neutralization_khong_hop_le_ve_mac_dinh(monkeypatch):
+    """Nhập rác (số ngoài dải hoặc tên sai) → quay về SUBINDUSTRY."""
+    monkeypatch.setattr("builtins.input", lambda prompt="": "999")
+    assert main._menu_ask_neutralization() == "SUBINDUSTRY"
+    monkeypatch.setattr("builtins.input", lambda prompt="": "xyz")
+    assert main._menu_ask_neutralization() == "SUBINDUSTRY"

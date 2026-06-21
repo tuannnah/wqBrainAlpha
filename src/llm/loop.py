@@ -77,6 +77,7 @@ class RefinementLoop:
         sim_config: SimConfig | None = None,
         pool_corr_fn=None,
         max_pool_corr: float = 0.70,
+        oos_min_ratio: float | None = None,
     ):
         self.hypothesis_gen = hypothesis_gen
         self.translator = translator
@@ -102,6 +103,8 @@ class RefinementLoop:
         # Hàm đo self-correlation với pool (wq_alpha_id -> float|None). None = tắt gate.
         self.pool_corr_fn = pool_corr_fn
         self.max_pool_corr = max_pool_corr
+        # Tỉ lệ OOS/IS sharpe tối thiểu để gắn passed. None = tắt (tương thích ngược).
+        self.oos_min_ratio = oos_min_ratio
         self.sims_used = 0
         self.zoo_added = 0
 
@@ -188,26 +191,39 @@ class RefinementLoop:
         # metrics — alpha kém thì khỏi tốn lượt API. Vượt ngưỡng -> crowded: đẹp số
         # nhưng không nộp được -> loại khỏi zoo và đưa corr vào điểm để best né đỉnh đông.
         pool_corr = None
-        crowded = False
+        gated = False  # bị chặn bởi ràng buộc ngoài-hard-filter (crowded/oos), đã ghi failure
         if passed and self.pool_corr_fn is not None and result.alpha_id:
             pool_corr = self.pool_corr_fn(result.alpha_id)
             if pool_corr is not None:
                 vector = with_pool_corr(vector, pool_corr)
                 if abs(pool_corr) >= self.max_pool_corr:
-                    crowded = True
+                    gated = True
                     passed = False
                     self.repo.record_failure(
                         expr, "crowded",
                         f"self-corr {pool_corr:.2f} >= ngưỡng {self.max_pool_corr:.2f}", "llm",
                     )
 
+        # OOS gate (review 4): tinh chỉnh IS có hệ thống là một dạng overfit. Mỗi sim là
+        # một "lần nhìn" IS; chỉ gắn passed khi OOS sharpe đạt tỉ lệ tối thiểu so với IS.
+        if passed and self.oos_min_ratio is not None:
+            from src.simulation.oos import oos_passes
+
+            if not oos_passes(result, min_ratio=self.oos_min_ratio):
+                gated = True
+                passed = False
+                self.repo.record_failure(
+                    expr, "oos_fail",
+                    f"OOS sharpe không đạt {self.oos_min_ratio:.2f}×IS", "llm",
+                )
+
         if passed:
             self.zoo_added += 1
         elif result.status == "error" or metrics_missing:
             detail = result.raw.get("error") if isinstance(result.raw, dict) else None
             self.repo.record_failure(expr, "sim_error", str(detail or result.status), "llm")
-        elif crowded:
-            pass  # đã ghi 'crowded' ở trên, không dán nhãn low_score chồng lên
+        elif gated:
+            pass  # đã ghi 'crowded'/'oos_fail' ở trên, không dán nhãn low_score chồng lên
         else:
             self.repo.record_failure(expr, "low_score", "; ".join(reasons) or result.status, "llm")
         eff = self._effective_total(vector, expr, originality, alignment)

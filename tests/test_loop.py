@@ -536,6 +536,52 @@ def test_loop_refine_nham_pool_fit_khi_crowded():
     assert captured == ["pool_fit"]
 
 
+# ------------------------------------------ (4) OOS gate chống overfit IS
+def _result_os(expr, sharpe, os_sharpe):
+    return SimulationResult(
+        expression=expr, alpha_id="wq-" + expr, status="passed",
+        sharpe=sharpe, fitness=1.2, turnover=0.3, drawdown=0.1, os_sharpe=os_sharpe, raw={},
+    )
+
+
+def test_loop_oos_gate_loai_alpha_yeu_oos():
+    """Bật oos_min_ratio: metrics IS đẹp nhưng OOS sharpe yếu -> không passed, ghi oos_fail."""
+    sim = FakeSimulator(results=lambda e: _result_os(e, 2.0, 0.2))  # 0.2 << 0.5*2.0
+    repo = _repo()
+    loop = _loop(
+        _FakeTranslator("rank(close)"), _FakeRefiner([]), sim, repo,
+        max_simulations=1, no_improve_patience=1, oos_min_ratio=0.5,
+    )
+    res = loop.run("X")
+    assert res.zoo_added == 0
+    cats = {f.category for f in repo.recent_failures(10)}
+    assert "oos_fail" in cats
+    assert "low_score" not in cats
+
+
+def test_loop_oos_gate_giu_alpha_qua_oos():
+    sim = FakeSimulator(results=lambda e: _result_os(e, 2.0, 1.5))  # 1.5 >= 0.5*2.0
+    repo = _repo()
+    loop = _loop(
+        _FakeTranslator("rank(close)"), _FakeRefiner([]), sim, repo,
+        max_simulations=1, no_improve_patience=1, oos_min_ratio=0.5,
+    )
+    res = loop.run("X")
+    assert res.zoo_added >= 1
+
+
+def test_loop_oos_tat_mac_dinh_tuong_thich_nguoc():
+    """oos_min_ratio=None (mặc định) -> không áp OOS gate (alpha không có os vẫn pass)."""
+    sim = FakeSimulator(results=lambda e: _result(e, 2.0))  # không os_sharpe
+    repo = _repo()
+    loop = _loop(
+        _FakeTranslator("rank(close)"), _FakeRefiner([]), sim, repo,
+        max_simulations=1, no_improve_patience=1,
+    )
+    res = loop.run("X")
+    assert res.zoo_added >= 1
+
+
 # --------------------------------------------------------- T6.1 MCTS
 def test_run_mcts_tim_duoc_alpha_tot_hon_seed():
     """MCTS khám phá nhiều nhánh, trả về alpha điểm cao nhất."""
