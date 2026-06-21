@@ -214,3 +214,25 @@ def test_khong_set_scope_thi_load_tat_ca_tuong_thich_nguoc():
     tr.field_repo = fields
     tr.translate(_hyp())
     assert fields.scope_calls == [(None, None, None)]
+
+
+# ------------------------------------------------- T6.7 field_palette + pinned
+def test_field_palette_uy_thac_retrieve():
+    fields = FakeSymbolRepo(["close", "volume", "pcr_oi_30"])
+    tr = AlphaTranslator(FakeDeepSeek([]), fields, FakeSymbolRepo(["rank"]),
+                         PreFilter(known_operators={"rank"}, known_fields={"close"}))
+    out = tr.field_palette("put call open interest")
+    assert any(getattr(f, "id", None) == "pcr_oi_30" for f in out)
+
+
+def test_translate_pinned_ep_chi_field_ghim_vao_prompt():
+    fields = FakeSymbolRepo(["close", "volume", "pcr_oi_30"])
+    pf = PreFilter(known_operators={"rank"}, known_fields={"close", "volume", "pcr_oi_30"})
+    ds = FakeDeepSeek([json.dumps({"description": "d"}), json.dumps({"expression": "rank(pcr_oi_30)"})])
+    tr = AlphaTranslator(ds, fields, FakeSymbolRepo(["rank"]), pf)
+    h = Hypothesis("o", "b", "r", "s")
+    h.fields = ("pcr_oi_30",)
+    tr.translate(h)
+    expr_system = ds.calls[1][0]
+    assert "pcr_oi_30" in expr_system
+    assert "KHÔNG bịa" in expr_system  # câu ghim từ build_symbol_context(pinned)

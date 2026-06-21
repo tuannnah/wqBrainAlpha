@@ -38,6 +38,10 @@ class AlphaTranslator:
         """Giới hạn fields đưa vào prompt theo đúng tổ hợp scope (T6.4 đa region)."""
         self._scope = {"region": region, "universe": universe, "delay": delay}
 
+    def field_palette(self, text: str) -> list:
+        """Palette field THẬT liên quan `text`, theo đúng scope đang đặt (T6.7)."""
+        return expr_synth.retrieve_field_palette(self.field_repo, self._scope, text)
+
     def _avoid_context(self) -> str:
         if not self.avoid_subtrees:
             return ""
@@ -66,10 +70,10 @@ class AlphaTranslator:
         return hypothesis.implementation_spec or hypothesis.observation
 
     # ----------------------------------------------------------- step 2
-    def _to_expression(self, description: str, relevance_text: str = "") -> str | None:
+    def _to_expression(self, description: str, relevance_text: str = "", pinned=None) -> str | None:
         system = (
             "Bạn là chuyên gia viết biểu thức FASTEXPR trên WorldQuant BRAIN.\n"
-            f"{expr_synth.build_symbol_context(self.field_repo, self.operator_repo, self.prefilter, self._scope, relevance_text or description)}\n"
+            f"{expr_synth.build_symbol_context(self.field_repo, self.operator_repo, self.prefilter, self._scope, relevance_text or description, pinned=pinned)}\n"
             f"{self._avoid_context()}"
             f"{expr_synth.build_syntax_constraints(self.prefilter)}"
             "Dịch MÔ TẢ thành MỘT biểu thức FASTEXPR dùng đúng operators/fields được liệt kê. "
@@ -77,7 +81,8 @@ class AlphaTranslator:
         )
         user = f"MÔ TẢ: {description}\nViết biểu thức FASTEXPR."
         return expr_synth.repair_to_expression(
-            self.deepseek, self.prefilter, self.field_repo, self._scope, system, user, task="translate"
+            self.deepseek, self.prefilter, self.field_repo, self._scope, system, user,
+            task="translate", pinned=pinned,
         )
 
     # ----------------------------------------------------------- public
@@ -93,7 +98,7 @@ class AlphaTranslator:
                 description,
             ]
         )
-        expression = self._to_expression(description, relevance_text)
+        expression = self._to_expression(description, relevance_text, pinned=hypothesis.fields or None)
         if not expression:
             return None
         return AlphaCandidate(hypothesis=hypothesis, description=description, expression=expression)
