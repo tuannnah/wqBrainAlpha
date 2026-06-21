@@ -18,6 +18,40 @@ from src.simulation.simulator import extract_rejected_field
 MAX_REPAIR_ATTEMPTS = 3
 MAX_FIELDS_IN_PROMPT = 40
 
+# Hint khi PreFilter chặn vì độ sâu/số node (không có field để bóc): hướng LLM làm
+# gọn thay vì sinh lại biểu thức sâu y hệt.
+DEPTH_REPAIR_HINT = (
+    " Biểu thức vượt giới hạn độ sâu/node. Làm GỌN: (1) bỏ bớt lớp BỌC ngoài — chỉ giữ "
+    "tối đa MỘT trong {scale, ts_decay_linear, group_neutralize}; (2) làm phẳng các tổ hợp "
+    "field lồng nhau (multiply/divide/add/zscore chồng nhiều tầng) thành một phép kết hợp; "
+    "(3) ưu tiên tín hiệu NÔNG, ít field."
+)
+# Từ khoá nhận diện lỗi cấu trúc (độ sâu/số node) trong reason của PreFilter.
+_STRUCTURE_ERROR_KEYWORDS = ("độ sâu", "depth", "node", "tầng")
+
+
+def is_structure_error(reason: str) -> bool:
+    """True nếu reason là lỗi độ sâu/số node (không phải lỗi field/operator)."""
+    low = (reason or "").lower()
+    return any(k in low for k in _STRUCTURE_ERROR_KEYWORDS)
+
+
+def build_repair_hint(reason: str, suggestions, pinned) -> str:
+    """Dựng hint cho lượt repair kế tiếp theo loại lỗi.
+
+    - Lỗi cấu trúc (độ sâu/node) -> DEPTH_REPAIR_HINT (hướng dẫn bỏ lớp wrapper).
+    - Lỗi field -> gợi ý field thật gần nhất + (nếu pinned) ràng buộc CHỈ dùng field ghim.
+    """
+    if is_structure_error(reason):
+        return DEPTH_REPAIR_HINT
+    hint = ""
+    if suggestions:
+        hint = f" Field có thật gần nhất: {', '.join(suggestions)}."
+    if pinned:
+        allowed = ", ".join([p for p in pinned if isinstance(p, str)][:MAX_FIELDS_IN_PROMPT])
+        hint += f" CHỈ được dùng các field: {allowed}."
+    return hint
+
 # Ví dụ minh hoạ CÚ PHÁP, đa dạng cấu trúc, tránh khung kinh điển trùng Alpha101.
 FEWSHOT_EXAMPLES = [
     "ts_decay_linear(rank(ts_std_dev(returns, 20)), 5)",
@@ -252,13 +286,7 @@ def repair_to_expression(deepseek, prefilter, field_repo, scope, system, user, t
             return expr
         logger.info("LLM expr lỗi (lần {}): {} — {}", attempt + 1, expr, reason)
         bad = extract_rejected_field(reason)
-        hint = ""
-        if bad:
-            suggestions = suggest_fields(field_repo, scope, bad, pinned=pinned)
-            if suggestions:
-                hint = f" Field có thật gần nhất: {', '.join(suggestions)}."
-            if pinned:
-                allowed = ", ".join([p for p in pinned if isinstance(p, str)][:MAX_FIELDS_IN_PROMPT])
-                hint += f" CHỈ được dùng các field: {allowed}."
+        suggestions = suggest_fields(field_repo, scope, bad, pinned=pinned) if bad else []
+        hint = build_repair_hint(reason, suggestions, pinned)
         user = f'Biểu thức "{expr}" bị lỗi: {reason}.{hint} Sửa lại, trả JSON.'
     return None

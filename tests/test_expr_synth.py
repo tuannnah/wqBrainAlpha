@@ -191,6 +191,57 @@ def test_repair_them_hint_field_khi_field_bia():
     assert "opt6_real" in ds.calls[1][1]
 
 
+# --------------------------------------------- Task 1: repair hint cho lỗi depth/node
+def test_depth_classifier_matches_variants():
+    assert expr_synth.is_structure_error("scale(...) — Độ sâu > 7")
+    assert expr_synth.is_structure_error("Số node > 30")
+    assert expr_synth.is_structure_error("max depth exceeded")
+    assert not expr_synth.is_structure_error("Field/hằng không tồn tại: foo")
+    assert not expr_synth.is_structure_error("Operator không tồn tại: bad_op")
+    assert not expr_synth.is_structure_error("")
+
+
+def test_repair_hint_depth_error_is_nonempty():
+    hint = expr_synth.build_repair_hint("scale(...) — Độ sâu > 7", suggestions=[], pinned=None)
+    assert hint.strip()
+    low = hint.lower()
+    assert "scale" in low and ("bọc" in low or "lớp" in low)
+
+
+def test_repair_hint_field_error_unchanged():
+    hint = expr_synth.build_repair_hint(
+        "Field/hằng không tồn tại: foo", suggestions=["close", "vwap"], pinned=None
+    )
+    assert hint == " Field có thật gần nhất: close, vwap."
+
+
+def test_repair_hint_field_error_pinned_van_giu():
+    hint = expr_synth.build_repair_hint(
+        "Field/hằng không tồn tại: foo", suggestions=["pcr_oi_30"], pinned=["pcr_oi_30"]
+    )
+    assert "Field có thật gần nhất: pcr_oi_30." in hint
+    assert "CHỈ được dùng" in hint
+
+
+def test_repair_loi_depth_gui_hint_bo_wrapper():
+    """Lỗi độ sâu -> lượt repair kế tiếp nhận hint bỏ lớp wrapper (không còn rỗng)."""
+    pf = PreFilter(
+        known_operators={"scale", "ts_decay_linear", "group_neutralize", "rank"},
+        known_fields={"close"},
+        max_depth=3,
+    )
+    deep = "scale(ts_decay_linear(group_neutralize(rank(close), sector), 5))"
+    ds = FakeDeepSeek([
+        json.dumps({"expression": deep}),            # depth 5 > 3 -> fail
+        json.dumps({"expression": "rank(close)"}),   # sửa nông lại
+    ])
+    out = expr_synth.repair_to_expression(
+        ds, pf, _FieldRepo([_Field("close")]), None, "sys", "usr", task=None
+    )
+    assert out == "rank(close)"
+    assert "scale" in ds.calls[1][1].lower()  # lượt 2 có hint nhắc lớp wrapper
+
+
 def test_repair_tra_none_khi_het_retry():
     pf = PreFilter(known_operators={"rank"}, known_fields={"close"})
     ds = FakeDeepSeek([json.dumps({"expression": "bad_op(x)"})] * 5)
