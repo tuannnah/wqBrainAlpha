@@ -200,8 +200,9 @@ def build_syntax_constraints(prefilter) -> str:
     )
 
 
-def suggest_fields(field_repo, scope, bad_field: str, limit: int = 5) -> list[str]:
-    """Field thật gần 'bad_field' nhất: ưu tiên cùng tiền tố dataset, rồi trùng token."""
+def suggest_fields(field_repo, scope, bad_field: str, limit: int = 5, pinned=None) -> list[str]:
+    """Field thật gần 'bad_field' nhất: ưu tiên cùng tiền tố dataset, rồi trùng token.
+    Không khớp gì -> fallback pinned hoặc top field cache (không bao giờ rỗng)."""
     cached = _load_cached(field_repo, scope)
     bad_low = (bad_field or "").lower()
     bad_prefix = bad_low.split("_", 1)[0]
@@ -219,7 +220,13 @@ def suggest_fields(field_repo, scope, bad_field: str, limit: int = 5) -> list[st
         if score:
             scored.append((score, fid))
     scored.sort(key=lambda t: -t[0])
-    return [fid for _, fid in scored[:limit]]
+    result = [fid for _, fid in scored[:limit]]
+    if not result:
+        if pinned:
+            result = [p for p in pinned if isinstance(p, str)][:limit]
+        else:
+            result = [getattr(f, "id", None) for f in cached if getattr(f, "id", None)][:limit]
+    return result
 
 
 def repair_to_expression(deepseek, prefilter, field_repo, scope, system, user, task) -> str | None:

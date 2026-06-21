@@ -109,6 +109,19 @@ def test_suggest_fields_uu_tien_cung_tien_to_dataset():
     assert out[0].startswith("opt6_")
 
 
+def test_suggest_fields_fallback_khi_khong_khop():
+    repo = _FieldRepo([_Field("pcr_oi_30"), _Field("close"), _Field("volume")])
+    out = expr_synth.suggest_fields(repo, None, "asset_growth_rate")
+    assert out  # không rỗng dù 'asset_growth_rate' không khớp field nào
+    assert all(isinstance(x, str) for x in out)
+
+
+def test_suggest_fields_fallback_uu_tien_pinned():
+    repo = _FieldRepo([_Field("close")])
+    out = expr_synth.suggest_fields(repo, None, "zzz_khong_khop", pinned=["pcr_oi_30", "scl12_buzz"])
+    assert out[0] == "pcr_oi_30"
+
+
 def test_repair_tra_expr_khi_pass_lan_dau():
     pf = PreFilter(known_operators={"rank"}, known_fields={"close"})
     ds = FakeDeepSeek([json.dumps({"expression": "rank(close)"})])
