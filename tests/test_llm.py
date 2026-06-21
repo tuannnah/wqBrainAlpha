@@ -330,3 +330,16 @@ def test_generate_ideas_khong_repo_thi_khong_feedback():
     gen.generate_ideas(2)
     user = deepseek.calls[0][1]
     assert "MÔ PHỎNG TỐT NHẤT" not in user
+
+
+def test_generate_ghim_palette_cam_bia_field():
+    # FieldRepo có pcr_oi_30; idea nói về 'put call' -> palette ghim -> prompt cấm bịa.
+    pf = PreFilter(known_operators={"rank"}, known_fields={"pcr_oi_30", "close"})
+    field_repo = FakeRepo([_Field("pcr_oi_30", "put call ratio"), _Field("close")])
+    op_repo = FakeRepo([_Op("rank")])
+    gen = LLMAlphaGenerator(deepseek := FakeDeepSeek([json.dumps({"expression": "rank(pcr_oi_30)"})]),
+                            field_repo, op_repo, pf)
+    out = gen.generate("put call open interest flow", n=1)
+    assert out == ["rank(pcr_oi_30)"]
+    system_prompt = deepseek.calls[0][0]
+    assert "KHÔNG bịa" in system_prompt

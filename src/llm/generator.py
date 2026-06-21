@@ -220,9 +220,9 @@ class LLMAlphaGenerator:
         weak = [w for w in weak if w not in top_fields]
         return build_feedback_prompt(top, weak)
 
-    def build_system_prompt(self, relevance_text: str = "") -> str:
+    def build_system_prompt(self, relevance_text: str = "", pinned=None) -> str:
         context = expr_synth.build_symbol_context(
-            self.field_repo, self.operator_repo, self.prefilter, None, relevance_text
+            self.field_repo, self.operator_repo, self.prefilter, None, relevance_text, pinned=pinned
         )
         constraints = expr_synth.build_syntax_constraints(self.prefilter)
         return (
@@ -235,10 +235,12 @@ class LLMAlphaGenerator:
         )
 
     def _generate_one(self, idea: str) -> str | None:
-        system = self.build_system_prompt(idea)
+        palette = expr_synth.retrieve_field_palette(self.field_repo, None, idea)
+        pinned = [getattr(f, "id", None) for f in palette if getattr(f, "id", None)] or None
+        system = self.build_system_prompt(idea, pinned=pinned)
         user = f'Ý tưởng alpha: "{idea}". Sinh MỘT biểu thức FASTEXPR. Trả JSON.'
         return expr_synth.repair_to_expression(
-            self.deepseek, self.prefilter, self.field_repo, None, system, user, task=None
+            self.deepseek, self.prefilter, self.field_repo, None, system, user, task=None, pinned=pinned
         )
 
     def generate(self, idea: str, n: int = 5) -> list[str]:
