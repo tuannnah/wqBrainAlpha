@@ -191,6 +191,45 @@ def test_repair_them_hint_field_khi_field_bia():
     assert "opt6_real" in ds.calls[1][1]
 
 
+# ----------------------------------- Task 2: tách signal khỏi config wrapper
+def test_synth_prompt_forbids_config_wrappers():
+    pf = PreFilter(known_operators={"rank"}, known_fields={"close"})
+    out = expr_synth.build_syntax_constraints(pf)
+    low = out.lower()
+    assert "tín hiệu lõi" in low
+    assert "không bọc" in low
+    # nhắc rõ ba lớp config để LLM tránh
+    assert "scale" in low and "decay" in low and "neutral" in low
+
+
+def test_fewshot_examples_khong_chua_config_wrapper():
+    for ex in expr_synth.FEWSHOT_EXAMPLES:
+        low = ex.lower()
+        assert "scale(" not in low
+        assert "decay" not in low
+        assert "neutral" not in low
+
+
+def test_signal_only_expr_depth_budget():
+    from src.generation.ast_utils import parse_expression, tree_depth
+
+    expr = "multiply(-1, ts_zscore(ts_delta(add(f1, f2), 4), 20))"
+    assert tree_depth(parse_expression(expr)) == 5  # lõi vừa ngân sách khi bỏ 3 wrapper
+
+
+def test_config_applied_single_point():
+    # đường sinh expr (autowrap) KHÔNG tự chèn config wrapper.
+    expr = "multiply(-1, ts_zscore(ts_delta(add(f1, f2), 4), 20))"
+    out = expr_synth.autowrap_vector_fields(expr, {"f1": "MATRIX", "f2": "MATRIX"}, set())
+    low = out.lower()
+    assert "scale" not in low and "decay" not in low and "neutral" not in low
+    # config neutralization/decay/truncation áp ở MỘT điểm: SimConfig.to_settings.
+    from src.simulation.config import SimConfig
+
+    settings = SimConfig.default(region="USA", universe="TOP3000", delay=1).to_settings()
+    assert {"neutralization", "decay", "truncation"} <= set(settings)
+
+
 # --------------------------------------------- Task 1: repair hint cho lỗi depth/node
 def test_depth_classifier_matches_variants():
     assert expr_synth.is_structure_error("scale(...) — Độ sâu > 7")

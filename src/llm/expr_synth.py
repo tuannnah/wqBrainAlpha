@@ -53,11 +53,13 @@ def build_repair_hint(reason: str, suggestions, pinned) -> str:
     return hint
 
 # Ví dụ minh hoạ CÚ PHÁP, đa dạng cấu trúc, tránh khung kinh điển trùng Alpha101.
+# CHỈ tín hiệu LÕI — không bọc scale/decay/neutralize (config-layer xử lý ở stage sim).
 FEWSHOT_EXAMPLES = [
-    "ts_decay_linear(rank(ts_std_dev(returns, 20)), 5)",
-    "group_neutralize(ts_zscore(vwap, 60), industry)",
+    "rank(ts_std_dev(returns, 20))",
+    "ts_zscore(vwap, 60)",
     "rank(divide(ts_mean(volume, 10), ts_mean(volume, 60)))",
     "ts_rank(ts_corr(close, volume, 20), 120)",
+    "multiply(-1, ts_delta(close, 5))",
 ]
 
 
@@ -217,8 +219,7 @@ def build_symbol_context(
     context = (
         f"OPERATORS hợp lệ: {op_line}\n"
         f"FIELDS khả dụng: {field_line}\n"
-        "GROUPS cho neutralize: market, sector, industry, subindustry\n"
-        f"Ví dụ alpha hợp lệ:\n{examples}"
+        f"Ví dụ TÍN HIỆU LÕI hợp lệ:\n{examples}"
     )
     if type_context:
         context += f"\n{type_context}"
@@ -233,6 +234,9 @@ def build_syntax_constraints(prefilter) -> str:
     max_nodes = getattr(prefilter, "max_nodes", 30)
     return (
         "RÀNG BUỘC bắt buộc để qua bộ lọc cú pháp:\n"
+        "- CHỈ sinh BIỂU THỨC TÍN HIỆU LÕI. KHÔNG bọc scale / ts_decay_linear (decay) / "
+        "group_neutralize (neutralize) — các bước này do tầng CẤU HÌNH (sim) xử lý sau; "
+        "toàn bộ ngân sách độ sâu dành cho tín hiệu.\n"
         f"- Độ sâu lồng nhau TỐI ĐA {max_depth}; tổng số node TỐI ĐA {max_nodes}. "
         "Ưu tiên biểu thức GỌN và NÔNG, tránh lồng quá nhiều tầng.\n"
         "- CHỈ dùng đối số theo VỊ TRÍ. TUYỆT ĐỐI không dùng đối số có tên kiểu "
