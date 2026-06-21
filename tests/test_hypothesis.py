@@ -57,3 +57,34 @@ def test_hypothesis_to_dict_roundtrip():
         "economic_rationale": "c",
         "implementation_spec": "d",
     }
+
+
+from src.llm.hypothesis import ground_fields
+
+
+def test_ground_fields_bo_field_bia_giu_field_that():
+    out = ground_fields(["opt6_real", "bia_field"], ["opt6_real", "pcr_oi_30"])
+    # min_k=2 mặc định: chỉ 1 field hợp lệ ("opt6_real") nên sẽ augment thêm
+    # từ palette cho đủ min_k -> luôn ra đúng 2 phần tử, field bịa bị loại.
+    assert out[0] == "opt6_real"
+    assert "bia_field" not in out
+
+
+def test_ground_fields_augment_khi_thieu_min_k():
+    # LLM toàn field bịa -> augment từ palette cho đủ min_k=2.
+    out = ground_fields(["bia1", "bia2"], ["a", "b", "c"], min_k=2)
+    assert out == ("a", "b")
+
+
+def test_ground_fields_giu_thu_tu_va_khu_trung_lap():
+    out = ground_fields(["a", "a", "b"], ["a", "b", "c"], min_k=2)
+    assert out == ("a", "b")
+
+
+def test_ground_fields_rong_tra_tuple_rong():
+    assert ground_fields(None, [], min_k=2) == ()
+    assert ground_fields("chuoi_don", [], min_k=2) == ()
+
+
+def test_hypothesis_co_field_mac_dinh_rong():
+    assert Hypothesis("a", "b", "c", "d").fields == ()

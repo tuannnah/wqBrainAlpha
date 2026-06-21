@@ -21,6 +21,7 @@ class Hypothesis:
     background: str = ""
     economic_rationale: str = ""
     implementation_spec: str = ""
+    fields: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, str]:
         return {p: getattr(self, p) for p in _PARTS}
@@ -30,6 +31,28 @@ class Hypothesis:
         if not isinstance(data, dict):
             return cls()
         return cls(**{p: str(data.get(p, "") or "") for p in _PARTS})
+
+
+def ground_fields(llm_fields, palette_ids, min_k: int = 2) -> tuple[str, ...]:
+    """Lọc field LLM nêu về tập có thật (palette_ids); thiếu < min_k thì bổ sung
+    từ palette. Khử trùng lặp, giữ thứ tự ưu tiên (LLM-hợp-lệ trước, palette sau)."""
+    palette = list(dict.fromkeys(p for p in (palette_ids or []) if isinstance(p, str)))
+    allowed = set(palette)
+    if isinstance(llm_fields, str):
+        llm_fields = [llm_fields]
+    elif not isinstance(llm_fields, (list, tuple)):
+        llm_fields = []
+    grounded: list[str] = []
+    for f in llm_fields:
+        if isinstance(f, str) and f in allowed and f not in grounded:
+            grounded.append(f)
+    if len(grounded) < min_k:
+        for f in palette:
+            if f not in grounded:
+                grounded.append(f)
+            if len(grounded) >= min_k:
+                break
+    return tuple(grounded)
 
 
 SYSTEM_PROMPT = (
