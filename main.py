@@ -640,7 +640,7 @@ def _make_pnl_fn(client):
 def _make_research_loop(
     session_factory, client, region, universe, delay, max_sims, patience,
     align=True, regularize=False, penalty_lambda=0.3, sim_config=None,
-    oos_min_ratio=None, deflate_haircut=0.0, regime_min=None,
+    oos_min_ratio=None, deflate_haircut=0.0, regime_min=None, align_gate=True,
 ):
     """Lắp RefinementLoop GĐ2 với DeepSeek + Simulator thật. Trả (loop, deepseek)."""
     from src.decorrelation.similarity import avoid_subtree_canons
@@ -690,6 +690,7 @@ def _make_research_loop(
         no_improve_patience=patience,
         zoo=zoo,
         aligner=aligner,
+        align_gate=align_gate,
         regularize=regularize,
         penalty_lambda=penalty_lambda,
         sim_config=sim_config,
@@ -762,6 +763,7 @@ def research(
     max_sims: int = typer.Option(20, "--max-sims", help="Trần số simulation cho cả vòng"),
     no_improve: int = typer.Option(3, "--no-improve", help="Dừng sau N vòng không cải thiện"),
     align: bool = typer.Option(True, "--align/--no-align", help="Bật lọc nhất quán giả thuyết–công thức trước sim (T4.2)"),
+    align_soft: bool = typer.Option(False, "--align-soft", help="Alignment chỉ là tín hiệu mềm (không loại trước sim) — tránh giết edge (review 5)"),
     regularize: bool = typer.Option(False, "--regularize/--no-regularize", help="Chọn best theo điểm điều chuẩn (trừ phạt độc đáo/khớp/phức tạp) (T4.4)"),
     penalty_lambda: float = typer.Option(0.3, "--lambda", help="Hệ số λ cho số hạng phạt điều chuẩn"),
     mcts: bool = typer.Option(False, "--mcts/--greedy", help="Dùng MCTS (giữ nhiều nhánh, UCB) thay vòng greedy (T6.1)"),
@@ -791,6 +793,7 @@ def research(
     loop, deepseek = _make_research_loop(
         session_factory, client, region, universe, delay, max_sims, no_improve,
         align, regularize, penalty_lambda, sim_config=sim_config,
+        align_gate=not align_soft,
         oos_min_ratio=(oos_ratio if oos_ratio > 0 else None),
         deflate_haircut=deflate,
         regime_min=(min_annual_sharpe if min_annual_sharpe > 0 else None),

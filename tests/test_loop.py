@@ -416,6 +416,23 @@ def test_loop_giu_alpha_khop_gia_thuyet():
     assert res.best_candidate is not None
 
 
+def test_loop_align_soft_khong_loai_truoc_sim():
+    """align_gate=False: alpha lệch giả thuyết vẫn được sim (alignment chỉ là tín hiệu
+    mềm cho điểm điều chuẩn) -> không bóp chết serendipity. (Review 5.)"""
+    sim = FakeSimulator(results=lambda e: _result(e, 1.8))
+    repo = _repo()
+    refiner = _FakeRefiner([])
+    loop = _loop(
+        _FakeTranslator("rank(close)"), refiner, sim, repo,
+        max_simulations=10, aligner=_FakeAligner(0.2), min_alignment=0.5, align_gate=False,
+    )
+    res = loop.run("X")
+    assert len(sim.calls) == 1
+    assert res.best_candidate is not None
+    cats = {f.category for f in repo.recent_failures(10)}
+    assert "hypothesis_mismatch" not in cats
+
+
 def test_loop_khong_aligner_thi_bo_qua_loc_alignment():
     """Không truyền aligner -> không lọc nhất quán (tương thích ngược)."""
     sim = FakeSimulator(results=lambda e: _result(e, 1.5))

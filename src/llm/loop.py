@@ -78,6 +78,7 @@ class RefinementLoop:
         min_originality: float = 0.35,
         aligner=None,
         min_alignment: float = 0.5,
+        align_gate: bool = True,
         regularize: bool = False,
         penalty_lambda: float = 0.3,
         penalty_weights: PenaltyWeights | None = None,
@@ -108,6 +109,10 @@ class RefinementLoop:
         self.min_originality = min_originality
         self.aligner = aligner
         self.min_alignment = min_alignment
+        # True = loại cứng candidate lệch giả thuyết TRƯỚC sim; False = chỉ tính điểm
+        # alignment làm tín hiệu mềm (điểm điều chuẩn), không loại — tránh giết edge từ
+        # conditioning không hiển nhiên (vd volume-gating). Review 5.
+        self.align_gate = align_gate
         self.regularize = regularize
         self.penalty_lambda = penalty_lambda
         self.penalty_weights = penalty_weights or PenaltyWeights()
@@ -180,7 +185,7 @@ class RefinementLoop:
         if self.aligner is not None:
             align = self.aligner.score(candidate)
             alignment = align.value
-            if align.value < self.min_alignment:
+            if self.align_gate and align.value < self.min_alignment:
                 self.repo.record_failure(
                     expr, "hypothesis_mismatch",
                     f"nhất quán {align.value:.2f} < ngưỡng {self.min_alignment:.2f}: {align.reason}",

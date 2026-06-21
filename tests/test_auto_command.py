@@ -132,8 +132,9 @@ def test_research_truyen_fixed_sim_config_xuong_loop_builder(monkeypatch):
 
     def _fake_builder(session_factory, client, region, universe, delay, max_sims, patience,
                       align=True, regularize=False, penalty_lambda=0.3, sim_config=None,
-                      oos_min_ratio=None, deflate_haircut=0.0, regime_min=None):
+                      oos_min_ratio=None, deflate_haircut=0.0, regime_min=None, align_gate=True):
         captured["scope"] = (region, universe, delay)
+        captured["align_gate"] = align_gate
         captured["sim_config"] = sim_config
         captured["oos_min_ratio"] = oos_min_ratio
         captured["deflate_haircut"] = deflate_haircut
@@ -161,6 +162,7 @@ def test_research_truyen_fixed_sim_config_xuong_loop_builder(monkeypatch):
         oos_ratio=0.0,
         deflate=0.0,
         min_annual_sharpe=0.0,
+        align_soft=False,
     )
 
     assert captured["scope"] == ("EUR", "TOP1200", 0)
