@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # "deepseek" = API thật; "agent" = cầu nối file (trả tay); "claude-cli"/"codex-cli" = tự gọi CLI
     llm_backend: str = "deepseek"
     llm_bridge_dir: str = "llm_bridge"  # thư mục trao đổi request/response khi backend=agent
-    llm_cli_timeout_s: int = 180  # trần thời gian mỗi lượt gọi CLI (claude/codex)
+    llm_cli_timeout_s: int = 300  # trần thời gian mỗi lượt gọi CLI (claude/codex)
     claude_bin: str = "claude"  # đường dẫn/tên lệnh Claude Code CLI
     codex_bin: str = "codex"  # đường dẫn/tên lệnh Codex CLI
     database_url: str = "sqlite:///wq_alpha.db"
