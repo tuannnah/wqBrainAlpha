@@ -108,6 +108,28 @@ def test_build_codex_argv_co_exec_va_ghep_system_user():
     assert "HỆ THỐNG" in prompt and "CÂU HỎI" in prompt
 
 
+def test_build_claude_argv_them_model_va_effort():
+    """model + effort -> argv có --model <m> và --effort <e> (vd opus + high)."""
+    argv, _ = build_claude_argv("s", "u", json_mode=True, bin="claude", model="opus", effort="high")
+
+    assert "--model" in argv and argv[argv.index("--model") + 1] == "opus"
+    assert "--effort" in argv and argv[argv.index("--effort") + 1] == "high"
+
+
+def test_build_claude_argv_khong_model_effort_thi_giu_nguyen():
+    """Không truyền model/effort -> không thêm cờ (tương thích ngược, dùng default CLI)."""
+    argv, _ = build_claude_argv("s", "u", json_mode=True, bin="claude")
+
+    assert "--model" not in argv
+    assert "--effort" not in argv
+
+
+def test_build_codex_argv_them_model():
+    argv, _ = build_codex_argv("s", "u", json_mode=True, bin="codex", model="gpt-5-codex")
+
+    assert "--model" in argv and argv[argv.index("--model") + 1] == "gpt-5-codex"
+
+
 # ----------------------------------------------------------------- factory
 def test_make_cli_client_claude_dung_claude_bin():
     settings = SimpleNamespace(llm_cli_timeout_s=99, claude_bin="claude", codex_bin="codex")
@@ -118,6 +140,36 @@ def test_make_cli_client_claude_dung_claude_bin():
 
     assert runner.calls[0].argv[0] == "claude"
     assert runner.calls[0].timeout_s == 99
+
+
+def test_make_cli_client_claude_truyen_model_va_effort():
+    """make_cli_client đọc claude_cli_model/claude_cli_effort từ settings -> vào argv."""
+    settings = SimpleNamespace(
+        llm_cli_timeout_s=99, claude_bin="claude", codex_bin="codex",
+        claude_cli_model="opus", claude_cli_effort="high", codex_cli_model="",
+    )
+    runner = _FakeRunner(stdout="{}")
+    client = make_cli_client("claude-cli", settings, runner=runner)
+
+    client.complete("s", "u", json_mode=True)
+
+    argv = runner.calls[0].argv
+    assert argv[argv.index("--model") + 1] == "opus"
+    assert argv[argv.index("--effort") + 1] == "high"
+
+
+def test_make_cli_client_codex_truyen_model():
+    settings = SimpleNamespace(
+        llm_cli_timeout_s=99, claude_bin="claude", codex_bin="codex",
+        codex_cli_model="gpt-5-codex",
+    )
+    runner = _FakeRunner(stdout="{}")
+    client = make_cli_client("codex-cli", settings, runner=runner)
+
+    client.complete("s", "u", json_mode=True)
+
+    argv = runner.calls[0].argv
+    assert argv[argv.index("--model") + 1] == "gpt-5-codex"
 
 
 def test_make_cli_client_codex_dung_codex_bin():
