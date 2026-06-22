@@ -22,8 +22,14 @@ JSON_HINT = (
 )
 
 
-def build_claude_argv(system: str, user: str, json_mode: bool, *, bin: str = "claude"):
-    """Argv cho Claude Code headless. Không dùng --bare (nó ép ANTHROPIC_API_KEY)."""
+def build_claude_argv(
+    system: str, user: str, json_mode: bool, *, bin: str = "claude",
+    model: str | None = None, effort: str | None = None,
+):
+    """Argv cho Claude Code headless. Không dùng --bare (nó ép ANTHROPIC_API_KEY).
+
+    model/effort: tùy chọn — `--model` nhận alias ('opus'/'sonnet'/'fable') hoặc tên
+    đầy đủ; `--effort` chọn mức suy luận ('high'...). Rỗng/None -> dùng mặc định CLI."""
     sys_prompt = system + (JSON_HINT if json_mode else "")
     argv = [
         bin,
@@ -33,13 +39,25 @@ def build_claude_argv(system: str, user: str, json_mode: bool, *, bin: str = "cl
         sys_prompt,
         "--disable-slash-commands",
     ]
+    if model:
+        argv += ["--model", model]
+    if effort:
+        argv += ["--effort", effort]
     return argv, None
 
 
-def build_codex_argv(system: str, user: str, json_mode: bool, *, bin: str = "codex"):
-    """Argv cho Codex exec. Codex không có cờ system riêng -> ghép system+user."""
+def build_codex_argv(
+    system: str, user: str, json_mode: bool, *, bin: str = "codex", model: str | None = None,
+):
+    """Argv cho Codex exec. Codex không có cờ system riêng -> ghép system+user.
+
+    model: tùy chọn -> `--model`; rỗng/None dùng mặc định CLI. (Codex không có effort.)"""
     prompt = system + "\n\n" + user + (JSON_HINT if json_mode else "")
-    return [bin, "exec", prompt], None
+    argv = [bin, "exec"]
+    if model:
+        argv += ["--model", model]
+    argv.append(prompt)
+    return argv, None
 
 
 def _subprocess_runner(argv, stdin, cwd, timeout_s) -> str:
@@ -103,14 +121,19 @@ class CliLLMClient:
 
 def make_cli_client(backend: str, settings, *, runner=None) -> CliLLMClient:
     """Dựng CliLLMClient theo backend ('claude-cli' | 'codex-cli')."""
-    timeout_s = getattr(settings, "llm_cli_timeout_s", 180)
+    timeout_s = getattr(settings, "llm_cli_timeout_s", 300)
     if backend == "claude-cli":
         bin_ = getattr(settings, "claude_bin", "claude")
-        builder = lambda s, u, j: build_claude_argv(s, u, j, bin=bin_)  # noqa: E731
+        cli_model = getattr(settings, "claude_cli_model", "") or None
+        effort = getattr(settings, "claude_cli_effort", "") or None
+        builder = lambda s, u, j: build_claude_argv(  # noqa: E731
+            s, u, j, bin=bin_, model=cli_model, effort=effort
+        )
         model = "claude-cli"
     elif backend == "codex-cli":
         bin_ = getattr(settings, "codex_bin", "codex")
-        builder = lambda s, u, j: build_codex_argv(s, u, j, bin=bin_)  # noqa: E731
+        cli_model = getattr(settings, "codex_cli_model", "") or None
+        builder = lambda s, u, j: build_codex_argv(s, u, j, bin=bin_, model=cli_model)  # noqa: E731
         model = "codex-cli"
     else:
         raise ValueError(f"backend CLI không hợp lệ: {backend!r}")
