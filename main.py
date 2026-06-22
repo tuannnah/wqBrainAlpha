@@ -24,7 +24,6 @@ from src.data.fields import FieldRepository
 from src.data.operators import OperatorRepository, count_positional_arity
 from src.data.universe_matrix import iter_scopes
 from src.data.warm_cache import warm_cache
-from src.optimization.hybrid import HybridEngine
 from src.simulation.simulator import Simulator
 from src.storage.db import init_db, make_engine, make_session_factory
 from src.storage.migrate import migrate_all, _same_database
@@ -641,7 +640,7 @@ def _make_research_loop(
     session_factory, client, region, universe, delay, max_sims, patience,
     align=True, regularize=False, penalty_lambda=0.3, sim_config=None,
     oos_min_ratio=None, deflate_haircut=0.0, regime_min=None, align_gate=True,
-    improve_margin=0.0,
+    improve_margin=0.0, reseed_every=0,
 ):
     """Lắp RefinementLoop GĐ2 với DeepSeek + Simulator thật. Trả (loop, deepseek)."""
     from src.decorrelation.similarity import avoid_subtree_canons
@@ -677,6 +676,8 @@ def _make_research_loop(
     translator.set_avoid_subtrees(avoid_subtree_canons(passed_exprs, failed_exprs))
     # T4.2: bộ lọc nhất quán giả thuyết–công thức trước sim (bật/tắt qua --align).
     aligner = AlignmentScorer(deepseek) if align else None
+    # Task 1b: re-seed diversity — chỉ dựng idea generator khi bật (tốn lượt LLM).
+    idea_generator = _make_llm_generator(session_factory, pf) if reseed_every > 0 else None
     loop = RefinementLoop(
         hypothesis_gen=HypothesisGenerator(deepseek),
         translator=translator,
@@ -705,6 +706,8 @@ def _make_research_loop(
         pnl_fn=(_make_pnl_fn(client) if regime_min else None),
         regime_min=regime_min,
         improve_margin=improve_margin,
+        idea_generator=idea_generator,
+        reseed_every=reseed_every,
     )
     return loop, deepseek
 
@@ -773,6 +776,7 @@ def research(
     deflate: float = typer.Option(0.0, "--deflate", help="Hệ số haircut điểm theo budget sim đã dùng — chống overfit IS (0 = tắt) (review 4b)"),
     min_annual_sharpe: float = typer.Option(0.0, "--min-annual-sharpe", help="Sàn Sharpe năm tệ nhất — loại alpha mỏng manh theo regime (0 = tắt) (review 3)"),
     improve_margin: float = typer.Option(0.0, "--improve-margin", help="Biên cải thiện tương đối tối thiểu để soán best (vd 0.1 = 10%; 0 = tắt)"),
+    reseed_every: int = typer.Option(0, "--reseed-every", help="Re-seed direction mới khi nhánh kẹt N vòng không cải thiện (0 = tắt) — salvage diversity"),
 ) -> None:
     """GĐ2: vòng lặp AI — sinh giả thuyết → mô phỏng → tinh chỉnh tham lam."""
     _setup_logging()
@@ -801,6 +805,7 @@ def research(
         deflate_haircut=deflate,
         regime_min=(min_annual_sharpe if min_annual_sharpe > 0 else None),
         improve_margin=improve_margin,
+        reseed_every=reseed_every,
     )
     result = _run_research_with_progress(loop, direction, max_sims, mcts=mcts)
     _render_research_result(result, deepseek)
@@ -1013,295 +1018,6 @@ def _auto_prepare(client_box: dict, session_factory, region, universe, delay,
     operators, _ = op_repo.ensure()
 
     return PrepareInfo(fields=len(fields), operators=len(operators))
-
-
-def _make_refiner(session_factory, prefilter, region, universe, delay):
-    """Dựng AlphaRefiner (DeepSeek/router + AlphaTranslator có scope) cho LLM-in-loop."""
-    from src.llm.refiner import AlphaRefiner
-    from src.llm.translator import AlphaTranslator
-
-    deepseek = _make_router()
-    field_repo = FieldRepository(None, session_factory)
-    op_repo = OperatorRepository(None, session_factory)
-    translator = AlphaTranslator(deepseek, field_repo, op_repo, prefilter)
-    translator.set_scope(region=region, universe=universe, delay=delay)
-    return AlphaRefiner(deepseek, translator)
-
-
-def _run_hybrid_with_progress(engine):
-    """Chạy HybridEngine kèm thanh tiến trình (đếm sim + thế hệ)."""
-    from rich.progress import (
-        BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn,
-    )
-
-    with Progress(
-        SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-        BarColumn(), TimeElapsedColumn(), console=console, transient=True,
-    ) as progress:
-        task = progress.add_task("Hybrid: seed + tiến hóa...", total=None)
-
-        def on_simulation(n, expr, score):
-            progress.update(task, description=f"Hybrid: {n} sim, best gần nhất {score:.3f}"[:60])
-
-        def on_generation(stats):
-            progress.update(
-                task,
-                description=f"Hybrid gen {stats.generation} best={stats.best_score:.3f}"[:60],
-            )
-
-        return engine.run(on_generation=on_generation, on_simulation=on_simulation)
-
-
-def _run_auto(region, universe, delay, max_sims=0, generations=0,
-              existing_client=None, swallow_errors=False,
-              decay=0, truncation=0.08, neutralization="SUBINDUSTRY",
-              no_llm_seed=False):
-    """Toàn trình hybrid: login → cache → seed LLM → GA tiến hóa + LLM-in-loop → lưu DB.
-
-    max_sims/generations = 0 nghĩa là VÔ HẠN (None). swallow_errors giữ để tương
-    thích chữ ký gọi từ menu; HybridEngine tự nuốt lỗi LLM nên không cần dùng.
-    Trả danh sách Node tốt nhất, hoặc None nếu thiếu điều kiện (chưa có fields).
-    """
-    import random as _random
-
-    from src.generation.ast_utils import to_expression
-    from src.generation.template import TemplateGenerator
-    from src.decorrelation.zoo import ReferenceZoo
-    from src.scoring.synergy import SynergyScorer
-    from src.simulation.config import SimConfig
-    from src.simulation.pre_filter import PreFilter
-
-    engine_box = init_db(make_engine())
-    session_factory = make_session_factory(engine_box)
-
-    client = existing_client or _make_client()
-    if not getattr(client, "authenticated", False):
-        client.authenticate()
-
-    fields, operators, field_types, matrix_only_ops, operator_arity = _cached_symbols(session_factory)
-    if not fields:
-        console.print("[red]Chưa có fields — tải fields (menu 2) trước.[/red]")
-        return None
-
-    sim_config = SimConfig(
-        region=region, universe=universe, delay=delay,
-        decay=decay, truncation=truncation, neutralization=neutralization,
-    )
-    pf = PreFilter(
-        known_operators=operators or None, known_fields=set(fields),
-        field_types=field_types, matrix_only_ops=matrix_only_ops,
-        operator_arity=operator_arity,
-    )
-    sim = _make_validated_simulator(client, pf, session_factory, region, universe)
-    repo = AlphaRepository(session_factory)
-    zoo = ReferenceZoo.default(extra=[a.expression for a in repo.zoo(200)])
-    tgen = TemplateGenerator(fields, pf, rng=_random.Random())
-
-    engine = HybridEngine(
-        simulator=sim, prefilter=pf, fields=fields,
-        llm_generator=_make_llm_generator(session_factory, pf),
-        refiner=_make_refiner(session_factory, pf, region, universe, delay),
-        zoo=zoo, template_generator=tgen,
-        # Hàm mục tiêu pool-aware (AlphaGen-adapted): thưởng alpha vừa qua chuẩn
-        # vừa độc đáo, loại hẳn sim lỗi. Dùng CHUNG zoo với inject -> một pool.
-        scorer=SynergyScorer(zoo=zoo),
-        use_llm_seed=not no_llm_seed,
-        max_simulations=max_sims or None, generations=generations or None,
-        simulation_settings=sim_config.to_settings(),
-    )
-
-    best_nodes = _run_hybrid_with_progress(engine)
-    best_exprs = [to_expression(n) for n in best_nodes[:10]]
-    for expr in best_exprs:
-        repo.save_alpha(expr, source="hybrid")
-
-    table = Table(title=f"Top alpha hybrid ({len(best_exprs)}) — {engine.simulations_used} sim")
-    table.add_column("Expression", overflow="fold")
-    for expr in best_exprs:
-        table.add_row(expr)
-    console.print(table)
-    console.print(
-        "[dim]Đã lưu DB — xem bằng lệnh 'top'. CHƯA nộp; nộp bằng 'submit' khi muốn.[/dim]"
-    )
-    return best_nodes
-
-
-@app.command()
-def auto(
-    region: str = typer.Option(settings.default_region),
-    universe: str = typer.Option(settings.default_universe),
-    delay: int = typer.Option(settings.default_delay),
-    max_sims: int = typer.Option(0, "--max-sims", help="Trần tổng simulation (0 = vô hạn)"),
-    generations: int = typer.Option(0, "--generations", help="Số thế hệ GA (0 = vô hạn)"),
-    decay: int = typer.Option(0, "--decay", help="Decay simulation config"),
-    truncation: float = typer.Option(0.08, "--truncation", help="Truncation simulation config"),
-    neutralization: str = typer.Option("SUBINDUSTRY", "--neutralization", help="Neutralization simulation config"),
-    no_llm_seed: bool = typer.Option(False, "--no-llm-seed", help="Bỏ pha LLM seed (chậm/bịa field), chạy GA-thuần trên NOVEL+template"),
-) -> None:
-    """Chạy engine hybrid: login → cache → seed LLM → GA tiến hóa + LLM-in-loop. KHÔNG nộp."""
-    _setup_logging()
-    if _run_auto(
-        region, universe, delay, max_sims=max_sims, generations=generations,
-        decay=decay, truncation=truncation, neutralization=neutralization,
-        no_llm_seed=no_llm_seed,
-    ) is None:
-        raise typer.Exit(code=1)
-
-
-# ---------------------------------------------------------------- menu (start)
-class _MenuState:
-    """Giữ phiên đăng nhập + DB + scope cho menu."""
-
-    def __init__(self):
-        engine = init_db(make_engine())
-        self.session_factory = make_session_factory(engine)
-        self.client = None
-        self.region = settings.default_region
-        self.universe = settings.default_universe
-        self.delay = settings.default_delay
-
-    @property
-    def logged_in(self) -> bool:
-        return self.client is not None and self.client.authenticated
-
-
-def _menu_login(state: _MenuState) -> None:
-    client = _make_client()
-    client.authenticate()
-    state.client = client
-    console.print("[green]✓ Đăng nhập xong.[/green]")
-
-
-def _menu_fields(state: _MenuState) -> None:
-    from src.data.fields import FieldFetchError
-
-    repo = FieldRepository(state.client, state.session_factory)
-    try:
-        fields, fetched = repo.ensure(state.region, state.universe, state.delay)
-    except FieldFetchError as exc:
-        console.print(f"[red]{exc}[/red]")
-        return
-    console.print(
-        f"[green]{'Đã tải mới' if fetched else 'Dùng cache'}: {len(fields)} field "
-        f"({state.region}/{state.universe}/delay={state.delay})[/green]"
-    )
-
-
-def _menu_operators(state: _MenuState) -> None:
-    from src.data.operators import OperatorFetchError
-
-    repo = OperatorRepository(state.client, state.session_factory)
-    if repo.cached_count() > 0:
-        console.print(f"[green]Đã có {repo.cached_count()} operator (dùng cache).[/green]")
-        return
-    try:
-        operators, _ = repo.ensure()
-    except OperatorFetchError as exc:
-        console.print(f"[red]{exc}[/red]")
-        return
-    console.print(f"[green]Đã tải {len(operators)} operator.[/green]")
-
-
-# Menu neutralization: SUBINDUSTRY đứng đầu = mặc định (Enter). Thứ tự từ hẹp → rộng.
-_NEUTRALIZATION_MENU = [
-    "SUBINDUSTRY",
-    "INDUSTRY",
-    "SECTOR",
-    "MARKET",
-    "COUNTRY",
-    "EXCHANGE",
-    "NONE",
-]
-
-
-def _menu_ask_neutralization() -> str:
-    """Hỏi neutralization qua menu chọn số (đỡ gõ sai), vẫn cho gõ tên trực tiếp."""
-    from src.simulation.config import VALID_NEUTRALIZATIONS
-
-    console.print("Neutralization:")
-    for i, opt in enumerate(_NEUTRALIZATION_MENU, 1):
-        suffix = "  [mặc định]" if i == 1 else ""
-        console.print(f"  {i}) {opt}{suffix}")
-    raw = input("Chọn [Enter=1=SUBINDUSTRY]: ").strip()
-    if not raw:
-        return "SUBINDUSTRY"
-    if raw.isdigit() and 1 <= int(raw) <= len(_NEUTRALIZATION_MENU):
-        return _NEUTRALIZATION_MENU[int(raw) - 1]
-    # Cho phép gõ thẳng tên option (vd "industry") để tương thích thói quen cũ.
-    up = raw.upper()
-    if up in VALID_NEUTRALIZATIONS:
-        return up
-    console.print(f"[yellow]Không hợp lệ '{raw}', dùng SUBINDUSTRY.[/yellow]")
-    return "SUBINDUSTRY"
-
-
-def _menu_ask_sim_settings() -> dict:
-    decay_raw = input("Decay [Enter=0]: ").strip()
-    truncation_raw = input("Truncation [Enter=0.08]: ").strip()
-    neutralization = _menu_ask_neutralization()
-    return {
-        "decay": int(decay_raw or "0"),
-        "truncation": float(truncation_raw or "0.08"),
-        "neutralization": neutralization,
-    }
-
-
-def _print_menu(state: _MenuState) -> None:
-    status = "[green]✓ đã đăng nhập[/green]" if state.logged_in else "[red]✗ chưa đăng nhập[/red]"
-    console.print("\n[bold cyan]=== WQ Auto-Alpha ===[/bold cyan]")
-    console.print(f"Scope: [cyan]{state.region}/{state.universe}/delay={state.delay}[/cyan] | {status}")
-    console.print(" 1) Đăng nhập")
-    console.print(" 2) Tải data fields (dùng cache nếu có)")
-    console.print(" 3) Tải operators (nếu chưa có)")
-    console.print(" 4) Chạy toàn trình auto")
-    console.print(" 5) Chạy thử luồng (tìm + mô phỏng 1 alpha)")
-    console.print(" 0) Thoát")
-
-
-@app.command()
-def start() -> None:
-    """Menu đơn giản: đăng nhập → tải fields/operators → chạy auto / thử luồng."""
-    _setup_logging()
-    from src.data.client import AuthError
-
-    state = _MenuState()
-    while True:
-        _print_menu(state)
-        choice = input("\nChọn: ").strip()
-        try:
-            if choice == "0":
-                break
-            elif choice == "1":
-                _menu_login(state)
-            elif choice in {"2", "3", "4", "5"} and not state.logged_in:
-                console.print("[yellow]Hãy đăng nhập (1) trước.[/yellow]")
-            elif choice == "2":
-                _menu_fields(state)
-            elif choice == "3":
-                _menu_operators(state)
-            elif choice == "4":
-                sim_settings = _menu_ask_sim_settings()
-                # Hybrid chạy vô hạn, chỉ dừng khi LLM hết token / Ctrl+C.
-                _run_auto(
-                    state.region, state.universe, state.delay,
-                    swallow_errors=True, existing_client=state.client,
-                    **sim_settings,
-                )
-            elif choice == "5":
-                sim_settings = _menu_ask_sim_settings()
-                console.print("[cyan]Thử luồng: seed + tiến hóa ngắn (trần nhỏ)...[/cyan]")
-                _run_auto(
-                    state.region, state.universe, state.delay,
-                    max_sims=5, generations=2,
-                    existing_client=state.client, **sim_settings,
-                )
-            else:
-                console.print("[red]Lựa chọn không hợp lệ.[/red]")
-        except AuthError as exc:
-            console.print(f"[red]Lỗi đăng nhập: {exc}[/red]")
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Đã hủy bước hiện tại.[/yellow]")
-    console.print("[cyan]Kết thúc.[/cyan]")
 
 
 if __name__ == "__main__":
