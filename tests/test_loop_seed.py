@@ -1,5 +1,5 @@
 """Salvage diversity của Engine B vào A: NOVEL_ALPHAS trộn vào seed pool của
-RefinementLoop (Task 1a). Trước đây diversity nằm ở `_seed_pool()` của HybridEngine;
+RefinementLoop (Task 1a). Trước đây diversity nằm ở seed pool của engine hybrid (GA);
 sau khi gỡ B, A phải kế thừa để không sụp về một seed LLM duy nhất."""
 
 from __future__ import annotations

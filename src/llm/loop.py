@@ -147,12 +147,12 @@ class RefinementLoop:
     def seed_candidates(self, research_direction: str) -> list:
         """Tập seed khởi đầu = seed LLM (dịch từ giả thuyết) + NOVEL_ALPHAS.
 
-        Salvage diversity của HybridEngine cũ (`_seed_pool`) nhưng không có GA:
-        seed LLM đứng đầu (giữ hành vi greedy hiện tại khi dịch được), NOVEL_ALPHAS
+        Salvage diversity của engine hybrid cũ (`_seed_pool` của nó) nhưng không có
+        GA: seed LLM đứng đầu (giữ hành vi greedy hiện tại khi dịch được), NOVEL_ALPHAS
         làm sàn đa dạng/fallback để loop không sụp về một điểm nếu seed LLM bị loại
-        trước sim. NOVEL được lọc qua `self.prefilter` ngay tại đây (giống `_seed_pool`
-        cũ của HybridEngine): field đã-học-chết/blacklist hoặc sai kiểu/scope không
-        vào pool, nên fallback không tốn lượt đánh giá cho biểu thức chắc chắn hỏng."""
+        trước sim. NOVEL được lọc qua `self.prefilter` ngay tại đây (giống seed pool
+        cũ): field đã-học-chết/blacklist hoặc sai kiểu/scope không vào pool, nên
+        fallback không tốn lượt đánh giá cho biểu thức chắc chắn hỏng."""
         from src.generation.novel_ideas import NOVEL_ALPHAS
         from src.llm.hypothesis import Hypothesis
         from src.llm.translator import AlphaCandidate
