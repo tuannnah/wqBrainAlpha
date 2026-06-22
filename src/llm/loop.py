@@ -91,6 +91,8 @@ class RefinementLoop:
         regime_min: float | None = None,
         regime_target: float = 1.0,
         improve_margin: float = 0.0,
+        idea_generator=None,
+        reseed_every: int = 0,
     ):
         self.hypothesis_gen = hypothesis_gen
         self.translator = translator
@@ -133,8 +135,61 @@ class RefinementLoop:
         # Biên cải thiện tương đối tối thiểu để soán best (thay epsilon vô cùng nhỏ):
         # cải thiện vi mô thường là nhiễu IS, không đáng đổi best. 0 = giữ epsilon cũ.
         self.improve_margin = improve_margin
+        # Re-seed diversity: idea_generator.generate_ideas(n) -> [direction]. Khi nhánh
+        # refine stuck `reseed_every` vòng không cải thiện, sinh direction mới (LLM
+        # re-seed) thay vì refine tiếp nhánh kẹt. 0/None = tắt (greedy thuần như cũ).
+        self.idea_generator = idea_generator
+        self.reseed_every = reseed_every
         self.sims_used = 0
         self.zoo_added = 0
+
+    # --------------------------------------------------------------- seed
+    def seed_candidates(self, research_direction: str) -> list:
+        """Tập seed khởi đầu = seed LLM (dịch từ giả thuyết) + NOVEL_ALPHAS.
+
+        Salvage diversity của HybridEngine cũ (`_seed_pool`) nhưng không có GA:
+        seed LLM đứng đầu (giữ hành vi greedy hiện tại khi dịch được), NOVEL_ALPHAS
+        làm sàn đa dạng/fallback để loop không sụp về một điểm nếu seed LLM bị loại
+        trước sim. NOVEL được lọc qua `self.prefilter` ngay tại đây (giống `_seed_pool`
+        cũ của HybridEngine): field đã-học-chết/blacklist hoặc sai kiểu/scope không
+        vào pool, nên fallback không tốn lượt đánh giá cho biểu thức chắc chắn hỏng."""
+        from src.generation.novel_ideas import NOVEL_ALPHAS
+        from src.llm.hypothesis import Hypothesis
+        from src.llm.translator import AlphaCandidate
+
+        pool: list = []
+        palette = self.translator.field_palette(research_direction)
+        hypothesis = self.hypothesis_gen.generate(research_direction, palette)
+        seed = self.translator.translate(hypothesis)
+        if seed is not None:
+            pool.append(seed)
+        for c in NOVEL_ALPHAS:
+            if not self.prefilter.check(c.expression)[0]:
+                continue
+            novel_hyp = Hypothesis(economic_rationale=str(getattr(c, "rationale", "") or ""))
+            pool.append(
+                AlphaCandidate(novel_hyp, str(getattr(c, "hypothesis", "") or ""), c.expression)
+            )
+        return pool
+
+    def _reseed_once(self):
+        """Sinh một direction mới từ idea_generator rồi tạo+đánh giá seed cho nó.
+        Trả (candidate, eval) nếu thành công, None nếu không sinh/dịch/đánh giá được."""
+        if self.idea_generator is None:
+            return None
+        ideas = self.idea_generator.generate_ideas(1)
+        if not ideas:
+            return None
+        direction = ideas[0]
+        palette = self.translator.field_palette(direction)
+        hypothesis = self.hypothesis_gen.generate(direction, palette)
+        seed = self.translator.translate(hypothesis)
+        if seed is None:
+            return None
+        ev = self._evaluate(seed, parent_id=None)
+        if ev is None:
+            return None
+        return seed, ev
 
     # --------------------------------------------------------------- eval
     def _effective_total(self, vector, expr, originality, alignment) -> float:
@@ -294,26 +349,47 @@ class RefinementLoop:
                 on_progress(LoopProgress(self.sims_used, best_total, phase, detail))
 
         emit("hypothesis", 0.0, research_direction)
-        palette = self.translator.field_palette(research_direction)
-        hypothesis = self.hypothesis_gen.generate(research_direction, palette)
-        seed = self.translator.translate(hypothesis)
-        if seed is None:
+        candidates = self.seed_candidates(research_direction)
+        if not candidates:
             self.repo.record_failure("", "syntax", "không dịch được giả thuyết", "llm")
             return LoopResult(None, None, history, 0, self.repo.recent_failures(50), self.sims_used)
 
-        best_ev = self._evaluate(seed, parent_id=None)
+        # Thử lần lượt: seed LLM trước, NOVEL_ALPHAS làm fallback đa dạng. Dừng ở seed
+        # đầu tiên đánh giá được (không bị loại trước sim / còn budget). Seed LLM hợp lệ
+        # -> dừng ngay -> hành vi greedy không đổi; chỉ rơi xuống NOVEL khi seed LLM bị loại.
+        best_ev = None
+        best_cand = None
+        for cand in candidates:
+            best_ev = self._evaluate(cand, parent_id=None)
+            if best_ev is not None:
+                best_cand = cand
+                break
         if best_ev is None:
             return LoopResult(None, None, history, self.zoo_added, self.repo.recent_failures(50), self.sims_used)
-        best_cand = seed
         history.append(
             {"step": 0, "action": "seed", "dimension": "-", "total": best_ev.vector.total,
-             "expression": seed.expression, "accepted": True}
+             "expression": best_cand.expression, "accepted": True}
         )
-        emit("seed", best_ev.vector.total, seed.expression)
+        emit("seed", best_ev.vector.total, best_cand.expression)
 
         patience = 0
+        stuck = 0  # số vòng liên tiếp không cải thiện -> ngưỡng kích hoạt re-seed
         step = 0
+        reseed_on = self.reseed_every > 0 and self.idea_generator is not None
         while self.sims_used < self.max_simulations and patience < self.no_improve_patience:
+            # Re-seed: nhánh kẹt đủ `reseed_every` vòng -> sinh direction mới (LLM re-seed)
+            # thay vì refine tiếp. Chỉ chuyển nhánh nếu seed mới tốt hơn best hiện tại.
+            if reseed_on and stuck >= self.reseed_every:
+                stuck = 0
+                reseeded = self._reseed_once()
+                if reseeded is not None:
+                    new_cand, new_ev = reseeded
+                    if new_ev.effective_total > best_ev.effective_total:
+                        best_cand, best_ev = new_cand, new_ev
+                        patience = 0
+                    emit("seed", best_ev.vector.total, f"re-seed: {new_cand.expression}")
+                continue
+
             # Nhắm chiều yếu nhất TRONG SỐ các chiều đang chặn hard filter (vd
             # fitness) để hướng refine về biên cần vượt; alpha đã đạt -> chiều yếu
             # nhất tuyệt đối như cũ.
@@ -326,6 +402,7 @@ class RefinementLoop:
             cand = self.refiner.refine(best_cand, best_ev.metrics, weak)
             if cand is None:
                 patience += 1
+                stuck += 1
                 continue
             ev = self._evaluate(cand, parent_id=best_ev.alpha_id)
             if ev is None:
@@ -340,8 +417,10 @@ class RefinementLoop:
             if improved:
                 best_cand, best_ev = cand, ev
                 patience = 0
+                stuck = 0
             else:
                 patience += 1
+                stuck += 1
             emit("refine", best_ev.vector.total, f"nhắm {weak}")
 
         logger.info(
