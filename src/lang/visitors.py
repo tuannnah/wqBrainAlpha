@@ -103,3 +103,20 @@ class CanonicalHasher(NodeVisitor[str]):
     @staticmethod
     def _digest(payload: str) -> str:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class ComplexityVisitor(NodeVisitor[int]):
+    """Số node toàn cây (leaf + Call) — proxy độ phức tạp cho GP anti-bloat penalty
+    (Phase 7, FitnessVector.complexity_penalty)."""
+
+    def visit(self, node: Node) -> int:
+        return node.accept(self)
+
+    def visit_constant(self, node: Constant) -> int:
+        return 1
+
+    def visit_field(self, node: Field) -> int:
+        return 1
+
+    def visit_call(self, node: Call) -> int:
+        return 1 + sum(c.accept(self) for c in node.children())
