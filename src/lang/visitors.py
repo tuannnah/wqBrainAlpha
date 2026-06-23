@@ -1,0 +1,45 @@
+"""Visitor cụ thể trên AST: DepthVisitor, FieldCollector, Serializer, CanonicalHasher,
+ComplexityVisitor. Mỗi visitor một trách nhiệm (B4 design) — không tangle với evaluator.
+"""
+
+from __future__ import annotations
+
+from src.lang.ast import Call, Constant, Field, Node, NodeVisitor
+
+
+class DepthVisitor(NodeVisitor[int]):
+    """Độ sâu tối đa của cây, ĐẾM CẢ wrapper Call (vd rank(...) tính 1 tầng độc lập với
+    số args). Leaf có depth 1; Call có depth 1 + max(depth con, mặc định 0 nếu rỗng)."""
+
+    def visit(self, node: Node) -> int:
+        return node.accept(self)
+
+    def visit_constant(self, node: Constant) -> int:
+        return 1
+
+    def visit_field(self, node: Field) -> int:
+        return 1
+
+    def visit_call(self, node: Call) -> int:
+        child_depths = [c.accept(self) for c in node.children()]
+        return 1 + (max(child_depths) if child_depths else 0)
+
+
+class FieldCollector(NodeVisitor["set[str]"]):
+    """Tập tên field được tham chiếu trong cây — phục vụ validate field tồn tại và
+    dead-field blacklist (Phase 0.7/Phase 5)."""
+
+    def visit(self, node: Node) -> set[str]:
+        return node.accept(self)
+
+    def visit_constant(self, node: Constant) -> set[str]:
+        return set()
+
+    def visit_field(self, node: Field) -> set[str]:
+        return {node.name}
+
+    def visit_call(self, node: Call) -> set[str]:
+        result: set[str] = set()
+        for c in node.children():
+            result |= c.accept(self)
+        return result
