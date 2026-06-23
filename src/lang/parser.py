@@ -35,17 +35,37 @@ class ParseError(ValueError):
 
 
 class _ToAst(Transformer[Token, Node]):
-    """Biến lark.Tree (theo grammar.lark) thành cây Node, validate qua registry khi gặp Call."""
+    """Biến lark.Tree (theo grammar.lark) thành cây Node, validate qua registry khi gặp Call.
 
-    def __init__(self, registry: OperatorRegistry) -> None:
+    ``validate=False`` -> bỏ qua kiểm operator-tồn-tại + arity (chế độ tương thích AST cũ
+    ``ast_utils`` nơi parser chấp nhận mọi tên hàm; dùng cho caller migrate Task 1.10).
+    """
+
+    def __init__(self, registry: OperatorRegistry, validate: bool = True) -> None:
         super().__init__()
         self._registry = registry
+        self._validate_enabled = validate
 
     def start(self, children: list[Node]) -> Node:
         return children[0]
 
     def number_atom(self, children: list[Token]) -> Constant:
         return Constant(float(children[0]))
+
+    def neg_atom(self, children: list[Node]) -> Node:
+        """Unary minus.
+
+        - Trên literal số (``Constant``) -> đảo dấu giá trị, vẫn là ``Constant``.
+        - Trên biểu thức non-literal (``Field``/``Call``) -> bọc thành
+          ``multiply(Constant(-1.0), expr)`` để đi qua chung đường ``Call``.
+        Cú pháp này tồn tại để tương thích AST cũ ``ast_utils`` nơi ``-rank(x)``
+        và ``multiply(-1, x)`` xuất hiện trong codebase legacy.
+        """
+        (inner,) = children
+        if isinstance(inner, Constant):
+            return Constant(-inner.value)
+        self._validate("multiply", 2)
+        return Call(op="multiply", args=(Constant(-1.0), inner))
 
     def field(self, children: list[Token]) -> Field:
         return Field(str(children[0]))
@@ -75,6 +95,8 @@ class _ToAst(Transformer[Token, Node]):
         return Call(op=op_name, args=(left, right))
 
     def _validate(self, name: str, n_args: int) -> None:
+        if not self._validate_enabled:
+            return
         try:
             spec = self._registry.get(name)
         except KeyError as exc:
@@ -95,13 +117,30 @@ _LARK = _build_lark()
 
 def parse(text: str, registry: OperatorRegistry | None = None) -> Node:
     """Parse chuỗi FASTEXPR-subset thành AST; raise ParseError nếu cú pháp/operator/arity sai."""
+    return _parse(text, registry=registry, validate=True)
+
+
+def parse_expression(text: str, registry: OperatorRegistry | None = None) -> Node:
+    """Parse lenient: chỉ kiểm cú pháp, KHÔNG kiểm operator-tồn-tại/arity.
+
+    Tương thích với hành vi của ``src.generation.ast_utils.parse_expression`` cũ —
+    9 caller migrate ở Task 1.10 (pre_filter, simulator, similarity, zoo, novel_ideas,
+    local_select, complexity, expr_synth, generator) chỉ cần AST, không cần
+    validate qua registry vì registry Phase 1 chỉ có 6 operator tối thiểu.
+    """
+    return _parse(text, registry=registry, validate=False)
+
+
+def _parse(
+    text: str, registry: OperatorRegistry | None = None, validate: bool = True
+) -> Node:
     reg = registry if registry is not None else default_registry()
     try:
         tree = _LARK.parse(text)
     except UnexpectedInput as exc:
         raise ParseError(f"cú pháp không hợp lệ tại: {text!r} ({exc})") from exc
     try:
-        result = _ToAst(reg).transform(tree)
+        result = _ToAst(reg, validate=validate).transform(tree)
     except VisitError as exc:
         # Lark bọc ParseError (raise từ trong _validate) bằng VisitError; gỡ lớp bọc.
         if isinstance(exc.orig_exc, ParseError):

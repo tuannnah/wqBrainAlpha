@@ -9,12 +9,12 @@ không trùng, đủ giả thuyết + lý giải.
 
 from __future__ import annotations
 
-from src.generation.ast_utils import Leaf, iter_leaves, parse_expression
 from src.generation.novel_ideas import (
     VERIFIED_FIELDS,
     NOVEL_ALPHAS,
     fields_in,
 )
+from src.lang.parser import parse_expression
 
 # group hợp lệ (không phải field) — bỏ qua khi kiểm field tồn tại.
 _GROUPS = {"market", "sector", "industry", "subindustry", "country", "exchange"}

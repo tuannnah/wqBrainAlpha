@@ -2,9 +2,11 @@
 // Grammar FASTEXPR-subset cho MiniBrain (Phase 1).
 //
 // Hỗ trợ: field (identifier không theo dấu '('), số (int/float), lời gọi hàm với
-// danh sách args phân tách bởi ',', và 4 toán tử nhị phân + - * / với precedence chuẩn
-// (* / cao hơn + -), đều left-associative. Không hỗ trợ unary minus ở Phase 1 (FASTEXPR
-// thật biểu diễn qua subtract(0, x) hoặc multiply(x, -1) khi cần — giữ grammar tối giản).
+// danh sách args phân tách bởi ',', 4 toán tử nhị phân + - * / với precedence chuẩn
+// (* / cao hơn + -, đều left-associative), và unary minus (đặt trước literal -> đảo
+// dấu literal; đặt trước biểu thức non-literal -> map về multiply(-1, expr) trong
+// transformer của parser.py). Unary minus cần thiết cho tương thích AST cũ:
+// "-rank(close)" và "multiply(-1, x)" là cú pháp phổ biến trong codebase legacy.
 
 start: expr
 
@@ -17,6 +19,7 @@ start: expr
      | term "/" atom    -> div_expr
 
 ?atom: NUMBER           -> number_atom
+     | "-" atom          -> neg_atom
      | call
      | field
      | "(" expr ")"

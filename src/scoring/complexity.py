@@ -7,7 +7,9 @@ hạng điều chuẩn ở T4.4. Parse lỗi -> phạt tối đa (an toàn).
 
 from __future__ import annotations
 
-from src.generation.ast_utils import Leaf, iter_leaves, parse_expression, tree_depth
+from src.lang.ast import Field
+from src.lang.parser import ParseError, parse_expression
+from src.lang.visitors import DepthVisitor, iter_leaves
 
 # Mốc chuẩn hoá: đạt mốc -> đóng góp tối đa cho chiều đó.
 MAX_DEPTH = 8
@@ -27,12 +29,12 @@ def complexity_features(expr: str) -> dict[str, int]:
     n_constants = 0
     fields: set[str] = set()
     for leaf in iter_leaves(tree):
-        if isinstance(leaf.value, (int, float)) and not isinstance(leaf.value, bool):
-            n_constants += 1
+        if isinstance(leaf, Field):
+            fields.add(leaf.name)
         else:
-            fields.add(str(leaf.value))
+            n_constants += 1
     return {
-        "depth": tree_depth(tree),
+        "depth": DepthVisitor().visit(tree),
         "n_constants": n_constants,
         "n_fields": len(fields),
     }
@@ -42,7 +44,7 @@ def complexity_penalty(expr: str) -> float:
     """Phạt độ phức tạp ∈ [0,1]. Parse lỗi -> 1.0 (phạt tối đa)."""
     try:
         f = complexity_features(expr)
-    except ValueError:
+    except (ValueError, ParseError):
         return 1.0
     return _clamp01(
         WEIGHTS["depth"] * f["depth"] / MAX_DEPTH

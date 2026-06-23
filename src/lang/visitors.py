@@ -5,6 +5,7 @@ ComplexityVisitor. Mỗi visitor một trách nhiệm (B4 design) — không tan
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
 
 from src.lang.ast import Call, Constant, Field, Node, NodeVisitor
 from src.lang.registry import OperatorRegistry, default_registry
@@ -120,3 +121,24 @@ class ComplexityVisitor(NodeVisitor[int]):
 
     def visit_call(self, node: Call) -> int:
         return 1 + sum(c.accept(self) for c in node.children())
+
+
+def all_subtrees(node: Node) -> list[Node]:
+    """Mọi sub-node của cây (gồm cả leaf và chính ``node``) — duyệt pre-order.
+
+    Dùng cho điểm crossover/mutation của GP (Phase 7); tương đương
+    ``ast_utils.all_subtrees`` cũ nhưng trên AST mới (Constant/Field/Call).
+    """
+    result: list[Node] = [node]
+    for child in node.children():
+        result.extend(all_subtrees(child))
+    return result
+
+
+def iter_leaves(node: Node) -> Iterator[Constant | Field]:
+    """Duyệt mọi leaf (``Constant`` hoặc ``Field``) của cây, theo thứ tự trái-phải."""
+    if isinstance(node, (Constant, Field)):
+        yield node
+    else:
+        for child in node.children():
+            yield from iter_leaves(child)

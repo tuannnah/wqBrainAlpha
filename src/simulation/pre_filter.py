@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from src.generation.ast_utils import (
-    BINARY_OPS,
-    Leaf,
-    Node,
-    node_count,
-    parse_expression,
-    tree_depth,
-)
+from src.lang.ast import Call, Constant, Field, Node
+from src.lang.parser import ParseError, parse_expression
+from src.lang.visitors import ComplexityVisitor, DepthVisitor
+
+# 4 phép số học nhị phân: + - * / được parser map sang add/subtract/multiply/divide.
+# Đây là nhóm operator hạ tầng, miễn kiểm operator-tồn-tại + arity (luôn hợp lệ vì
+# do grammar tạo, không phải tên hàm do user gõ trong call(...)).
+BINARY_OPS = {"add", "subtract", "multiply", "divide"}
 
 DEFAULT_GROUPS = {"market", "sector", "industry", "subindustry", "country", "exchange"}
 
@@ -54,12 +54,12 @@ class PreFilter:
 
         try:
             tree = parse_expression(expr)
-        except ValueError as exc:
+        except (ValueError, ParseError) as exc:
             return False, f"Parse lỗi: {exc}"
 
-        if tree_depth(tree) > self.max_depth:
+        if DepthVisitor().visit(tree) > self.max_depth:
             return False, f"Độ sâu > {self.max_depth}"
-        if node_count(tree) > self.max_nodes:
+        if ComplexityVisitor().visit(tree) > self.max_nodes:
             return False, f"Số node > {self.max_nodes}"
 
         ok, reason = self._check_symbols(tree)
@@ -68,41 +68,43 @@ class PreFilter:
 
         return True, "ok"
 
-    def _check_symbols(self, node) -> tuple[bool, str]:
-        if isinstance(node, Leaf):
-            if isinstance(node.value, (int, float)):
-                return True, "ok"
-            name = str(node.value)
+    def _check_symbols(self, node: Node) -> tuple[bool, str]:
+        if isinstance(node, Constant):
+            return True, "ok"
+        if isinstance(node, Field):
+            name = node.name
             if self.known_fields is not None and name not in self.known_fields:
                 if name not in self.known_groups:
                     return False, f"Field/hằng không tồn tại: {name}"
             return True, "ok"
 
-        if node.op not in BINARY_OPS and node.op != "neg":
+        assert isinstance(node, Call)
+
+        if node.op not in BINARY_OPS:
             if self.known_operators is not None and node.op not in self.known_operators:
                 return False, f"Operator không tồn tại: {node.op}"
 
             # Tolerant arity: chặn khi THỪA input so với chữ ký, trừ operator variadic.
             if self.operator_arity and node.op not in self.variadic_ops:
                 expected = self.operator_arity.get(node.op)
-                if expected and len(node.children) > expected:
+                if expected and len(node.args) > expected:
                     return False, (
                         f"Operator {node.op} nhận tối đa {expected} input, "
-                        f"có {len(node.children)}"
+                        f"có {len(node.args)}"
                     )
 
         # Operator đòi MATRIX không được nhận field VECTOR làm đối số TRỰC TIẾP.
         if self.field_types and node.op in self.matrix_only_ops:
-            for child in node.children:
-                if isinstance(child, Leaf) and not isinstance(child.value, (int, float)):
-                    ftype = self.field_types.get(str(child.value))
+            for child in node.args:
+                if isinstance(child, Field):
+                    ftype = self.field_types.get(child.name)
                     if ftype == "VECTOR":
                         return False, (
                             f"Operator {node.op} đòi input MATRIX, không nhận field "
-                            f"VECTOR trực tiếp: {child.value} (cần vec_avg/vec_sum trước)"
+                            f"VECTOR trực tiếp: {child.name} (cần vec_avg/vec_sum trước)"
                         )
 
-        for child in node.children:
+        for child in node.args:
             ok, reason = self._check_symbols(child)
             if not ok:
                 return False, reason

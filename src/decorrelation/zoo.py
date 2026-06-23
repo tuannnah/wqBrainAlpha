@@ -10,7 +10,7 @@ from loguru import logger
 
 from src.decorrelation.alpha101 import ALPHA101_FASTEXPR
 from src.decorrelation.similarity import similarity_ratio
-from src.generation.ast_utils import parse_expression
+from src.lang.parser import ParseError, parse_expression
 
 
 class ReferenceZoo:

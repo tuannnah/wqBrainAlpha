@@ -7,8 +7,8 @@ parse được, và các họ mong đợi đều có mặt.
 
 from __future__ import annotations
 
-from src.generation.ast_utils import parse_expression
 from src.generation.families import EXPECTED_FAMILIES, generate_candidates
+from src.lang.parser import parse_expression
 
 
 def test_sinh_so_luong_lon():

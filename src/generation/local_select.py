@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from src.decorrelation.similarity import similarity_ratio, subtree_canon
-from src.generation.ast_utils import parse_expression
+from src.lang.parser import parse_expression
 from src.scoring.complexity import complexity_penalty
 from src.simulation.pre_filter import PreFilter
 

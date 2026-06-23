@@ -17,50 +17,53 @@ from __future__ import annotations
 
 from collections import Counter
 
-from src.generation.ast_utils import (
-    Leaf,
-    Node,
-    all_subtrees,
-    node_count,
-    parse_expression,
-)
+from src.lang.ast import Call, Constant, Field, Node
+from src.lang.parser import ParseError, parse_expression
+from src.lang.visitors import ComplexityVisitor, all_subtrees
 
 
-def _as_node(tree):
+def _as_node(tree: Node | str) -> Node:
     return parse_expression(tree) if isinstance(tree, str) else tree
 
 
-def subtree_canon(node, field_aware: bool = False) -> str:
+def subtree_canon(node: Node, field_aware: bool = False) -> str:
     """Chuỗi chuẩn hoá của một subtree (số->N; field->F hoặc giữ tên nếu field_aware)."""
-    if isinstance(node, Leaf):
-        if isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
-            return "N"
-        return str(node.value) if field_aware else "F"
-    return node.op + "(" + ",".join(subtree_canon(c, field_aware) for c in node.children) + ")"
+    if isinstance(node, Constant):
+        return "N"
+    if isinstance(node, Field):
+        return node.name if field_aware else "F"
+    assert isinstance(node, Call)
+    return node.op + "(" + ",".join(subtree_canon(c, field_aware) for c in node.args) + ")"
 
 
-def _node_canon_sizes(tree, field_aware: bool = False) -> dict[str, int]:
-    """canon -> kích thước (node_count) cho mọi nhánh con là Node."""
+def _node_canon_sizes(tree: Node, field_aware: bool = False) -> dict[str, int]:
+    """canon -> kích thước (node_count) cho mọi nhánh con là Call (tức Node có con)."""
     sizes: dict[str, int] = {}
+    cv = ComplexityVisitor()
     for sub in all_subtrees(tree):
-        if isinstance(sub, Node):
+        if isinstance(sub, Call):
             c = subtree_canon(sub, field_aware)
-            sizes[c] = max(sizes.get(c, 0), node_count(sub))
+            sizes[c] = max(sizes.get(c, 0), cv.visit(sub))
     return sizes
 
 
-def largest_common_subtree(a, b, field_aware: bool = False) -> int:
-    """Số node của nhánh con (Node) đẳng cấu lớn nhất chung giữa a và b."""
+def largest_common_subtree(
+    a: Node | str, b: Node | str, field_aware: bool = False
+) -> int:
+    """Số node của nhánh con (Call) đẳng cấu lớn nhất chung giữa a và b."""
     a, b = _as_node(a), _as_node(b)
     sa, sb = _node_canon_sizes(a, field_aware), _node_canon_sizes(b, field_aware)
     common = set(sa) & set(sb)
     return max((min(sa[c], sb[c]) for c in common), default=0)
 
 
-def similarity_ratio(a, b, field_aware: bool = False) -> float:
+def similarity_ratio(
+    a: Node | str, b: Node | str, field_aware: bool = False
+) -> float:
     """Tỉ lệ tương đồng ∈ [0,1] = nhánh chung lớn nhất / min(số node hai cây)."""
     a, b = _as_node(a), _as_node(b)
-    denom = min(node_count(a), node_count(b))
+    cv = ComplexityVisitor()
+    denom = min(cv.visit(a), cv.visit(b))
     if denom <= 0:
         return 0.0
     return largest_common_subtree(a, b, field_aware) / denom
@@ -79,12 +82,12 @@ def common_subtrees(
     for expr in expressions:
         try:
             tree = parse_expression(expr) if isinstance(expr, str) else expr
-        except ValueError:
+        except (ValueError, ParseError):
             continue
         canons = {
             subtree_canon(sub)
             for sub in all_subtrees(tree)
-            if isinstance(sub, Node)
+            if isinstance(sub, Call)
         }
         counter.update(canons)
     items = [(c, n) for c, n in counter.items() if n >= min_count]
