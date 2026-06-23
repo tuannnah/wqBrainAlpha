@@ -26,3 +26,32 @@ def _no_production_log_during_tests():
     logger.remove()
     logger.add(sys.stderr, level="WARNING")
     yield
+
+
+# --- MiniBrain: panel nhỏ thật-hình-dạng cho test backtester (Phase 0+) ---
+@pytest.fixture
+def small_panel():
+    """Panel (T=120, N=30) reproducible: close = random walk; volume dương;
+    universe per-day (vài mã rời giữa kỳ); sector groups; returns close-to-close."""
+    import numpy as np
+
+    from src.data.market_panel import MarketData
+
+    rng = np.random.default_rng(42)
+    t, n = 120, 30
+    dates = (np.datetime64("2020-01-01") + np.arange(t)).astype("datetime64[D]")
+    assets = np.array([f"A{i:02d}" for i in range(n)], dtype=np.str_)
+    steps = rng.normal(0.0, 0.02, size=(t, n))
+    close = 100.0 * np.exp(np.cumsum(steps, axis=0))
+    volume = rng.uniform(1e5, 1e6, size=(t, n))
+    universe = np.ones((t, n), dtype=bool)
+    universe[: t // 2, -3:] = False  # 3 mã cuối chỉ vào universe nửa sau
+    prev = np.empty_like(close)
+    prev[0] = np.nan
+    prev[1:] = close[:-1]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        returns = (close - prev) / prev
+    sector = np.tile(np.arange(n) % 5, (t, 1)).astype(np.int64)
+    return MarketData(dates=dates, assets=assets,
+                      fields={"close": close, "volume": volume},
+                      universe=universe, returns=returns, groups={"sector": sector})
