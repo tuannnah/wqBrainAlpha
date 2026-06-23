@@ -113,5 +113,8 @@ def parse(text: str, registry: OperatorRegistry | None = None) -> Node:
 
 
 if __name__ == "__main__":
+    from src.lang.visitors import Serializer
+
     expr = sys.argv[1] if len(sys.argv) > 1 else "rank(close)"
-    print(repr(parse(expr)))
+    node = parse(expr)
+    print(Serializer().visit(node))

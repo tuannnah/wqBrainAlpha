@@ -43,3 +43,25 @@ class FieldCollector(NodeVisitor["set[str]"]):
         for c in node.children():
             result |= c.accept(self)
         return result
+
+
+class Serializer(NodeVisitor[str]):
+    """AST -> chuỗi FASTEXPR canonical. Round-trip với parser:
+    parse(Serializer().visit(node)) == node. Toán tử nhị phân luôn render dạng hàm
+    (vd `add(a, b)`), không dạng infix — đơn giản hóa round-trip (grammar Task 1.4 chấp
+    nhận cả hai dạng nhưng AST không phân biệt nguồn gốc cú pháp)."""
+
+    def visit(self, node: Node) -> str:
+        return node.accept(self)
+
+    def visit_constant(self, node: Constant) -> str:
+        if node.value.is_integer():
+            return str(int(node.value))
+        return repr(node.value)
+
+    def visit_field(self, node: Field) -> str:
+        return node.name
+
+    def visit_call(self, node: Call) -> str:
+        args = ", ".join(c.accept(self) for c in node.children())
+        return f"{node.op}({args})"
