@@ -32,28 +32,32 @@ gate mới được đốt sim thật.
 | D6 | Cải tiến các engine liên quan tới **sinh alpha** theo MINIBRAIN_DESIGN (stage separation, correlation-aware, deflated/regime fitness). |
 | D7 | Xóa file rác ở root (`new 1.txt`, `llm_bridge_run.log`). |
 | D8 | `src/generation/ast_utils.py` + `template.py` xóa **sau khi** `src/lang/` + `src/gp/` thay thế xong (Phase 1 + 7 verify rồi xóa). |
+| D9 | **Bỏ đường cũ** (LLM → sim Brain trực tiếp). Chỉ còn **một pipeline thống nhất** đi qua local pre-filter; mọi candidate phải vượt local gate mới được đốt sim. Đường cũ giữ tạm làm fallback **chỉ tới hết Phase 2**, **gỡ tại Phase 3** khi local gate đã chạy được (nếu gỡ ngay từ Phase 0 thì tool không còn đường nào chạy trong lúc build). |
 
 ---
 
 ## 2. Kiến trúc tổng thể
 
-Sau tích hợp, tool có **2 đường đi alpha** dùng chung lõi hạ tầng (login / AI / DB / submit):
+Sau tích hợp, tool có **một pipeline alpha thống nhất** (D9 — đã bỏ đường cũ), dùng chung lõi
+hạ tầng (login / AI / DB / submit):
 
-**Đường cũ (giữ, vẫn chạy khi MiniBrain đang build):**
 ```
-LLM hypothesis → AlphaTranslator → PreFilter(cú pháp) → SIM Brain → score 6 chiều → submit
-```
-
-**Đường mới (build dần):**
-```
-parse FASTEXPR → eval local (T,N) → portfolio + backtest local → metrics local
-  → gate (hard + pool_corr local 0.70) → CHỈ alpha pass mới đốt SIM Brain
+nguồn candidate (LLM hypothesis→translator  ·  GP  ·  NOVEL/factor families)
+  → parse FASTEXPR → eval local (T,N) → portfolio + backtest local → metrics local
+  → gate (hard + pool_corr local 0.70)            ← LỌC CỤC BỘ, MIỄN PHÍ, KHÔNG QUOTA
+  → CHỈ alpha vượt gate mới đốt SIM Brain → score 6 chiều → submit
   → calibrate ρ định kỳ · GP sinh batch lớn
 ```
 
-**Điểm giao:** `src/llm/loop.py` (`RefinementLoop`) — chèn bước `score_local_gate(expr, cfg)`
-ngay **sau** prefilter cú pháp và **trước** `simulator.simulate(...)`. Local hard-fail → bỏ,
-không đốt quota. Khi sim Brain trả kết quả, vẫn dùng score 6 chiều như cũ.
+**Không còn nhánh "LLM → sim Brain trực tiếp".** Mọi candidate — dù từ LLM, GP, hay
+NOVEL/factor families — đều **bắt buộc** đi qua local gate trước khi tiêu tốn sim. Sim Brain
+chỉ là bước xác nhận cuối cho thiểu số đã vượt local.
+
+**Chuyển đổi từ đường cũ:** `src/llm/loop.py` (`RefinementLoop`) hiện gọi thẳng
+`simulator.simulate(...)` sau prefilter cú pháp. Tại **Phase 3**, refactor để chèn
+`score_local_gate(expr, cfg)` thành **cổng bắt buộc** (không phải tùy chọn) trước mọi lần
+`simulate`; local hard-fail → bỏ, không đốt quota. Trong Phase 0–2 (local chưa xong), đường
+cũ vẫn chạy như fallback để tool không chết; hết Phase 3 thì đường cũ biến mất hoàn toàn.
 
 **Điều phối:** giữ `main.py` menu + `run.ps1`. Thêm 4 entry: `fetch-market`, `score-one`,
 `calibrate`, `generate`.
@@ -79,7 +83,7 @@ metrics,scorer,complexity,regularized}.py`; `src/decorrelation/{zoo,similarity,a
 ### 3.2 SỬA (mở rộng, không thay thế)
 | Module | Sửa | Phase |
 |---|---|---|
-| `src/llm/loop.py` | Chèn `score_local_gate` trước `simulate` | 3+ |
+| `src/llm/loop.py` | **Bỏ đường cũ** (D9): `score_local_gate` thành cổng bắt buộc trước mọi `simulate`; gỡ nhánh gọi thẳng sim | 3 |
 | `src/storage/models.py` + `migrate.py` | Thêm bảng `pool_pnl`, `dead_field`, `brain_record` + cột mở rộng `evaluation` (config_json, per_year_json, self_corr_max, fail_reasons, seed) | 5 |
 | `src/storage/repository.py` | Thêm `load_pool`, `record_evaluation_with_pnl`, `add_dead_field`, `get_brain_records`, `result_cache_get/put` | 5 |
 | `src/scoring/filter.py` | Thêm `evaluate_local(metrics, self_corr)` đọc `config/thresholds.py` | 4 |
@@ -148,8 +152,9 @@ Tất cả lớp/Protocol/dataclass theo đúng B3–B13. Tóm tắt hợp đồ
   ngay từ đầu — chống sinh quần thể bão hòa, trùng PnL.
 - **Backend AI giữ nguyên đa lựa chọn:** DeepSeek (v4-flash/pro) / claude-cli (opus 4.8) /
   codex-cli / agent-bridge qua `LLM_BACKEND` (đã có `src/llm/router.py`).
-- **Local gate trước sim (đường giao):** mọi candidate (LLM hoặc GP) qua `score_local_gate`
-  → chỉ cái vượt mới đốt sim Brain.
+- **Local gate là cổng bắt buộc (D9):** mọi candidate (LLM, GP, NOVEL/factor families) đều
+  qua `score_local_gate` → chỉ cái vượt mới đốt sim Brain. Không còn nhánh nào đốt sim mà
+  bỏ qua local gate.
 
 ---
 
@@ -201,7 +206,7 @@ merge vào `main` → push → cập nhật `PROGRESS.md`.
 | 0 | config + market_fetch + market_panel + universe + xóa rác | `phase-0-data-foundation` |
 | 1 | lang/{ast,registry,parser,grammar} + visitors; xóa ast_utils sau verify | `phase-1-parser` |
 | 2 | operators_local/* + engine/{evaluator,subexpr_cache} + golden tests | `phase-2-operator-engine` |
-| 3 | backtest/{config,portfolio,backtester} — **MVP**, demo + review | `phase-3-backtester` |
+| 3 | backtest/{config,portfolio,backtester} — **MVP**; **gỡ đường cũ** trong loop.py (D9), local gate thành cổng bắt buộc; demo + review | `phase-3-backtester` |
 | 4 | backtest/metrics_local + scoring/filter.evaluate_local + thresholds | `phase-4-metrics-gates` |
 | 4.5 | calibration/{harness,report,loader}; đo ρ trên DB | `phase-4.5-calibration` |
 | 5 | storage migrate + repository mở rộng + result_cache | `phase-5-database` |
