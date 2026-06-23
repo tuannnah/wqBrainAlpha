@@ -34,6 +34,16 @@ def test_years_slices_by_calendar_year():
         ["2020-01-01", "2020-01-02"], dtype="datetime64[D]").tolist()
 
 
+def test_post_init_rejects_unsorted_dates():
+    dates = np.array(["2021-01-01", "2020-01-01"], dtype="datetime64[D]")
+    assets = np.array(["AAA"], dtype=np.str_)
+    close = np.zeros((2, 1), dtype=np.float64)
+    with pytest.raises(ValueError):
+        MarketData(dates=dates, assets=assets, fields={"close": close},
+                   universe=np.ones((2, 1), dtype=np.bool_),
+                   returns=np.zeros((2, 1), dtype=np.float64), groups={})
+
+
 def test_post_init_rejects_shape_mismatch():
     dates = np.array(["2020-01-01"], dtype="datetime64[D]")
     assets = np.array(["AAA", "BBB"], dtype=np.str_)

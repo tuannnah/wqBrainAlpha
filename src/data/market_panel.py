@@ -35,6 +35,10 @@ class MarketData:
         for name, arr in self.groups.items():
             if arr.shape != shape:
                 raise ValueError(f"group {name!r} shape {arr.shape} != {shape}")
+        if len(self.dates) > 1 and not (
+            np.diff(self.dates.astype("datetime64[ns]")).astype("int64") > 0
+        ).all():
+            raise ValueError("dates phải tăng nghiêm ngặt (sorted, không trùng)")
 
     def field(self, name: str) -> Panel:
         """Mảng (T,N) của field; KeyError nếu không có."""
