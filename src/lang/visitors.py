@@ -4,7 +4,10 @@ ComplexityVisitor. Mỗi visitor một trách nhiệm (B4 design) — không tan
 
 from __future__ import annotations
 
+import hashlib
+
 from src.lang.ast import Call, Constant, Field, Node, NodeVisitor
+from src.lang.registry import OperatorRegistry, default_registry
 
 
 class DepthVisitor(NodeVisitor[int]):
@@ -65,3 +68,38 @@ class Serializer(NodeVisitor[str]):
     def visit_call(self, node: Call) -> str:
         args = ", ".join(c.accept(self) for c in node.children())
         return f"{node.op}({args})"
+
+
+class CanonicalHasher(NodeVisitor[str]):
+    """Hash sha256-hex ổn định sau canonicalize: literal normalize qua repr(float),
+    args của operator commutative (theo registry) được sort trước khi ghép — đảm bảo
+    add(a,b) và add(b,a) cho cùng hash. Dùng cho sub-expression cache, result cache,
+    dedup quần thể GP (B12)."""
+
+    def __init__(self, registry: OperatorRegistry | None = None) -> None:
+        self._registry = registry if registry is not None else default_registry()
+
+    def visit(self, node: Node) -> str:
+        return node.accept(self)
+
+    def visit_constant(self, node: Constant) -> str:
+        return self._digest(f"const:{repr(float(node.value))}")
+
+    def visit_field(self, node: Field) -> str:
+        return self._digest(f"field:{node.name}")
+
+    def visit_call(self, node: Call) -> str:
+        child_hashes = [c.accept(self) for c in node.children()]
+        if self._is_commutative(node.op):
+            child_hashes = sorted(child_hashes)
+        return self._digest(f"call:{node.op}({','.join(child_hashes)})")
+
+    def _is_commutative(self, op: str) -> bool:
+        try:
+            return self._registry.get(op).commutative
+        except KeyError:
+            return False
+
+    @staticmethod
+    def _digest(payload: str) -> str:
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
