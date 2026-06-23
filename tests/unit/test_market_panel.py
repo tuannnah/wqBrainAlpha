@@ -52,3 +52,23 @@ def test_post_init_rejects_shape_mismatch():
         MarketData(dates=dates, assets=assets, fields={"close": bad},
                    universe=np.ones((1, 2), dtype=np.bool_),
                    returns=np.zeros((1, 2), dtype=np.float64), groups={})
+
+
+def test_post_init_rejects_non_bool_universe():
+    dates = np.array(["2020-01-01"], dtype="datetime64[D]")
+    assets = np.array(["AAA"], dtype=np.str_)
+    close = np.zeros((1, 1), dtype=np.float64)
+    with pytest.raises(ValueError):
+        MarketData(dates=dates, assets=assets, fields={"close": close},
+                   universe=np.ones((1, 1), dtype=np.float64),
+                   returns=np.zeros((1, 1), dtype=np.float64), groups={})
+
+
+def test_post_init_rejects_non_datetime_dates():
+    dates = np.array([20200101], dtype=np.int64)
+    assets = np.array(["AAA"], dtype=np.str_)
+    close = np.zeros((1, 1), dtype=np.float64)
+    with pytest.raises(ValueError):
+        MarketData(dates=dates, assets=assets, fields={"close": close},
+                   universe=np.ones((1, 1), dtype=np.bool_),
+                   returns=np.zeros((1, 1), dtype=np.float64), groups={})

@@ -24,7 +24,7 @@ def save(md: MarketData, root: str) -> None:
     base = Path(root)
     (base / "fields").mkdir(parents=True, exist_ok=True)
     (base / "groups").mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"date": md.dates, "asset_idx": range(len(md.dates))}).to_parquet(
+    pd.DataFrame({"date": md.dates, "date_idx": range(len(md.dates))}).to_parquet(
         base / "axes_dates.parquet")
     pd.DataFrame({"asset": md.assets}).to_parquet(base / "axes_assets.parquet")
     for name, arr in md.fields.items():

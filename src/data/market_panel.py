@@ -39,6 +39,10 @@ class MarketData:
             np.diff(self.dates.astype("datetime64[ns]")).astype("int64") > 0
         ).all():
             raise ValueError("dates phải tăng nghiêm ngặt (sorted, không trùng)")
+        if self.universe.dtype != np.bool_:
+            raise ValueError("universe phải là mảng bool")
+        if self.dates.dtype.kind != "M":
+            raise ValueError("dates phải là datetime64")
 
     def field(self, name: str) -> Panel:
         """Mảng (T,N) của field; KeyError nếu không có."""
