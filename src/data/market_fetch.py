@@ -7,23 +7,29 @@ chạy tay — nếu chưa xác định, raise NotImplementedError có chỉ d�
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from src.data.adapters.parquet_source import save  # noqa: F401 (dùng khi fetch_to_parquet hết spike)
 from src.data.market_panel import MarketData
 from src.data.universe import build_universe_mask, sector_codes
+from src.local_types import Panel
+
+if TYPE_CHECKING:
+    from src.data.client import WQBrainClient
 
 RawField = tuple[np.ndarray, np.ndarray, np.ndarray]  # (dates, assets, values(T,N))
 
 
-def _simple_returns(close: np.ndarray) -> np.ndarray:
+def _simple_returns(close: Panel) -> Panel:
     """Close-to-close simple returns; hàng đầu = NaN (không look-ahead)."""
     prev = np.empty_like(close)
     prev[0] = np.nan
     prev[1:] = close[:-1]
     with np.errstate(invalid="ignore", divide="ignore"):
-        ret = (close - prev) / prev
-    return ret
+        # astype trả ndarray có kiểu rõ (float64), tránh mypy "Returning Any"
+        return ((close - prev) / prev).astype(np.float64)
 
 
 def _assemble_panel(
@@ -46,7 +52,7 @@ def _assemble_panel(
 
 
 def fetch_to_parquet(
-    client,  # WQBrainClient
+    client: WQBrainClient,
     fields: list[str],
     start: str,
     end: str,
