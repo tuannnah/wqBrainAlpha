@@ -1,5 +1,6 @@
 .env
 .wq_session
+.wq_account
 venv/
 .venv/
 *.db

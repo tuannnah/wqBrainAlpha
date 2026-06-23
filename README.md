@@ -29,17 +29,19 @@ bạn quét QR xong thì quay lại console nhấn Enter (thử lại tối đa 
 ## Cách dùng nhanh (khuyến nghị)
 
 Double-click **`run.bat`** (hoặc chuột phải `run.ps1` > Run with PowerShell).
-Script tự tạo venv, cài dependencies, tạo `.env` lần đầu, rồi mở **wizard chạy
-theo từng bước** (một phiên duy nhất giữ đăng nhập):
+Script tự tạo venv, cài dependencies, tạo `.env` lần đầu, rồi mở **menu**
+(`python main.py start` — một phiên duy nhất giữ đăng nhập):
 
 1. **Đăng nhập** — nhập email/mật khẩu ngay trong console (mật khẩu ẩn); tự
-   mở trình duyệt nếu cần quét QR.
-2. **Tải data fields** — chỉ mở sau khi đăng nhập. Lần đầu tải về và lưu DB;
-   lần sau hỏi *Dùng lại* (khỏi tải) hay *Tải mới*.
-3. **Tải operators** — tương tự, cache vào DB.
-4. **Mô phỏng / Sinh alpha / GA** — mở dần khi đủ điều kiện bước trước.
+   mở trình duyệt nếu cần quét QR. **Đăng nhập xong hiện ngay số data fields +
+   operators** đang có trong DB để bạn quyết định có cần tải lại không.
+2. **Tải lại data fields** — gọi API ghi đè cache (chọn khi muốn làm mới).
+3. **Tải lại operators** — tương tự.
+4. **Chạy engine sinh alpha** — vòng nghiên cứu (`research`); hỏi hướng nghiên
+   cứu, **để trống là LLM tự đề xuất**.
+5. **Chạy thử (ngắn)** — như mục 4 nhưng trần sim nhỏ để kiểm tra luồng.
 
-Tương đương: `python main.py start`.
+DB tách theo email đăng nhập (mỗi tài khoản một file `wq_alpha_<email>.db`).
 
 ## Dùng bằng dòng lệnh
 
@@ -52,8 +54,7 @@ python main.py fetch-fields --reload          # Ép tải lại (ghi đè cache)
 python main.py cache-status                   # Xem các tổ hợp đã cache
 python main.py fetch-operators                # Lấy & cache operators
 python main.py simulate --expr "rank(close)"  # Chạy một simulation
-python main.py generate --count 100           # Sinh alpha (Phase 2)
-python main.py run-ga --population 30 --generations 10
+python main.py generate --count 100           # Sinh alpha bằng template
 python main.py research --direction "mean-reversion theo thanh khoản" --max-sims 20
 python main.py top --n 20                      # Xem alpha tốt nhất
 python main.py check-deepseek                  # Test DeepSeek API bằng chat "hello"

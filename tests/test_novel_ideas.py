@@ -68,12 +68,25 @@ def test_fields_in_loai_so_va_lay_field():
     assert "30" not in fs
 
 
-def test_moi_alpha_co_overrides_decay_truncation():
-    """Mỗi alpha phải đặt decay + truncation riêng (không xài mặc định cứng cho cả 10)."""
+def test_moi_alpha_co_overrides_day_du_decay_truncation_neutralization():
+    """Mỗi alpha phải đặt đủ decay/truncation/neutralization riêng."""
     for c in NOVEL_ALPHAS:
         assert c.overrides, f"thiếu overrides: {c.family}"
         assert "decay" in c.overrides, f"thiếu decay: {c.family}"
         assert "truncation" in c.overrides, f"thiếu truncation: {c.family}"
+        assert "neutralization" in c.overrides, f"thiếu neutralization: {c.family}"
+
+
+def test_neutralization_override_khop_group_trong_bieu_thuc():
+    expected_by_group = {
+        "market": "MARKET",
+        "sector": "SECTOR",
+        "industry": "INDUSTRY",
+        "subindustry": "SUBINDUSTRY",
+    }
+    for c in NOVEL_ALPHAS:
+        group = c.expression.rsplit(",", 1)[-1].rstrip(") ").strip().lower()
+        assert c.overrides["neutralization"] == expected_by_group[group]
 
 
 def test_decay_truncation_trong_khoang_hop_le():

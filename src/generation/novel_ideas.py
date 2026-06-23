@@ -20,6 +20,15 @@ from __future__ import annotations
 from src.generation.ast_utils import Leaf, iter_leaves, parse_expression
 from src.generation.local_select import Candidate
 
+_GROUP_TO_NEUTRALIZATION = {
+    "market": "MARKET",
+    "sector": "SECTOR",
+    "industry": "INDUSTRY",
+    "subindustry": "SUBINDUSTRY",
+    "country": "COUNTRY",
+    "exchange": "EXCHANGE",
+}
+
 # Field đã xác minh tồn tại trong DB (đã chạy kiểm tra trực tiếp).
 VERIFIED_FIELDS: set[str] = {
     # option-implied / realized vol
@@ -283,3 +292,15 @@ NOVEL_ALPHAS: list[Candidate] = [
         ),
     ),
 ]
+
+
+def _neutralization_for_expression(expression: str) -> str:
+    group = expression.rsplit(",", 1)[-1].rstrip(") ").strip().lower()
+    return _GROUP_TO_NEUTRALIZATION.get(group, "SUBINDUSTRY")
+
+
+for candidate in NOVEL_ALPHAS:
+    candidate.overrides.setdefault(
+        "neutralization",
+        _neutralization_for_expression(candidate.expression),
+    )

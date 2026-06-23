@@ -13,6 +13,7 @@ import tempfile
 from loguru import logger
 
 from src.llm.deepseek_client import Usage
+from src.llm.errors import QuotaExhaustedError, is_quota_error
 from src.llm.jsonutil import extract_json
 
 # Nhắc model chỉ in JSON khi json_mode (agent CLI hay chèn lời mở đầu/markdown).
@@ -76,6 +77,10 @@ def _subprocess_runner(argv, stdin, cwd, timeout_s) -> str:
         raise RuntimeError(f"CLI '{argv[0]}' quá hạn sau {timeout_s}s") from exc
     if proc.returncode != 0:
         err = (proc.stderr or "").strip()[:500]
+        # Hết quota -> QuotaExhaustedError để marathon DỪNG hẳn; lỗi khác (mạng,
+        # cú pháp...) -> RuntimeError để marathon retry rồi bỏ hướng.
+        if is_quota_error(proc.stderr or ""):
+            raise QuotaExhaustedError(f"CLI '{argv[0]}' báo hết quota: {err}")
         raise RuntimeError(f"CLI '{argv[0]}' exit {proc.returncode}: {err}")
     return proc.stdout or ""
 

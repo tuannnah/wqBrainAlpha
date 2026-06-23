@@ -28,6 +28,7 @@ from src.simulation.simulator import Simulator
 from src.storage.db import init_db, make_engine, make_session_factory
 from src.storage.migrate import migrate_all, _same_database
 from src.storage.repository import AlphaRepository, InvalidFieldRepository
+from src.llm.marathon import MarathonReport, run_marathon
 from src.pipeline.auto import PrepareInfo
 
 app = typer.Typer(help="WorldQuant Brain Auto-Alpha Tool")
@@ -73,8 +74,13 @@ def _make_client() -> WQBrainClient:
 def login(force: bool = typer.Option(False, help="Đăng nhập lại dù session còn hạn")) -> None:
     """Đăng nhập (dùng session cũ nếu còn hạn)."""
     _setup_logging()
+    from src.storage.db import write_active_account
+
     client = _make_client()
     client.authenticate(force=force)
+    # Ghi email tài khoản -> các lệnh sau chọn đúng DB theo email (mỗi tài khoản 1 DB).
+    if client.email:
+        write_active_account(client.email)
     console.print("[green]OK[/green]")
 
 
@@ -173,21 +179,33 @@ def fetch_fields(
     delay: int = typer.Option(settings.default_delay),
     reload: bool = typer.Option(False, "--reload", help="Ép tải lại từ API (ghi đè cache)"),
 ) -> None:
-    """Fetch một lần (bỏ qua nếu đã cache). --reload để ép tải lại."""
+    """Fetch một lần (bỏ qua nếu đã cache). --reload để ép tải lại (ghi đè)."""
     _setup_logging()
     from src.data.fields import FieldFetchError
 
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
+    repo = FieldRepository(None, session_factory)
+    # Đã cache & không --reload: đọc thẳng từ DB, KHÔNG đăng nhập/gọi API.
+    if not reload and repo._is_cached(region, universe, delay):
+        fields = repo._load_from_db(region, universe, delay)
+        console.print(
+            f"[green]Data fields: {len(fields)}[/green] — dùng CACHE, không tải mới "
+            f"({region}/{universe}/delay={delay})"
+        )
+        return
     client = _make_client()
     client.authenticate()
-    repo = FieldRepository(client, session_factory)
+    repo.client = client
     try:
         fields = repo.get_fields(region, universe, delay, force_reload=reload)
     except FieldFetchError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
-    console.print(f"[green]{len(fields)} fields[/green] cho {region}/{universe}/delay={delay}")
+    console.print(
+        f"[green]Data fields: {len(fields)}[/green] — ĐÃ TẢI MỚI từ API "
+        f"({region}/{universe}/delay={delay})"
+    )
 
 
 @app.command("cache-status")
@@ -213,16 +231,24 @@ def cache_status() -> None:
 
 
 @app.command("fetch-operators")
-def fetch_operators() -> None:
-    """Lấy & cache operators."""
+def fetch_operators(
+    reload: bool = typer.Option(False, "--reload", help="Ép tải lại từ API (ghi đè cache)"),
+) -> None:
+    """Lấy & cache operators (bỏ qua nếu đã cache). --reload để ép tải lại (ghi đè)."""
     _setup_logging()
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
+    repo = OperatorRepository(None, session_factory)
+    # Đã cache & không --reload: đọc thẳng từ DB, KHÔNG đăng nhập/gọi API.
+    if not reload and repo.cached_count() > 0:
+        operators = repo.load_cached()
+        console.print(f"[green]Operators: {len(operators)}[/green] — dùng CACHE, không tải mới")
+        return
     client = _make_client()
     client.authenticate()
-    repo = OperatorRepository(client, session_factory)
+    repo.client = client
     operators = repo.fetch_all()
-    console.print(f"[green]Đã lưu {len(operators)} operators[/green]")
+    console.print(f"[green]Operators: {len(operators)}[/green] — ĐÃ TẢI MỚI từ API")
 
 
 @app.command("list-fields")
@@ -640,15 +666,19 @@ def _make_research_loop(
     session_factory, client, region, universe, delay, max_sims, patience,
     align=True, regularize=False, penalty_lambda=0.3, sim_config=None,
     oos_min_ratio=None, deflate_haircut=0.0, regime_min=None, align_gate=True,
-    improve_margin=0.0, reseed_every=0,
+    improve_margin=0.0, reseed_every=0, marathon=False,
 ):
-    """Lắp RefinementLoop GĐ2 với DeepSeek + Simulator thật. Trả (loop, deepseek)."""
+    """Lắp RefinementLoop GĐ2 với DeepSeek + Simulator thật. Trả (loop, deepseek).
+
+    marathon=True: bật trọng tài LLM (Referee) + ConfigTuner -> sau mỗi sim LLM tự
+    quyết refine_formula | tune_config | abandon (dùng cho lệnh `marathon`)."""
     from src.decorrelation.similarity import avoid_subtree_canons
     from src.decorrelation.zoo import ReferenceZoo
     from src.llm.alignment import AlignmentScorer
     from src.llm.hypothesis import HypothesisGenerator
     from src.llm.loop import RefinementLoop
     from src.llm.refiner import AlphaRefiner
+    from src.llm.referee import ConfigTuner, Referee
     from src.llm.translator import AlphaTranslator
     from src.simulation.pre_filter import PreFilter
 
@@ -678,6 +708,9 @@ def _make_research_loop(
     aligner = AlignmentScorer(deepseek) if align else None
     # Task 1b: re-seed diversity — chỉ dựng idea generator khi bật (tốn lượt LLM).
     idea_generator = _make_llm_generator(session_factory, pf) if reseed_every > 0 else None
+    # Marathon: trọng tài LLM + bộ tinh chỉnh config (dùng chung deepseek/router).
+    referee = Referee(deepseek) if marathon else None
+    config_tuner = ConfigTuner(deepseek) if marathon else None
     loop = RefinementLoop(
         hypothesis_gen=HypothesisGenerator(deepseek),
         translator=translator,
@@ -708,6 +741,8 @@ def _make_research_loop(
         improve_margin=improve_margin,
         idea_generator=idea_generator,
         reseed_every=reseed_every,
+        referee=referee,
+        config_tuner=config_tuner,
     )
     return loop, deepseek
 
@@ -756,9 +791,21 @@ def _render_research_result(result, deepseek) -> None:
     )
 
 
+def resolve_direction(direction: str, idea_provider) -> tuple[str, bool]:
+    """Trả (hướng, đã_tự_sinh). Người dùng nhập -> dùng nguyên (không gọi LLM).
+    Để trống -> lấy 1 hướng từ idea_provider() (LLM tự đề xuất, giống miner cũ).
+    Fallback chuỗi mặc định nếu LLM không sinh được hướng hợp lệ."""
+    direction = (direction or "").strip()
+    if direction:
+        return direction, False
+    ideas = idea_provider() or []
+    first = ideas[0].strip() if ideas and ideas[0] and ideas[0].strip() else ""
+    return (first or "mean-reversion theo thanh khoản"), True
+
+
 @app.command()
 def research(
-    direction: str = typer.Option(..., "--direction", help="Hướng nghiên cứu (ngôn ngữ tự nhiên)"),
+    direction: str = typer.Option("", "--direction", help="Hướng nghiên cứu (ngôn ngữ tự nhiên); để trống -> LLM tự đề xuất"),
     region: str = typer.Option(settings.default_region),
     universe: str = typer.Option(settings.default_universe),
     delay: int = typer.Option(settings.default_delay),
@@ -787,6 +834,23 @@ def research(
         raise typer.Exit(code=1)
     client = _make_client()
     client.authenticate()
+
+    # Hướng để trống -> LLM tự đề xuất (giống miner cũ tự seed). Closure chỉ chạy
+    # khi cần (không nhập hướng) để khỏi tốn lượt LLM khi đã có hướng.
+    def _auto_direction():
+        from src.simulation.pre_filter import PreFilter
+
+        f, o, ft, mo, oa = _cached_symbols(session_factory)
+        pf = PreFilter(
+            known_operators=o or None, known_fields=set(f) or None,
+            field_types=ft, matrix_only_ops=mo, operator_arity=oa,
+        )
+        return _make_llm_generator(session_factory, pf).generate_ideas(1)
+
+    direction, auto_dir = resolve_direction(direction, _auto_direction)
+    if auto_dir:
+        console.print(f"[cyan]Hướng nghiên cứu (LLM tự đề xuất):[/cyan] {direction}")
+
     from src.simulation.config import SimConfig
 
     sim_config = SimConfig(
@@ -840,6 +904,116 @@ def _run_research_with_progress(loop, direction, max_sims, mcts=False):
         if mcts:
             return loop.run_mcts(direction, iterations=max_sims, on_progress=on_progress)
         return loop.run(direction, on_progress=on_progress)
+
+
+def _render_marathon_report(report, deepseek) -> None:
+    console.print("\n[bold green]=== Marathon kết thúc ===[/bold green]")
+    table = Table(show_header=False)
+    table.add_column("", style="cyan")
+    table.add_column("", justify="right")
+    table.add_row("Lý do dừng", report.stop_reason or "-")
+    table.add_row("Hướng hoàn tất", str(report.directions_completed))
+    table.add_row("Hướng bỏ qua", str(report.directions_skipped))
+    table.add_row("Tổng số sim", str(report.total_sims))
+    table.add_row("Alpha vào zoo", str(report.total_zoo_added))
+    console.print(table)
+    console.print(
+        f"[dim]Token: {deepseek.usage.total_tokens} "
+        f"(~${deepseek.usage.estimated_cost():.4f})[/dim]"
+    )
+
+
+def _marathon_direction_provider(session_factory):
+    """Closure sinh hướng nghiên cứu mới mỗi vòng (LLM tự đề xuất)."""
+    from src.simulation.pre_filter import PreFilter
+
+    def _provider():
+        f, o, ft, mo, oa = _cached_symbols(session_factory)
+        pf = PreFilter(
+            known_operators=o or None, known_fields=set(f) or None,
+            field_types=ft, matrix_only_ops=mo, operator_arity=oa,
+        )
+        ideas = _make_llm_generator(session_factory, pf).generate_ideas(1)
+        direction = resolve_direction("", lambda: ideas)[0]
+        console.print(f"\n[cyan]Hướng mới:[/cyan] {direction}")
+        return direction
+
+    return _provider
+
+
+def _marathon_on_event(kind, direction, payload) -> None:
+    if kind == "done":
+        console.print(
+            f"  [green]✓ xong[/green] ({payload.stop_reason}) "
+            f"sim={payload.sims_used} zoo+{payload.zoo_added}"
+        )
+    elif kind == "retry":
+        console.print(f"  [yellow]lỗi tạm, retry:[/yellow] {payload}")
+    elif kind == "skip":
+        console.print(f"  [red]bỏ hướng (lỗi tạm dai dẳng):[/red] {payload}")
+    elif kind == "quota":
+        console.print("[bold yellow]Hết quota — dừng marathon.[/bold yellow]")
+
+
+def _run_marathon_session(
+    session_factory, client, region, universe, delay,
+    decay, truncation, neutralization, per_direction_sims, max_patience, retry,
+) -> None:
+    """Lõi marathon dùng chung cho lệnh `marathon` và mục menu: dựng loop có trọng
+    tài LLM + ConfigTuner, chạy đến khi hết quota (Ctrl+C để dừng tay)."""
+    from src.simulation.config import SimConfig
+
+    sim_config = SimConfig(
+        region=region, universe=universe, delay=delay,
+        decay=decay, truncation=truncation, neutralization=neutralization,
+    )
+    loop, deepseek = _make_research_loop(
+        session_factory, client, region, universe, delay,
+        per_direction_sims, max_patience, sim_config=sim_config, marathon=True,
+    )
+    console.print(
+        "[bold cyan]=== Marathon: chạy đến khi hết quota (Ctrl+C để dừng) ===[/bold cyan]"
+    )
+    try:
+        report = run_marathon(
+            _marathon_direction_provider(session_factory),
+            lambda direction: loop.run(direction),
+            max_retries=retry,
+            on_event=_marathon_on_event,
+        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Đã dừng marathon (Ctrl+C). Alpha đã sinh vẫn lưu trong DB.[/yellow]")
+        report = MarathonReport(stop_reason="interrupted")
+    _render_marathon_report(report, deepseek)
+
+
+@app.command()
+def marathon(
+    region: str = typer.Option(settings.default_region),
+    universe: str = typer.Option(settings.default_universe),
+    delay: int = typer.Option(settings.default_delay),
+    decay: int = typer.Option(4, "--decay", help="Decay khởi đầu (LLM có thể đổi qua tune_config)"),
+    truncation: float = typer.Option(0.01, "--truncation", help="Truncation khởi đầu (LLM có thể đổi)"),
+    neutralization: str = typer.Option("MARKET", "--neutralization", help="Neutralization khởi đầu (LLM có thể đổi)"),
+    per_direction_sims: int = typer.Option(30, "--per-direction-sims", help="Trần số sim mỗi hướng"),
+    max_patience: int = typer.Option(8, "--max-patience", help="Trần cứng số vòng không cải thiện mỗi hướng (an toàn)"),
+    retry: int = typer.Option(2, "--retry", help="Số lần retry lỗi tạm (timeout/mạng) trước khi bỏ hướng"),
+) -> None:
+    """Mở kịch trần: chạy liên tục, LLM tự đổi hướng + tự quyết tinh chỉnh/đổi config,
+    đến khi hết quota thì dừng (Ctrl+C để dừng tay). Config khởi đầu: decay=4,
+    truncation=0.01, neutralization=MARKET."""
+    _setup_logging()
+    engine = init_db(make_engine())
+    session_factory = make_session_factory(engine)
+    if not _cached_symbols(session_factory)[0]:
+        console.print("[red]Chưa có fields — chạy fetch-fields trước.[/red]")
+        raise typer.Exit(code=1)
+    client = _make_client()
+    client.authenticate()
+    _run_marathon_session(
+        session_factory, client, region, universe, delay,
+        decay, truncation, neutralization, per_direction_sims, max_patience, retry,
+    )
 
 
 @app.command("llm-generate")
@@ -1018,6 +1192,204 @@ def _auto_prepare(client_box: dict, session_factory, region, universe, delay,
     operators, _ = op_repo.ensure()
 
     return PrepareInfo(fields=len(fields), operators=len(operators))
+
+
+# ============================ Menu tương tác (start) ============================
+# Khôi phục wizard cũ: đăng nhập 1 lần, giữ phiên + DB trong cùng tiến trình, hiện
+# số fields/operators ngay sau đăng nhập để người dùng tự quyết có tải lại không.
+# Engine sinh alpha = RefinementLoop (lệnh research) — thay cho HybridEngine cũ.
+
+
+class _MenuState:
+    """Giữ phiên đăng nhập + DB (mở sau khi biết email) + scope cho menu."""
+
+    def __init__(self):
+        self.client = None
+        self.session_factory = None
+        self.email = ""
+        self.region = settings.default_region
+        self.universe = settings.default_universe
+        self.delay = settings.default_delay
+
+    @property
+    def logged_in(self) -> bool:
+        return (
+            self.client is not None
+            and self.client.authenticated
+            and self.session_factory is not None
+        )
+
+
+def _menu_counts(state: _MenuState) -> tuple[int, int]:
+    """(số fields trong scope, số operators) trong DB hiện tại; (0,0) nếu chưa mở DB."""
+    if state.session_factory is None:
+        return 0, 0
+    n_fields = FieldRepository(None, state.session_factory).cached_count(
+        state.region, state.universe, state.delay
+    )
+    n_ops = OperatorRepository(None, state.session_factory).cached_count()
+    return n_fields, n_ops
+
+
+def _menu_login(state: _MenuState) -> None:
+    from src.storage.db import active_database_url, write_active_account
+
+    client = _make_client()
+    client.authenticate()
+    state.client = client
+    state.email = client.email or ""
+    # Biết email rồi mới mở DB (DB tách theo email), rồi hiện số liệu để quyết định.
+    if state.email:
+        write_active_account(state.email)
+    engine = init_db(make_engine())
+    state.session_factory = make_session_factory(engine)
+
+    n_fields, n_ops = _menu_counts(state)
+    console.print(f"[green]✓ Đăng nhập xong[/green] ({state.email})")
+    console.print(f"[dim]DB: {active_database_url()}[/dim]")
+    console.print(
+        f"[bold]Data fields:[/bold] {n_fields}   [bold]Operators:[/bold] {n_ops}   "
+        f"[dim]({state.region}/{state.universe}/delay={state.delay})[/dim]"
+    )
+    if n_fields == 0 or n_ops == 0:
+        console.print("[yellow]Thiếu dữ liệu — chọn 2/3 để tải về.[/yellow]")
+    else:
+        console.print("[dim]Đủ dữ liệu. Bấm 4 để chạy engine, hoặc 2/3 để tải lại.[/dim]")
+
+
+def _menu_fields(state: _MenuState) -> None:
+    """Tải lại data fields từ API (ghi đè cache)."""
+    from src.data.fields import FieldFetchError
+
+    repo = FieldRepository(state.client, state.session_factory)
+    try:
+        fields = repo.get_fields(state.region, state.universe, state.delay, force_reload=True)
+    except FieldFetchError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return
+    console.print(
+        f"[green]Đã tải mới {len(fields)} data fields[/green] "
+        f"({state.region}/{state.universe}/delay={state.delay})"
+    )
+
+
+def _menu_operators(state: _MenuState) -> None:
+    """Tải lại operators từ API (ghi đè cache)."""
+    from src.data.operators import OperatorFetchError
+
+    repo = OperatorRepository(state.client, state.session_factory)
+    try:
+        operators = repo.fetch_all()
+    except OperatorFetchError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return
+    console.print(f"[green]Đã tải mới {len(operators)} operators[/green]")
+
+
+def _menu_research(state: _MenuState, max_sims: int, no_improve: int) -> None:
+    """Chạy engine sinh alpha (RefinementLoop). Hỏi hướng — Enter = LLM tự đề xuất."""
+    from src.simulation.config import SimConfig
+    from src.simulation.pre_filter import PreFilter
+
+    n_fields, _ = _menu_counts(state)
+    if n_fields == 0:
+        console.print("[red]Chưa có data fields — chọn 2 để tải trước.[/red]")
+        return
+
+    direction = input("\nHướng nghiên cứu [Enter = để LLM tự đề xuất]: ").strip()
+
+    def _auto_direction():
+        f, o, ft, mo, oa = _cached_symbols(state.session_factory)
+        pf = PreFilter(
+            known_operators=o or None, known_fields=set(f) or None,
+            field_types=ft, matrix_only_ops=mo, operator_arity=oa,
+        )
+        return _make_llm_generator(state.session_factory, pf).generate_ideas(1)
+
+    direction, auto = resolve_direction(direction, _auto_direction)
+    if auto:
+        console.print(f"[cyan]Hướng nghiên cứu (LLM tự đề xuất):[/cyan] {direction}")
+
+    sim_config = SimConfig(region=state.region, universe=state.universe, delay=state.delay)
+    loop, deepseek = _make_research_loop(
+        state.session_factory, state.client, state.region, state.universe, state.delay,
+        max_sims, no_improve, sim_config=sim_config,
+    )
+    result = _run_research_with_progress(loop, direction, max_sims)
+    _render_research_result(result, deepseek)
+
+
+def _menu_marathon(state: _MenuState) -> None:
+    """Chạy marathon từ menu: config khởi đầu decay=4/truncation=0.01/MARKET, chạy
+    đến khi hết quota (Ctrl+C để dừng tay)."""
+    n_fields, _ = _menu_counts(state)
+    if n_fields == 0:
+        console.print("[red]Chưa có data fields — chọn 2 để tải trước.[/red]")
+        return
+    _run_marathon_session(
+        state.session_factory, state.client, state.region, state.universe, state.delay,
+        decay=4, truncation=0.01, neutralization="MARKET",
+        per_direction_sims=30, max_patience=8, retry=2,
+    )
+
+
+def _print_menu(state: _MenuState) -> None:
+    if state.logged_in:
+        n_fields, n_ops = _menu_counts(state)
+        status = f"[green]✓ đã đăng nhập[/green] ({state.email})"
+        data = f"[bold]Fields:[/bold] {n_fields}   [bold]Operators:[/bold] {n_ops}"
+    else:
+        status = "[red]✗ chưa đăng nhập[/red]"
+        data = "[dim](đăng nhập để xem số fields/operators)[/dim]"
+    console.print("\n[bold cyan]=== WQ Auto-Alpha ===[/bold cyan]")
+    console.print(f"Scope: [cyan]{state.region}/{state.universe}/delay={state.delay}[/cyan] | {status}")
+    console.print(data)
+    console.print(" 1) Đăng nhập")
+    console.print(" 2) Tải lại data fields (ghi đè cache)")
+    console.print(" 3) Tải lại operators (ghi đè cache)")
+    console.print(" 4) Chạy engine sinh alpha")
+    console.print(" 5) Chạy thử (ngắn)")
+    console.print(" 6) Marathon (chạy đến khi hết quota)")
+    console.print(" 0) Thoát")
+
+
+@app.command()
+def start(
+    max_sims: int = typer.Option(20, "--max-sims", help="Trần số simulation mỗi lần chạy engine (mục 4)"),
+    no_improve: int = typer.Option(3, "--no-improve", help="Dừng sau N vòng không cải thiện"),
+) -> None:
+    """Menu tương tác: đăng nhập → xem/tải fields-operators → chạy engine sinh alpha."""
+    _setup_logging()
+    from src.data.client import AuthError
+
+    state = _MenuState()
+    while True:
+        _print_menu(state)
+        choice = input("\nChọn: ").strip()
+        try:
+            if choice == "0":
+                break
+            elif choice == "1":
+                _menu_login(state)
+            elif choice in {"2", "3", "4", "5", "6"} and not state.logged_in:
+                console.print("[yellow]Hãy đăng nhập (1) trước.[/yellow]")
+            elif choice == "2":
+                _menu_fields(state)
+            elif choice == "3":
+                _menu_operators(state)
+            elif choice == "4":
+                _menu_research(state, max_sims, no_improve)
+            elif choice == "5":
+                _menu_research(state, max_sims=5, no_improve=2)
+            elif choice == "6":
+                _menu_marathon(state)
+            else:
+                console.print("[red]Lựa chọn không hợp lệ.[/red]")
+        except AuthError as exc:
+            console.print(f"[red]Lỗi đăng nhập: {exc}[/red]")
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Đã hủy bước hiện tại.[/yellow]")
+    console.print("[cyan]Kết thúc.[/cyan]")
 
 
 if __name__ == "__main__":

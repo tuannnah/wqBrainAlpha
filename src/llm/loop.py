@@ -42,6 +42,9 @@ class LoopResult:
     zoo_added: int = 0
     failures: list = field(default_factory=list)
     sims_used: int = 0
+    # Vì sao vòng dừng: 'abandon' (referee bỏ hướng) | 'budget' (hết trần sim) |
+    # 'patience' (hết kiên nhẫn) | 'no_seed' (không dịch được seed nào).
+    stop_reason: str = ""
 
 
 @dataclass
@@ -93,6 +96,8 @@ class RefinementLoop:
         improve_margin: float = 0.0,
         idea_generator=None,
         reseed_every: int = 0,
+        referee=None,
+        config_tuner=None,
     ):
         self.hypothesis_gen = hypothesis_gen
         self.translator = translator
@@ -140,6 +145,12 @@ class RefinementLoop:
         # re-seed) thay vì refine tiếp nhánh kẹt. 0/None = tắt (greedy thuần như cũ).
         self.idea_generator = idea_generator
         self.reseed_every = reseed_every
+        # Trọng tài LLM (marathon): sau mỗi sim quyết refine_formula | tune_config |
+        # abandon. None = giữ hành vi greedy cũ (heuristic patience quyết dừng hướng).
+        # config_tuner: đề xuất decay/truncation/neutralization mới khi referee chọn
+        # tune_config. Trần cứng (patience/max_sims) vẫn là giới hạn an toàn cuối cùng.
+        self.referee = referee
+        self.config_tuner = config_tuner
         self.sims_used = 0
         self.zoo_added = 0
 
@@ -172,7 +183,7 @@ class RefinementLoop:
             )
         return pool
 
-    def _reseed_once(self):
+    def _reseed_once(self, config=None):
         """Sinh một direction mới từ idea_generator rồi tạo+đánh giá seed cho nó.
         Trả (candidate, eval) nếu thành công, None nếu không sinh/dịch/đánh giá được."""
         if self.idea_generator is None:
@@ -186,7 +197,7 @@ class RefinementLoop:
         seed = self.translator.translate(hypothesis)
         if seed is None:
             return None
-        ev = self._evaluate(seed, parent_id=None)
+        ev = self._evaluate(seed, parent_id=None, config=config)
         if ev is None:
             return None
         return seed, ev
@@ -213,7 +224,10 @@ class RefinementLoop:
             base -= self.deflate_haircut * (self.sims_used / self.max_simulations)
         return base
 
-    def _evaluate(self, candidate, parent_id: str | None) -> _Eval | None:
+    def _evaluate(self, candidate, parent_id: str | None, config=None) -> _Eval | None:
+        # config: cho phép đánh giá CÙNG biểu thức dưới cấu hình khác (referee tune_config).
+        # None -> dùng cấu hình mặc định của loop (hành vi cũ).
+        config = config or self.sim_config
         expr = candidate.expression
         ok, reason = self.prefilter.check(expr)
         if not ok:
@@ -233,7 +247,7 @@ class RefinementLoop:
 
         # Kiểm cache TRƯỚC aligner: expr đã sim trước đây thì đã qua aligner rồi,
         # gọi lại chỉ tốn lượt LLM alignment (đắt) mà không đổi kết quả.
-        config_key = self.sim_config.key()
+        config_key = config.key()
         cached = self.repo.get_cached_simulation(expr, config_key=config_key)
         if cached is not None:
             vector = self.score_vector_fn(cached)
@@ -255,7 +269,7 @@ class RefinementLoop:
         if self.sims_used >= self.max_simulations:
             return None  # hết trần sim, không gọi WQ thêm
 
-        result = self.simulator.simulate(expr, settings=self.sim_config.to_settings())
+        result = self.simulator.simulate(expr, settings=config.to_settings())
         self.sims_used += 1
         vector = self.score_vector_fn(result)
         alpha_id = self.repo.save_alpha(
@@ -348,11 +362,15 @@ class RefinementLoop:
             if on_progress:
                 on_progress(LoopProgress(self.sims_used, best_total, phase, detail))
 
+        # Cấu hình hiện hành của nhánh; referee có thể đổi qua tune_config trong khi chạy.
+        current_config = self.sim_config
+
         emit("hypothesis", 0.0, research_direction)
         candidates = self.seed_candidates(research_direction)
         if not candidates:
             self.repo.record_failure("", "syntax", "không dịch được giả thuyết", "llm")
-            return LoopResult(None, None, history, 0, self.repo.recent_failures(50), self.sims_used)
+            return LoopResult(None, None, history, 0, self.repo.recent_failures(50),
+                              self.sims_used, stop_reason="no_seed")
 
         # Thử lần lượt: seed LLM trước, NOVEL_ALPHAS làm fallback đa dạng. Dừng ở seed
         # đầu tiên đánh giá được (không bị loại trước sim / còn budget). Seed LLM hợp lệ
@@ -360,12 +378,13 @@ class RefinementLoop:
         best_ev = None
         best_cand = None
         for cand in candidates:
-            best_ev = self._evaluate(cand, parent_id=None)
+            best_ev = self._evaluate(cand, parent_id=None, config=current_config)
             if best_ev is not None:
                 best_cand = cand
                 break
         if best_ev is None:
-            return LoopResult(None, None, history, self.zoo_added, self.repo.recent_failures(50), self.sims_used)
+            return LoopResult(None, None, history, self.zoo_added, self.repo.recent_failures(50),
+                              self.sims_used, stop_reason="no_seed")
         history.append(
             {"step": 0, "action": "seed", "dimension": "-", "total": best_ev.vector.total,
              "expression": best_cand.expression, "accepted": True}
@@ -375,13 +394,52 @@ class RefinementLoop:
         patience = 0
         stuck = 0  # số vòng liên tiếp không cải thiện -> ngưỡng kích hoạt re-seed
         step = 0
+        abandoned = False
         reseed_on = self.reseed_every > 0 and self.idea_generator is not None
         while self.sims_used < self.max_simulations and patience < self.no_improve_patience:
+            # Trọng tài LLM (marathon): sau mỗi sim, quyết hành động kế tiếp cho hướng này.
+            # abandon -> dừng hướng; tune_config -> đổi tham số, sim lại CÙNG biểu thức;
+            # refine_formula (hoặc không có referee) -> rơi xuống nhánh refine biểu thức.
+            if self.referee is not None:
+                verdict = self.referee.judge(research_direction, history, best_ev.metrics)
+                if verdict.action == "abandon":
+                    abandoned = True
+                    break
+                if verdict.action == "tune_config" and self.config_tuner is not None:
+                    new_config = self.config_tuner.tune(current_config, best_ev.metrics, verdict.reason)
+                    if new_config.key() == current_config.key():
+                        # Không đổi gì -> coi như một vòng không cải thiện (tránh kẹt vô hạn).
+                        patience += 1
+                        stuck += 1
+                        continue
+                    ev = self._evaluate(best_cand, parent_id=best_ev.alpha_id, config=new_config)
+                    if ev is None:
+                        break  # hết trần sim giữa chừng
+                    step += 1
+                    threshold = max(1e-9, self.improve_margin * abs(best_ev.effective_total))
+                    improved = ev.effective_total > best_ev.effective_total + threshold
+                    history.append(
+                        {"step": step, "action": "tune_config", "dimension": "config",
+                         "total": ev.vector.total, "expression": best_cand.expression,
+                         "accepted": improved}
+                    )
+                    if improved:
+                        best_ev = ev
+                        current_config = new_config
+                        patience = 0
+                        stuck = 0
+                    else:
+                        patience += 1
+                        stuck += 1
+                    emit("tune", best_ev.vector.total,
+                         f"decay={new_config.decay} trunc={new_config.truncation} neut={new_config.neutralization}")
+                    continue
+
             # Re-seed: nhánh kẹt đủ `reseed_every` vòng -> sinh direction mới (LLM re-seed)
             # thay vì refine tiếp. Chỉ chuyển nhánh nếu seed mới tốt hơn best hiện tại.
             if reseed_on and stuck >= self.reseed_every:
                 stuck = 0
-                reseeded = self._reseed_once()
+                reseeded = self._reseed_once(config=current_config)
                 if reseeded is not None:
                     new_cand, new_ev = reseeded
                     if new_ev.effective_total > best_ev.effective_total:
@@ -404,7 +462,7 @@ class RefinementLoop:
                 patience += 1
                 stuck += 1
                 continue
-            ev = self._evaluate(cand, parent_id=best_ev.alpha_id)
+            ev = self._evaluate(cand, parent_id=best_ev.alpha_id, config=current_config)
             if ev is None:
                 break  # hết trần sim giữa chừng
             step += 1
@@ -423,9 +481,15 @@ class RefinementLoop:
                 stuck += 1
             emit("refine", best_ev.vector.total, f"nhắm {weak}")
 
+        if abandoned:
+            stop_reason = "abandon"
+        elif self.sims_used >= self.max_simulations:
+            stop_reason = "budget"
+        else:
+            stop_reason = "patience"
         logger.info(
-            "Loop xong: {} sim, best total={:.3f}, zoo+{}",
-            self.sims_used, best_ev.vector.total, self.zoo_added,
+            "Loop xong ({}): {} sim, best total={:.3f}, zoo+{}",
+            stop_reason, self.sims_used, best_ev.vector.total, self.zoo_added,
         )
         emit("done", best_ev.vector.total)
         return LoopResult(
@@ -435,6 +499,7 @@ class RefinementLoop:
             zoo_added=self.zoo_added,
             failures=self.repo.recent_failures(50),
             sims_used=self.sims_used,
+            stop_reason=stop_reason,
         )
 
     # ----------------------------------------------------------- MCTS (T6.1)

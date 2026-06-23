@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
+from loguru import logger
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -9,9 +13,53 @@ from sqlalchemy.orm import Session, sessionmaker
 from config.settings import settings
 from src.storage.models import Base
 
+# DB SQLite mặc định. Khi đang dùng đúng URL này, ta tách file theo email đăng
+# nhập (mỗi tài khoản 1 file). URL tùy biến (vd Postgres) thì giữ nguyên.
+DEFAULT_SQLITE_URL = "sqlite:///wq_alpha.db"
+# Email của lần đăng nhập gần nhất (ghi bởi lệnh login) — dùng chọn DB khi .env
+# để trống WQ_EMAIL (luồng nhập email tương tác).
+ACCOUNT_FILE = Path(".wq_account")
+
+
+def _email_slug(email: str) -> str:
+    """Chuẩn hoá email thành phần tên file an toàn (a-z0-9 và '_')."""
+    slug = re.sub(r"[^a-z0-9]+", "_", email.strip().lower()).strip("_")
+    return slug or "default"
+
+
+def read_active_account(account_file: Path = ACCOUNT_FILE) -> str:
+    """Đọc email tài khoản active từ file; trả '' nếu không có."""
+    try:
+        return account_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def write_active_account(email: str, account_file: Path = ACCOUNT_FILE) -> None:
+    """Ghi email tài khoản active (gọi sau khi login thành công)."""
+    try:
+        account_file.write_text(email.strip(), encoding="utf-8")
+    except OSError as exc:  # pragma: no cover - lỗi ổ đĩa hiếm
+        logger.warning("Không lưu được tài khoản active: {}", exc)
+
+
+def active_database_url(account_file: Path = ACCOUNT_FILE) -> str:
+    """URL DB hiệu lực, tách theo email đăng nhập.
+
+    Ưu tiên `settings.wq_email` (.env); nếu trống đọc `.wq_account`. Chỉ tách khi
+    đang dùng SQLite mặc định — URL tùy biến (DATABASE_URL Postgres...) giữ nguyên.
+    """
+    url = settings.database_url
+    if url != DEFAULT_SQLITE_URL:
+        return url
+    email = (settings.wq_email or read_active_account(account_file)).strip()
+    if not email:
+        return url
+    return f"sqlite:///wq_alpha_{_email_slug(email)}.db"
+
 
 def make_engine(database_url: str | None = None) -> Engine:
-    url = database_url or settings.database_url
+    url = database_url or active_database_url()
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
     engine = create_engine(url, future=True, connect_args=connect_args)
 

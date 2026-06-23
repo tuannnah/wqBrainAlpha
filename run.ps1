@@ -1,4 +1,4 @@
-﻿# Launcher cho WorldQuant Brain Auto-Alpha Tool — chạy wizard theo từng bước.
+﻿# Launcher cho WorldQuant Brain Auto-Alpha Tool — hiện menu chọn thao tác.
 # Chạy: chuột phải > Run with PowerShell, hoặc:  .\run.ps1
 
 $ErrorActionPreference = "Stop"
@@ -16,13 +16,13 @@ if (-not (Test-Path $Py)) {
     Write-Host "Đã cài xong môi trường." -ForegroundColor Green
 }
 
-# Tạo .env từ mẫu nếu chưa có (để trống credentials -> wizard sẽ hỏi khi đăng nhập).
+# Tạo .env từ mẫu nếu chưa có (để trống credentials -> sẽ hỏi khi đăng nhập).
 if (-not (Test-Path ".env")) {
     Copy-Item ".env.example" ".env"
     Write-Host "Đã tạo .env (credentials để trống -> nhập trực tiếp khi đăng nhập)." -ForegroundColor Yellow
     Write-Host "Nếu dùng DeepSeek (LLM), mở .env điền DEEPSEEK_API_KEY." -ForegroundColor DarkGray
 }
 
-# Chạy wizard từng bước (login -> fetch fields -> ...).
+# Mở menu tương tác (Python) — đăng nhập 1 lần, giữ phiên, hiện số fields/operators.
 & $Py "main.py" start
 
