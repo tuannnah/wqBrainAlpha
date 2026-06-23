@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     default_universe: str = "TOP3000"
     default_delay: int = 1
 
+    # --- MiniBrain (local backtester) ---
+    market_data_dir: str = "data/market"  # nơi chứa parquet panel cục bộ
+    global_seed: int = 42  # seed toàn cục (determinism, R8)
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

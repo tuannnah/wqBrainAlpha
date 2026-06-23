@@ -21,3 +21,8 @@ pandas>=2.2
 plotly>=5.22
 # Database drivers
 psycopg[binary]>=3
+# MiniBrain local backtester (Phase 0+): data panel + lint/type
+pyarrow>=15
+ruff>=0.5
+mypy>=1.10
+pandas-stubs>=2.2
