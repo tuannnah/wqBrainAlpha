@@ -92,9 +92,17 @@ class MetricsCalculator:
     def _weight_concentration(self, weights: np.ndarray) -> float:
         if weights.size == 0:
             return 0.0
-        gross = np.nansum(np.abs(weights), axis=1)
+        abs_w = np.abs(weights)
+        gross = np.nansum(abs_w, axis=1)
+        # Guard hàng all-NaN (mã ngoài universe cả ngày) -> KHÔNG gọi np.nanmax trên đó,
+        # vì np.errstate không chặn được RuntimeWarning "All-NaN slice" (đó là warnings.warn,
+        # không phải FP error state); hàng all-NaN giữ max_abs = 0.0 (khớp kết quả cũ).
+        all_nan = np.all(np.isnan(weights), axis=1)
+        max_abs = np.zeros(weights.shape[0], dtype=np.float64)
+        valid = ~all_nan
+        if valid.any():
+            max_abs[valid] = np.nanmax(abs_w[valid], axis=1)
         with np.errstate(invalid="ignore", divide="ignore"):
-            max_abs = np.nanmax(np.abs(weights), axis=1)
             share = np.where(gross > 0, max_abs / gross, 0.0)
         finite_share = share[np.isfinite(share)]
         if finite_share.size == 0:
