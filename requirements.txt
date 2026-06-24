@@ -23,6 +23,7 @@ plotly>=5.22
 psycopg[binary]>=3
 # MiniBrain local backtester (Phase 0+): data panel + lint/type
 pyarrow>=15
+lark>=1.1
 ruff>=0.5
 mypy>=1.10
 pandas-stubs>=2.2

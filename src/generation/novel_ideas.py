@@ -17,8 +17,10 @@ Cấu trúc cố ý kết hợp cross-sectional rank + chuẩn hóa theo nhóm �
 
 from __future__ import annotations
 
-from src.generation.ast_utils import Leaf, iter_leaves, parse_expression
 from src.generation.local_select import Candidate
+from src.lang.ast import Field
+from src.lang.parser import parse_expression
+from src.lang.visitors import iter_leaves
 
 _GROUP_TO_NEUTRALIZATION = {
     "market": "MARKET",
@@ -83,8 +85,8 @@ def fields_in(expression: str) -> set[str]:
     tree = parse_expression(expression)
     out: set[str] = set()
     for leaf in iter_leaves(tree):
-        if isinstance(leaf, Leaf) and isinstance(leaf.value, str):
-            out.add(leaf.value)
+        if isinstance(leaf, Field):
+            out.add(leaf.name)
     return out
 
 

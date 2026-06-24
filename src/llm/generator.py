@@ -6,7 +6,9 @@ from collections import Counter, defaultdict
 import re
 import unicodedata
 
-from src.generation.ast_utils import iter_leaves, parse_expression
+from src.lang.ast import Field
+from src.lang.parser import ParseError, parse_expression
+from src.lang.visitors import iter_leaves
 from src.llm import expr_synth
 from src.llm.jsonutil import extract_json as _extract_json
 
@@ -168,9 +170,9 @@ def _common_fields(exprs, top: int = 6) -> list[str]:
     for expr in exprs:
         try:
             tree = parse_expression(expr)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, ParseError):
             continue
-        counter.update({lf.value for lf in iter_leaves(tree) if isinstance(lf.value, str)})
+        counter.update({lf.name for lf in iter_leaves(tree) if isinstance(lf, Field)})
     return [f for f, _ in counter.most_common(top)]
 
 

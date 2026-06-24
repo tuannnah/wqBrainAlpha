@@ -211,10 +211,11 @@ def test_fewshot_examples_khong_chua_config_wrapper():
 
 
 def test_signal_only_expr_depth_budget():
-    from src.generation.ast_utils import parse_expression, tree_depth
+    from src.lang.parser import parse_expression
+    from src.lang.visitors import DepthVisitor
 
     expr = "multiply(-1, ts_zscore(ts_delta(add(f1, f2), 4), 20))"
-    assert tree_depth(parse_expression(expr)) == 5  # lõi vừa ngân sách khi bỏ 3 wrapper
+    assert DepthVisitor().visit(parse_expression(expr)) == 5  # lõi vừa ngân sách khi bỏ 3 wrapper
 
 
 def test_config_applied_single_point():

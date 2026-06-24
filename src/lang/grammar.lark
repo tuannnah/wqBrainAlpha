@@ -1,0 +1,34 @@
+// src/lang/grammar.lark
+// Grammar FASTEXPR-subset cho MiniBrain (Phase 1).
+//
+// Hỗ trợ: field (identifier không theo dấu '('), số (int/float), lời gọi hàm với
+// danh sách args phân tách bởi ',', 4 toán tử nhị phân + - * / với precedence chuẩn
+// (* / cao hơn + -, đều left-associative), và unary minus (đặt trước literal -> đảo
+// dấu literal; đặt trước biểu thức non-literal -> map về multiply(-1, expr) trong
+// transformer của parser.py). Unary minus cần thiết cho tương thích AST cũ:
+// "-rank(close)" và "multiply(-1, x)" là cú pháp phổ biến trong codebase legacy.
+
+start: expr
+
+?expr: term
+     | expr "+" term   -> add_expr
+     | expr "-" term   -> sub_expr
+
+?term: atom
+     | term "*" atom    -> mul_expr
+     | term "/" atom    -> div_expr
+
+?atom: NUMBER           -> number_atom
+     | "-" atom          -> neg_atom
+     | call
+     | field
+     | "(" expr ")"
+
+call: NAME "(" [expr ("," expr)*] ")"
+field: NAME
+
+NAME: /[A-Za-z_][A-Za-z0-9_]*/
+NUMBER: /\d+(\.\d+)?/
+
+%import common.WS
+%ignore WS

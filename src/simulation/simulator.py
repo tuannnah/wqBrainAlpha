@@ -10,7 +10,9 @@ from typing import Any
 from loguru import logger
 
 from src.data.client import WQBrainClient
-from src.generation.ast_utils import Leaf, Node, all_subtrees, parse_expression
+from src.lang.ast import Call, Field
+from src.lang.parser import parse_expression
+from src.lang.visitors import all_subtrees
 from src.simulation.rate_limiter import RateLimiter
 
 # WQ trả "Invalid data field <id>." khi field được liệt kê nhưng không simulate được.
@@ -60,14 +62,10 @@ def extract_event_fields(error: str, expression: str) -> list[str]:
         return []
     out: list[str] = []
     for node in all_subtrees(tree):
-        if isinstance(node, Node) and node.op == op:
-            for child in node.children:
-                if (
-                    isinstance(child, Leaf)
-                    and isinstance(child.value, str)
-                    and child.value not in GROUP_FIELDS
-                ):
-                    out.append(child.value)
+        if isinstance(node, Call) and node.op == op:
+            for child in node.args:
+                if isinstance(child, Field) and child.name not in GROUP_FIELDS:
+                    out.append(child.name)
     return list(dict.fromkeys(out))  # khử trùng, giữ thứ tự
 
 

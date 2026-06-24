@@ -11,7 +11,9 @@ import re
 
 from loguru import logger
 
-from src.generation.ast_utils import Leaf, Node, parse_expression, to_expression
+from src.lang.ast import Call, Field, Node
+from src.lang.parser import ParseError, parse_expression
+from src.lang.visitors import Serializer
 from src.llm.jsonutil import extract_json
 from src.simulation.simulator import extract_rejected_field
 
@@ -66,37 +68,35 @@ FEWSHOT_EXAMPLES = [
 def autowrap_vector_fields(expr: str, field_types, matrix_only_ops) -> str:
     """Bọc vec_avg() quanh leaf field VECTOR bị đưa thẳng vào matrix-only op.
 
-    Khớp ĐÚNG luật pre_filter._check_symbols: với Node có op ∈ matrix_only_ops,
-    con TRỰC TIẾP là Leaf field có field_types[name]=='VECTOR' -> thay bằng
-    vec_avg(leaf). Thiếu dữ liệu kiểu -> trả nguyên. Không parse được -> trả
+    Khớp ĐÚNG luật pre_filter._check_symbols: với Call có op ∈ matrix_only_ops,
+    con TRỰC TIẾP là Field có field_types[name]=='VECTOR' -> thay bằng
+    vec_avg(field). Thiếu dữ liệu kiểu -> trả nguyên. Không parse được -> trả
     nguyên để prefilter báo lỗi (không nuốt lỗi).
     """
     if not field_types or not matrix_only_ops:
         return expr
     try:
         tree = parse_expression(expr)
-    except ValueError:
+    except (ValueError, ParseError):
         return expr
 
-    def _walk(node):
-        if isinstance(node, Leaf):
+    def _walk(node: Node) -> Node:
+        if not isinstance(node, Call):
             return node
         wrap_here = node.op in matrix_only_ops
-        new_children = []
-        for child in node.children:
+        new_args: list[Node] = []
+        for child in node.args:
             child = _walk(child)
             if (
                 wrap_here
-                and isinstance(child, Leaf)
-                and not isinstance(child.value, (int, float))
-                and field_types.get(str(child.value)) == "VECTOR"
+                and isinstance(child, Field)
+                and field_types.get(child.name) == "VECTOR"
             ):
-                child = Node("vec_avg", [child])
-            new_children.append(child)
-        node.children = new_children
-        return node
+                child = Call(op="vec_avg", args=(child,))
+            new_args.append(child)
+        return Call(op=node.op, args=tuple(new_args))
 
-    return to_expression(_walk(tree))
+    return Serializer().visit(_walk(tree))
 
 
 def _tokens(text: str) -> set[str]:

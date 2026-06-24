@@ -8,7 +8,7 @@ from src.decorrelation.similarity import (
     similarity_ratio,
     subtree_canon,
 )
-from src.generation.ast_utils import parse_expression as P
+from src.lang.parser import parse_expression as P
 
 
 def test_canon_mac_dinh_field_blind():
