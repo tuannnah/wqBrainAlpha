@@ -1409,6 +1409,9 @@ def calibrate(
     Re-score MỖI alpha trong DB hoàn toàn local (không đốt sim) rồi so ranking local với
     ranking Brain. Cần nguồn MarketData thật (--market-data-dir parquet) — KHÔNG in báo cáo
     giả nếu thiếu data.
+
+    ⚠️ CHỈ dùng DB GROUND-TRUTH chuyên dụng (mọi alpha sim với CÙNG config NONE/decay0/trunc0/
+    delay1 mà local re-score). Trỏ vào wq_alpha_*.db thường (config lẫn lộn) -> ρ vô nghĩa.
     """
     from config.thresholds import CALIBRATION_RHO_BAR
     from src.calibration.harness import CalibrationHarness, make_local_scorer
@@ -1462,6 +1465,10 @@ def calibrate(
     table.add_row("self_corr_agreement", f"{report.self_corr_agreement:.4f}")
     table.add_row("decile_hit_rate", f"{report.decile_hit_rate:.4f}")
     console.print(table)
+    console.print(
+        "[dim]Lưu ý: ρ chỉ hợp lệ nếu mọi alpha trong DB được sim với cùng config "
+        "(NONE/decay0/trunc0/delay1) mà local re-score.[/dim]"
+    )
 
     rho = report.spearman_sharpe
     if math.isnan(rho):

@@ -31,7 +31,14 @@ def load_brain_records(
     session_factory: Callable[[], Session], limit: int | None = None
 ) -> list[BrainRecord]:
     """Đọc alpha đã sim (status != 'error', sharpe không NULL), lấy bản sim MỚI NHẤT
-    mỗi alpha_id, LEFT JOIN self_correlation từ submission (None nếu chưa submit)."""
+    mỗi alpha_id, LEFT JOIN self_correlation từ submission (None nếu chưa submit).
+
+    ⚠️ PRECONDITION CALIBRATION HỢP LỆ: hàm này KHÔNG lọc theo config sim (neutralization/
+    decay/truncation) vì SimulationModel hiện không lưu các knob đó thành cột riêng. ρ chỉ có
+    nghĩa khi MỌI record được sim với CÙNG config mà `make_local_scorer` re-score (ground-truth
+    Phase 4.5: NONE/decay0/trunc0/delay1). Trỏ vào `wq_alpha_*.db` thường (sim chạy SECTOR/
+    decay/truncation lẫn lộn) sẽ cho ρ VÔ NGHĨA dù vẫn tính ra số. Dùng DB ground-truth chuyên
+    dụng. (Follow-up: thêm cột config_key vào SimulationModel ở Phase 5 rồi lọc tại đây.)"""
     session = session_factory()
     try:
         rows = (
