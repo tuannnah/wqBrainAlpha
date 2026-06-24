@@ -5,28 +5,30 @@
 > append an entry and refresh `Current state` at the end of every session or phase.
 
 ## Current state
-- **Phase:** Phase 0 — Data foundation ✅ HOÀN TẤT (merged main). Tiếp theo: Phase 1 — Parser.
+- **Phase:** Phase 1 — Parser ✅ HOÀN TẤT (sẵn sàng merge main). Tiếp theo: Phase 2 — Operator Engine.
 - **Quyết định hướng đi:** Tích hợp MiniBrain vào tool sẵn có (KHÔNG build grenfield). Code mới
   đặt trong `src/` (không phải `minibrain/`), tái dùng login/fetch/DB/sim/AI/submit. Mỗi phase =
   1 nhánh git → merge main → push. **Bỏ đường cũ** (LLM→sim trực tiếp): mọi candidate qua local
   gate trước khi đốt sim (gỡ tại Phase 3). Spec: `docs/superpowers/specs/2026-06-23-minibrain-into-existing-tool-design.md`.
   Plans: `docs/superpowers/plans/2026-06-24-minibrain-integration-master-plan.md` (P0-P9) +
-  `2026-06-24-phase-0-data-foundation.md`.
-- **Done (Phase 0):** `config/thresholds.py` (ngưỡng tập trung), `config/settings.py`
-  (market_data_dir, global_seed), `src/local_types.py` (Panel/Mask/Dates/Assets),
-  `src/data/market_panel.py` (MarketData frozen+slots, validate shape/dates tăng/dtype),
-  `src/data/market_source.py` (MarketDataSource Protocol), `src/data/universe.py` (mask per-day +
-  sector codes), `src/data/adapters/parquet_source.py` (save/load round-trip), `src/data/market_fetch.py`
-  (`_assemble_panel` thuần + `fetch_to_parquet` raise NotImplementedError — Gap#3 chưa giải), fixture
-  `small_panel` trong `tests/conftest.py`. 18 unit test xanh, ruff clean, mypy --strict clean (module mới).
+  `2026-06-24-phase-1-parser.md`.
+- **Done (Phase 1):** `src/lang/ast.py` (Constant/Field/Call frozen+slots + `NodeVisitor` Protocol
+  covariant), `src/lang/registry.py` (ArgKind/OpCategory enum, OperatorSpec, OperatorRegistry,
+  decorator `@register`, `default_registry()` với 6 op tối thiểu impl placeholder), `src/lang/grammar.lark`
+  (field/number/call/`+-*/`/unary-minus), `src/lang/parser.py` (`parse()` strict validate
+  operator/arity qua registry + `parse_expression()` lenient cho caller legacy; CLI `python -m
+  src.lang.parser`), `src/lang/visitors.py` (DepthVisitor đếm wrapper, FieldCollector, Serializer
+  round-trip, CanonicalHasher sort-commutative+normalize-literal, ComplexityVisitor, hàm thuần
+  `all_subtrees`/`iter_leaves`). Migrate 9 caller khỏi `ast_utils` + XÓA `src/generation/ast_utils.py`
+  + `tests/test_ast_utils.py`. 87 unit test lang xanh; full suite 590 pass; ruff + mypy --strict
+  (src/lang) clean.
 - **In progress:** —
-- **Next step:** Phase 1 — Parser. Viết plan chi tiết `docs/superpowers/plans/2026-06-24-phase-1-parser.md`
-  rồi thực thi: `src/lang/{ast,registry,parser}.py` + `grammar.lark` + visitors; cuối phase migrate
-  caller & xóa `src/generation/ast_utils.py`.
-- **Blockers / open risks:** (R2/Gap#3) WQ Brain KHÔNG cấp bulk OHLCV sạch — `fetch_to_parquet` còn
-  raise NotImplementedError; cần probe API khi có phiên để nạp panel thật (calibration ρ phụ thuộc cái này).
-  Tạm thời nạp panel qua `ParquetSource.save()`. Legacy `src/data/client.py` có 9 lỗi mypy --strict
-  pre-existing (ngoài phạm vi). Deferred Minor: ParquetSource.load suy dates từ field; noqa save import.
+- **Next step:** Phase 2 — Operator Engine. Viết plan đã có sẵn `docs/superpowers/plans/2026-06-24-phase-2-operator-engine.md`;
+  thực thi `src/operators_local/*` + `Evaluator` (AST→signal (T,N)) + golden test; nạp impl thật
+  cho 6 op placeholder + bổ sung operator còn lại; áp invariant no-look-ahead + NaN-out-of-universe.
+- **Blockers / open risks:** (R2/Gap#3) Gap bulk OHLCV chưa giải (calibration ρ phụ thuộc). Validate
+  "field tồn tại trong `available_fields()`" CHƯA làm (thuộc Phase 2 khi có MarketData thật). Legacy
+  `src/data/client.py` 9 lỗi mypy pre-existing + `test_db_postgres` 1 fail pre-existing (thiếu psycopg).
 - **MVP (Phases 1–3) reached:** no
 - **Calibration ρ (Spearman, Sharpe):** not measured yet
 
@@ -70,3 +72,30 @@
   9 lỗi mypy pre-existing (ngoài phạm vi).
 - **Next step:** Phase 1 — Parser: viết plan chi tiết rồi thực thi `src/lang/*`; cuối phase xóa ast_utils.py.
 - **Tests:** Xanh. 18 unit test (+ suite cũ không vỡ; 1 fail pre-existing test_db_postgres do thiếu psycopg).
+
+### [2026-06-24] Session 03 — Phase 1 Parser (tầng ngôn ngữ FASTEXPR-subset)
+- **Phase:** Phase 1 — Parser. HOÀN TẤT, sẵn sàng merge main.
+- **Done:** Thực thi 11 task TDD (subagent-driven): AST sealed hierarchy `Constant/Field/Call` +
+  `NodeVisitor` Protocol; `OperatorRegistry` (ArgKind/OpCategory/OperatorSpec/`@register`/
+  `default_registry` 6 op placeholder); grammar Lark; parser `parse()`/`parse_expression()`; 5 visitor
+  (Depth đếm wrapper, FieldCollector dedup, Serializer round-trip, CanonicalHasher sort-commutative,
+  ComplexityVisitor node-count) + hàm thuần `all_subtrees`/`iter_leaves`. Migrate 9 caller
+  (complexity, zoo, similarity, novel_ideas, local_select, generator, expr_synth, pre_filter, simulator)
+  khỏi `ast_utils` rồi XÓA `src/generation/ast_utils.py` + `tests/test_ast_utils.py`. Verify: 87 unit
+  test lang xanh, full suite 590 pass (1 fail pre-existing psycopg), ruff + mypy --strict (src/lang) clean.
+- **Decisions:** (1) Registry Phase 1 là **skeleton khai báo** — impl 6 op raise NotImplementedError
+  ("Phase 2 sẽ impl"); đủ để parser validate operator/arity, không phải nợ kỹ thuật ẩn. (2) **Deviation
+  cần thiết để migration không vỡ:** thêm `parse_expression()` LENIENT (chỉ check cú pháp, bỏ validate
+  registry) song song `parse()` STRICT — vì 9 caller legacy dùng operator chưa đăng ký (ts_zscore,
+  ts_delta, group_neutralize...); thêm **unary minus** vào grammar (`-N`→`Constant(-N)`, `-expr`→
+  `multiply(-1, expr)`) vì codebase legacy có `-rank(x)`/`multiply(-1,x)`. (3) `to_expression` cũ render
+  infix `(a + b)` → `Serializer` mới render dạng hàm `add(a, b)` — SEMANTIC tương đương (WQ chấp nhận cả
+  hai), test autowrap không lộ khác biệt. (4) `NodeVisitor` dùng TypeVar **covariant** (T_co) cho mypy
+  --strict (T chỉ ở return position).
+- **In progress:** —
+- **Blockers / open risks:** Validate "field tồn tại" hoãn sang Phase 2 (cần MarketData thật).
+  `parse_expression` lenient là cửa hậu tạm cho legacy — Phase 2+ nên dần chuyển caller sang `parse`
+  strict khi registry đủ operator. Lưu ý git: nhánh `phase-1-parser` có thêm 1 commit docs (3dee855)
+  trùng nội dung với commit docs trên main (bf36d78) — merge sẽ auto-resolve (cùng nội dung).
+- **Next step:** Phase 2 — Operator Engine (plan `2026-06-24-phase-2-operator-engine.md` đã có sẵn).
+- **Tests:** Xanh. 87 unit test lang (8 file) + full suite 590 pass; 1 fail pre-existing test_db_postgres (psycopg).
