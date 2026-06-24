@@ -80,12 +80,15 @@ def test_operator_spec_is_frozen():
 
 
 def test_default_registry_has_minimal_phase1_ops():
+    """6 operator tối thiểu Phase 1 phải tồn tại trong default_registry(). Từ Phase 2,
+    operators_local nạp impl thật cho các op này (đè placeholder _not_implemented), nên
+    test KHÔNG còn kiểm tra hành vi raise NotImplementedError — việc đó phụ thuộc thứ tự
+    import operators_local (REGISTRY là singleton toàn cục) và không còn đúng ngữ nghĩa.
+    Test chỉ xác nhận op tồn tại + tên khớp, độc lập với việc operators_local đã import."""
     reg = default_registry()
     for name in ("rank", "ts_mean", "add", "subtract", "multiply", "divide"):
         spec = reg.get(name)
         assert spec.name == name
-        with pytest.raises(NotImplementedError):
-            spec.impl()
 
 
 def test_default_registry_arithmetic_ops_are_panel_panel_binary():
