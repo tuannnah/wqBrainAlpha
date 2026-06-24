@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.backtest.gates import GateEvaluator, GateVerdict
+from src.backtest.metrics_local import AlphaMetrics
 from src.scoring.metrics import normalize
 
 
@@ -61,3 +63,15 @@ def blocking_dimensions(
     if pool_corr is not None and abs(pool_corr) >= max_pool_corr:
         dims.add("pool_fit")
     return dims
+
+
+def evaluate_local(
+    metrics: AlphaMetrics, self_corr: float, depth: int, fields_ok: bool
+) -> GateVerdict:
+    """Cổng local đầy đủ (Phase 4, B8 master spec) — wrap GateEvaluator cho loop/CLI dùng.
+
+    Khác `passes`/`blocking_dimensions` ở trên: hai hàm đó chấm điểm KẾT QUẢ SIM BRAIN THẬT
+    (qua `ScoreVector`/`normalize`); `evaluate_local` chấm điểm `AlphaMetrics` tính LOCAL
+    (Phase 3/4, không tốn quota sim) — dùng trước khi quyết định có đáng đốt sim hay không.
+    """
+    return GateEvaluator().evaluate(metrics, self_corr=self_corr, depth=depth, fields_ok=fields_ok)
