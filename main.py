@@ -1416,7 +1416,7 @@ def calibrate(
 
     _setup_logging()
     url = db_url or settings.database_url
-    engine = make_engine(url)
+    engine = init_db(make_engine(url))  # tạo bảng nếu DB mới (đồng nhất các lệnh khác)
     session_factory = make_session_factory(engine)
 
     records = load_brain_records(session_factory, limit=limit or None)

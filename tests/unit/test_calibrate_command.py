@@ -87,3 +87,13 @@ def test_calibrate_exits_zero_when_no_records(tmp_path, monkeypatch) -> None:
     result = runner.invoke(app, ["calibrate", "--db-url", f"sqlite:///{db_path}"])
     assert result.exit_code == 0
     assert "không có brainrecord" in result.stdout.lower()
+
+
+def test_calibrate_on_fresh_db_creates_tables_and_exits_zero(tmp_path, monkeypatch) -> None:
+    # DB chưa từng tồn tại (không có bảng) -> init_db tạo bảng -> 0 record -> exit 0 nhẹ nhàng,
+    # KHÔNG ném OperationalError 'no such table'.
+    db_path = tmp_path / "never_created.db"
+    monkeypatch.setenv("WQ_NO_FILE_LOG", "1")
+    result = runner.invoke(app, ["calibrate", "--db-url", f"sqlite:///{db_path}"])
+    assert result.exit_code == 0, result.stdout
+    assert "không có brainrecord" in result.stdout.lower()
