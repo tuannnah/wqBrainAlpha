@@ -1,7 +1,11 @@
 # src/backtest/gates.py
 """GateVerdict + GateEvaluator — hard gates (chặn) tách bạch khỏi soft scores (xếp hạng).
 
-Ngưỡng CHỈ đọc từ config/thresholds.py (Gap #7/R9 master spec) — không hardcode số ở đây.
+Ngưỡng GATE (MAX_DEPTH, SELF_CORR_MAX, WEIGHT_CONCENTRATION_CAP, TURNOVER_BAND) CHỈ đọc từ
+config/thresholds.py (Gap #7/R9 master spec) — không hardcode số ngưỡng ở đây. Riêng một
+epsilon dung sai số học nhỏ (`1e-9`, để hấp thụ trôi số dấu phẩy động sau water-filling +
+_scale ở portfolio.py) KHÔNG phải là ngưỡng gate nên được đặt inline tại nơi dùng — cùng quy
+ước với portfolio.py::_truncate (`cap_abs + 1e-15`) và llm/mcts.py (`+ 1e-9`).
 Hard gates: depth<=MAX_DEPTH, fields_ok, self_corr<SELF_CORR_MAX (strict), weight_
 concentration<=WEIGHT_CONCENTRATION_CAP. Soft scores (B8: "tradable in search", không chặn
 passed): sharpe, fitness, turnover-band, per_year_min — caller (filter.evaluate_local,

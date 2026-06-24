@@ -64,6 +64,25 @@ def test_weight_concentration_over_cap_is_hard_failure():
     assert any("weight_concentration" in f for f in verdict.hard_failures)
 
 
+def test_weight_concentration_within_fp_epsilon_passes_that_gate():
+    m = AlphaMetrics(
+        sharpe=1.5, annual_return=0.2, turnover=0.3, max_drawdown=0.1, fitness=2.0,
+        per_year_sharpe={}, weight_concentration=WEIGHT_CONCENTRATION_CAP + 1e-12,
+    )
+    verdict = GateEvaluator().evaluate(m, self_corr=0.1, depth=3, fields_ok=True)
+    assert not any("weight_concentration" in f for f in verdict.hard_failures)
+
+
+def test_weight_concentration_beyond_fp_epsilon_is_hard_failure():
+    m = AlphaMetrics(
+        sharpe=1.5, annual_return=0.2, turnover=0.3, max_drawdown=0.1, fitness=2.0,
+        per_year_sharpe={}, weight_concentration=WEIGHT_CONCENTRATION_CAP + 1e-8,
+    )
+    verdict = GateEvaluator().evaluate(m, self_corr=0.1, depth=3, fields_ok=True)
+    assert verdict.passed is False
+    assert any("weight_concentration" in f for f in verdict.hard_failures)
+
+
 def test_multiple_hard_failures_all_recorded():
     m = AlphaMetrics(
         sharpe=0.0, annual_return=0.0, turnover=0.0, max_drawdown=0.0, fitness=0.0,
