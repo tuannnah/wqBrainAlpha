@@ -69,6 +69,9 @@ class CalibrationHarness:
             for year, value in score.per_year_sharpe.items():
                 year_sums.setdefault(year, []).append(value)
 
+        # n = số record local re-score được (scorer != None). Record có brain_sharpe=None
+        # vẫn đếm vào n nhưng bị spearman() loại (pairwise-complete) khi tính rho — n và cỡ
+        # mẫu thực của rho có thể lệch nếu DB thiếu brain_sharpe ở vài record.
         n = len(local_sharpes)
         if n == 0:
             return CalibrationReport(
@@ -147,6 +150,8 @@ def make_local_scorer(data: "MarketData") -> LocalScorer:
             signal = Evaluator(ctx).evaluate(node)
         except (KeyError, ValueError):
             return None
+        # signal đúng cú pháp nhưng toàn NaN/inf trên universe này (vd field thiếu lịch sử) ->
+        # loại khỏi mẫu thay vì đẩy tín hiệu suy biến vào portfolio/metrics.
         if not np.isfinite(signal).any():
             return None
         weights = builder.build(signal, cfg, data)
