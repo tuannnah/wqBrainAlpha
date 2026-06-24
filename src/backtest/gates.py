@@ -40,7 +40,12 @@ class GateEvaluator:
             hard_failures.append(
                 f"self_corr {self_corr:.3f} >= SELF_CORR_MAX {SELF_CORR_MAX}"
             )
-        if m.weight_concentration > WEIGHT_CONCENTRATION_CAP:
+        # +1e-9: dung sai FP cho cap đúng-bằng (vd PortfolioConfig.truncation=0.10 trùng
+        # WEIGHT_CONCENTRATION_CAP=0.10) — water-filling (_truncate) + chia/nhân (_scale)
+        # tích lũy sai số ~1e-17, không phải vi phạm concentration thật. Cùng kiểu dung sai
+        # `cap_abs + 1e-15` đã dùng trong portfolio.py::_truncate, chỉ lớn hơn vì đây là
+        # sau _scale (chia rồi nhân lại) nên trôi nhiều hơn vòng lặp gốc.
+        if m.weight_concentration > WEIGHT_CONCENTRATION_CAP + 1e-9:
             hard_failures.append(
                 f"weight_concentration {m.weight_concentration:.3f} > "
                 f"WEIGHT_CONCENTRATION_CAP {WEIGHT_CONCENTRATION_CAP}"

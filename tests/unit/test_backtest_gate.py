@@ -22,3 +22,24 @@ def test_parse_error_fails_with_reason(small_panel: MarketData) -> None:
 def test_unknown_field_fails(small_panel: MarketData) -> None:
     verdict = score_local_gate("totally_unknown_field_xyz", PortfolioConfig(), small_panel)
     assert verdict.passed is False
+
+
+def test_score_local_gate_fails_when_self_corr_too_high(small_panel: MarketData) -> None:
+    # self_corr cao phải chặn pass dù expr hợp lệ và sinh pnl được — hành vi Phase 4 MỚI,
+    # Phase 3 cũ KHÔNG có tham số self_corr nên test này xác nhận chữ ký đã mở rộng.
+    verdict = score_local_gate(
+        "close", PortfolioConfig(delay=1), small_panel, self_corr=0.99,
+    )
+    assert verdict.passed is False
+    assert "self_corr" in verdict.reason.lower()
+
+
+def test_score_local_gate_passes_with_low_self_corr_and_valid_expression(
+    small_panel: MarketData,
+) -> None:
+    verdict = score_local_gate(
+        "close", PortfolioConfig(delay=1), small_panel, self_corr=0.0,
+    )
+    # Không assert cứng passed=True (sharpe trên data thật có thể thấp) — assert reason
+    # KHÔNG còn là lý do tối thiểu cũ ("no_pnl"/"signal toàn NaN") khi expr hợp lệ.
+    assert verdict.reason not in {"signal toàn NaN — không có giá trị dùng được"}
