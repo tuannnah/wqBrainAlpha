@@ -5,7 +5,8 @@
 > append an entry and refresh `Current state` at the end of every session or phase.
 
 ## Current state
-- **Phase:** Phase 4 — Metrics + Gates ✅ HOÀN TẤT (merged main + pushed `73c6129..d74d471`). Tiếp theo: Phase 4.5 — Calibration.
+- **Phase:** Phase 4.5 — Calibration ✅ CODE HOÀN TẤT (merged main + pushed `1d21396..4dab94b`). Tiếp theo: Phase 5 — Database (hoặc giải Gap#3 + chạy ρ thật khi quota Brain mở).
+- **CHẶN ĐO ρ THẬT:** Harness + CLI `calibrate` xong & test trên synthetic/fixture, nhưng **ρ trên dữ liệu THẬT chưa đo** vì bộ ground-truth 50 sim BLOCKED — Brain account `phtrang1229` trả API 402 (hết quota) sau vài sim. 60 expr OHLCV-only + scripts (`scripts/gen_groundtruth.py` seed 20260624, `scripts/persist_groundtruth.py`, `scripts/run_groundtruth.py`) đã sẵn; resume khi quota mở (login THẬT đã thông qua `WQBrainClient` + `.env` + cookie `.wq_session`, KHÔNG dùng wqb-mcp).
 - **Quyết định hướng đi:** Tích hợp MiniBrain vào tool sẵn có (KHÔNG build grenfield). Code mới
   đặt trong `src/` (không phải `minibrain/`), tái dùng login/fetch/DB/sim/AI/submit. Mỗi phase =
   1 nhánh git → merge main → push. **Bỏ đường cũ** (LLM→sim trực tiếp): mọi candidate qua local
@@ -190,3 +191,27 @@
 - **Next step:** Phase 4.5 — Calibration (CalibrationHarness + spearman_sharpe), phụ thuộc giải Gap#3.
 - **Tests:** Xanh. 689 pass / 1 fail pre-existing (psycopg). Mới: test_metrics_local (12) + test_gates (14) +
   test_filter_evaluate_local (3) + integration test_metrics_gates (1) + 2 test mở rộng test_backtest_gate.
+
+### [2026-06-25] Session 07 — Phase 4.5 Calibration (subagent + controller, merged main)
+- **Phase:** Phase 4.5 — Calibration. CODE HOÀN TẤT, merged main + pushed `1d21396..4dab94b`.
+- **Done:** Thực thi plan `2026-06-24-phase-4.5-calibration.md` (subagent-driven, chuyển sang controller
+  tự code từ Task 4.5.4 khi subagent gặp API 402 quota). 4.5.1 `stats.spearman` thuần numpy (no scipy);
+  4.5.2 `loader.load_brain_records` (DB AlphaModel⋈SimulationModel⋈SubmissionModel, latest/alpha, lọc
+  error/null); 4.5.3 `CalibrationReport`; 4.5.4 `CalibrationHarness` + `make_local_scorer` (config khớp
+  ground-truth NONE/decay0/trunc0/delay1 — điều kiện ρ hợp lệ); 4.5.5 CLI `calibrate` (ParquetSource +
+  `--market-data-dir` bắt buộc, không in báo cáo giả, verdict vs `CALIBRATION_RHO_BAR`). Final review opus:
+  READY=YES, 0 Critical. Full suite 719 pass / 1 pre-existing (psycopg).
+- **Decisions:** (1) **Login Brain THẬT** qua `WQBrainClient`+`.env`(phtrang1229)+cookie `.wq_session`, KHÔNG
+  qua wqb-mcp (mcp `authenticate` chỉ trả token đọc, `create_simulation` vẫn 400/403). (2) make_local_scorer
+  dùng config KHỚP ground-truth (không phải PortfolioConfig mặc định SECTOR/0.10) — bắt được bug `or` vs
+  `is not None` cho brain_sharpe=0.0 trong code mẫu brief. (3) CLI lazy-import calibration để tránh E402 (0
+  lỗi lint mới; main.py legacy giữ 13 ruff/90 mypy). (4) Fix review: `init_db` cho DB mới (hết
+  OperationalError); cảnh báo precondition DB-cùng-config (Important final review) — follow-up: cột
+  config_key Phase 5 để lọc.
+- **Blockers / open risks:** **ρ DỮ LIỆU THẬT CHƯA ĐO** — ground-truth 50 sim BLOCKED (Brain account
+  phtrang1229 API 402 hết quota sau vài sim). Scripts + 60 expr OHLCV-only đã sẵn, resume khi quota mở. Minor
+  defer: tiebreak sim_at, n-vs-pair-count, warning ts_mean empty-slice (operator layer).
+- **Next step:** Phase 5 — Database (store/repository/cache) HOẶC khi quota Brain mở: chạy ground-truth →
+  `calibrate --market-data-dir <parquet>` → đo ρ thật → quyết định có tin ranking local không.
+- **Tests:** Xanh. 719 pass / 1 fail pre-existing (psycopg). Mới: test_calibration_stats (9) + _loader (5) +
+  _report (2) + _harness (6) + integration (4) + test_calibrate_command (4).
