@@ -14,16 +14,20 @@ from dataclasses import dataclass
 from typing import Protocol, TypeVar
 
 T = TypeVar("T")
+# T_co covariant: NodeVisitor chỉ dùng T ở vị trí RETURN (output của visit_*), nên
+# theo luật variance phải khai báo covariant — mypy --strict đòi điều này, và nó cho
+# phép NodeVisitor[set[str]] được coi là NodeVisitor[AbstractSet[str]] (cần cho `|=`).
+T_co = TypeVar("T_co", covariant=True)
 
 
-class NodeVisitor(Protocol[T]):
+class NodeVisitor(Protocol[T_co]):
     """Hợp đồng visitor: một phương thức `visit_*` cho mỗi loại node cụ thể."""
 
-    def visit_constant(self, node: Constant) -> T: ...
+    def visit_constant(self, node: Constant) -> T_co: ...
 
-    def visit_field(self, node: Field) -> T: ...
+    def visit_field(self, node: Field) -> T_co: ...
 
-    def visit_call(self, node: Call) -> T: ...
+    def visit_call(self, node: Call) -> T_co: ...
 
 
 class Node(ABC):
