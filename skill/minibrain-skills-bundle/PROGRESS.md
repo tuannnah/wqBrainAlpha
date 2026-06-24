@@ -5,7 +5,7 @@
 > append an entry and refresh `Current state` at the end of every session or phase.
 
 ## Current state
-- **Phase:** Phase 3 — Backtester (MVP) ✅ HOÀN TẤT (sẵn sàng merge main). **MVP MILESTONE ĐẠT.** Tiếp theo: Phase 4 — Metrics + Gates.
+- **Phase:** Phase 4 — Metrics + Gates ✅ HOÀN TẤT (merged main + pushed `73c6129..d74d471`). Tiếp theo: Phase 4.5 — Calibration.
 - **Quyết định hướng đi:** Tích hợp MiniBrain vào tool sẵn có (KHÔNG build grenfield). Code mới
   đặt trong `src/` (không phải `minibrain/`), tái dùng login/fetch/DB/sim/AI/submit. Mỗi phase =
   1 nhánh git → merge main → push. **Bỏ đường cũ** (LLM→sim trực tiếp): mọi candidate qua local
@@ -22,18 +22,30 @@
   `equity_curve[-1]=-0.0937, sharpe~-3.150` (random walk fixture, chỉ chứng minh pipeline thông).
   **658 pass / 1 fail pre-existing**; ruff + mypy --strict (src/backtest) clean. Final review opus:
   READY TO MERGE, 0 Critical/Important, 2 Minor (phase sau).
+- **Done (Phase 4):** `src/backtest/metrics_local.py` (`AlphaMetrics` frozen/slots + `MetricsCalculator`:
+  sharpe/annual_return[simple, KHÔNG CAGR]/turnover/max_drawdown/fitness[floor từ config]/per_year_sharpe
+  [qua `data.years()`]/weight_concentration[ngày tệ nhất]). `src/backtest/gates.py` (`GateVerdict` +
+  `GateEvaluator`: hard gates depth/fields/self_corr[strict `<`]/concentration tách bạch soft scores
+  sharpe/fitness/turnover_band/per_year_min; ngưỡng CHỈ từ `config/thresholds.py`). `src/scoring/filter.py`
+  thêm `evaluate_local` (wrap `GateEvaluator`, giữ nguyên `passes`/`blocking_dimensions` sim-Brain).
+  `src/backtest/gate.py` rewire `score_local_gate(..., self_corr=0.0)` gọi `MetricsCalculator`+`GateEvaluator`
+  thật (tương thích ngược 3 call site RefinementLoop). Integration `tests/integration/test_metrics_gates.py`
+  thật trên `small_panel`: **demo `sharpe=-0.606 fitness=-0.322 turnover=0.107 concentration=0.099
+  gate_passed=True`**. Full suite **689 pass / 1 fail pre-existing** (psycopg). ruff + mypy --strict (src/backtest)
+  clean. Final review opus: **READY TO MERGE = YES, 0 Critical/Important.**
 - **In progress:** —
-- **Next step:** Phase 4 — Metrics + Gates: `MetricsCalculator` (Sharpe/turnover/fitness/per-year/
-  concentration) + `GateEvaluator` (hard gates) + `config/thresholds.py`; mở rộng `score_local_gate`
-  gọi metrics đầy đủ. Plan `2026-06-24-phase-4-metrics-gates.md` đã có sẵn.
+- **Next step:** Phase 4.5 — Calibration: `CalibrationHarness`/`CalibrationReport` + loader `brain_record`
+  ground truth; tính `spearman_sharpe` trên ≥~50 alpha đã sim; gate tin cậy ranking theo `CALIBRATION_RHO_BAR`.
+  **PHỤ THUỘC** giải Gap#3 (bulk OHLCV) để có data sim thật.
 - **Blockers / open risks:** (R2/Gap#3) Gap bulk OHLCV chưa giải (calibration ρ phụ thuộc).
-  **Phase 3 review Minor (Phase 4 dọn):** (c) `RuntimeWarning: Mean of empty slice` từ `_neutralize`
-  MARKET / `ts_mean` window chưa đủ — output đúng (NaN) nhưng warning lọt log; bọc errstate/catch_warnings.
-  (d) `local_gate_fn` luôn bind `score_local_gate` kể cả `market_data=None` (vô hại). **Phase 2 Minor còn
-  mở:** (a) `inf` từ divide/0, log/0 chưa bị mask ở Evaluator — làm sạch ở portfolio/Phase 4. (b) Fidelity
-  WQ `trade_when`/`hump` có thể lệch WQ thật — rủi ro calibration Phase 4.5. Validate "field tồn tại"
-  vẫn hoãn. Legacy `client.py` 9 lỗi mypy + `test_db_postgres` 1 fail
-  pre-existing (psycopg).
+  **Minor đã ghi (dọn sau, không chặn merge):** (1) `RuntimeWarning: Mean of empty slice` từ
+  `src/operators_local/timeseries.py` `ts_mean` (lookback đầu panel) — PRE-EXISTING, ngoài phạm vi P4; bọc
+  errstate/guard win rỗng ở tầng operator. (2) `src/scoring/filter.py` 2 lỗi mypy --strict PRE-EXISTING
+  (`passes`/`blocking_dimensions` untyped `source`) — P4 thêm 0 lỗi mới. (3) gate đếm depth cây TRẦN (không
+  cộng wrapper config) — nhất quán `pre_filter`, comment `MAX_DEPTH` đã sửa cho khớp. (4) `self_corr` luôn
+  0.0 đến khi Phase 6 wire `PoolCorrelation` (đã document). **Phase 2 Minor còn mở:** `inf` từ divide/0,
+  log/0 chưa mask ở Evaluator; fidelity WQ `trade_when`/`hump`. Legacy `client.py` 9 lỗi mypy +
+  `test_db_postgres` 1 fail pre-existing (psycopg).
 - **MVP (Phases 1–3) reached:** ✅ YES (Phase 3 xong — parse→eval→build→backtest→equity chạy thông trên dữ liệu thật)
 - **Calibration ρ (Spearman, Sharpe):** not measured yet (Phase 4.5)
 
@@ -152,3 +164,29 @@
 - **Next step:** Phase 4 — Metrics + Gates (MetricsCalculator + GateEvaluator + config/thresholds.py).
 - **Tests:** Xanh. 658 pass / 1 fail pre-existing (psycopg). Mới: 5 unit backtest + 1 integration MVP +
   gate + loop_local_gate.
+
+### [2026-06-24] Session 06 — Phase 4 Metrics + Gates (subagent-driven, merged main)
+- **Phase:** Phase 4 — Metrics + Gates. HOÀN TẤT, merged main + pushed `73c6129..d74d471`.
+- **Done:** Thực thi plan `2026-06-24-phase-4-metrics-gates.md` bằng **subagent-driven-development** (theo yêu
+  cầu "superpower + subagent"): 6 task, mỗi task 1 implementer (sonnet — KHÔNG haiku vì file tiếng Việt có dấu)
+  + task-reviewer + fix-loop khi cần. 4.1 `AlphaMetrics`+`MetricsCalculator`; 4.2 test per_year/concentration;
+  4.3 `GateVerdict`+`GateEvaluator`; 4.4 `evaluate_local`; 4.5 integration end-to-end; 4.6 wire
+  `score_local_gate`+`self_corr`. Final whole-branch review (opus) = **READY TO MERGE YES, 0 Critical/Important**.
+  Demo thật `small_panel`: `sharpe=-0.606 fitness=-0.322 turnover=0.107 concentration=0.099 gate_passed=True`.
+  Full suite 689 pass / 1 fail pre-existing (psycopg). ruff + mypy --strict (src/backtest) clean.
+- **Decisions:** (1) Tách Task 4.6: implementer chỉ làm Steps 1–9 (wire+test+commit); **final review + merge +
+  push do controller** (đúng quy trình SDD, push main là hành động ra ngoài). (2) **Fix correctness ngoài
+  brief có chủ đích, được review chấp nhận:** (a) `_turnover` xử lý NaN MỘT phía (mã vào/ra universe) — brief
+  cũ chỉ mask both-NaN nên tính thiếu turnover; sửa dùng `nan_to_num` coi NaN = vị thế 0 (WQ-faithful). (b)
+  `_weight_concentration` guard hàng all-NaN để hết `RuntimeWarning: All-NaN slice` (pristine output). (c)
+  `GateEvaluator` thêm dung sai FP `+1e-9` ở so sánh concentration vì `truncation` mặc định 0.10 == `CAP` 0.10
+  + trôi số sau `_scale` → 0.10000000000000005 false-fail; epsilon SỐ HỌC (không phải ngưỡng gate), docstring
+  `gates.py` đã phân biệt rõ + test ghim biên. (3) Sửa comment `MAX_DEPTH` (`config/thresholds.py`) cho khớp:
+  gate đếm cây TRẦN (nhất quán `pre_filter`), bỏ mệnh đề "gồm wrapper config".
+- **In progress:** —
+- **Blockers / open risks:** Gap#3 bulk OHLCV vẫn chặn calibration ρ (Phase 4.5). Minor deferred: warning
+  `ts_mean` empty-slice (tầng operator); 2 lỗi mypy pre-existing `filter.py` legacy; `self_corr` dormant tới
+  Phase 6. Xem `Current state` chi tiết.
+- **Next step:** Phase 4.5 — Calibration (CalibrationHarness + spearman_sharpe), phụ thuộc giải Gap#3.
+- **Tests:** Xanh. 689 pass / 1 fail pre-existing (psycopg). Mới: test_metrics_local (12) + test_gates (14) +
+  test_filter_evaluate_local (3) + integration test_metrics_gates (1) + 2 test mở rộng test_backtest_gate.
