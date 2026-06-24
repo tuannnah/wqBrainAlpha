@@ -5,31 +5,34 @@
 > append an entry and refresh `Current state` at the end of every session or phase.
 
 ## Current state
-- **Phase:** Phase 1 — Parser ✅ HOÀN TẤT (sẵn sàng merge main). Tiếp theo: Phase 2 — Operator Engine.
+- **Phase:** Phase 2 — Operator Engine ✅ HOÀN TẤT (sẵn sàng merge main). Tiếp theo: Phase 3 — Backtester (MVP).
 - **Quyết định hướng đi:** Tích hợp MiniBrain vào tool sẵn có (KHÔNG build grenfield). Code mới
   đặt trong `src/` (không phải `minibrain/`), tái dùng login/fetch/DB/sim/AI/submit. Mỗi phase =
   1 nhánh git → merge main → push. **Bỏ đường cũ** (LLM→sim trực tiếp): mọi candidate qua local
   gate trước khi đốt sim (gỡ tại Phase 3). Spec: `docs/superpowers/specs/2026-06-23-minibrain-into-existing-tool-design.md`.
   Plans: `docs/superpowers/plans/2026-06-24-minibrain-integration-master-plan.md` (P0-P9) +
-  `2026-06-24-phase-1-parser.md`.
-- **Done (Phase 1):** `src/lang/ast.py` (Constant/Field/Call frozen+slots + `NodeVisitor` Protocol
-  covariant), `src/lang/registry.py` (ArgKind/OpCategory enum, OperatorSpec, OperatorRegistry,
-  decorator `@register`, `default_registry()` với 6 op tối thiểu impl placeholder), `src/lang/grammar.lark`
-  (field/number/call/`+-*/`/unary-minus), `src/lang/parser.py` (`parse()` strict validate
-  operator/arity qua registry + `parse_expression()` lenient cho caller legacy; CLI `python -m
-  src.lang.parser`), `src/lang/visitors.py` (DepthVisitor đếm wrapper, FieldCollector, Serializer
-  round-trip, CanonicalHasher sort-commutative+normalize-literal, ComplexityVisitor, hàm thuần
-  `all_subtrees`/`iter_leaves`). Migrate 9 caller khỏi `ast_utils` + XÓA `src/generation/ast_utils.py`
-  + `tests/test_ast_utils.py`. 87 unit test lang xanh; full suite 590 pass; ruff + mypy --strict
-  (src/lang) clean.
+  `2026-06-24-phase-2-operator-engine.md` + `2026-06-24-phase-3-backtester.md`.
+- **Done (Phase 2):** `src/engine/subexpr_cache.py` (SubexprCache LRU theo canonical hash),
+  `src/engine/evaluator.py` (`EvalContext` + `Evaluator(NodeVisitor[Panel])`: visit_constant broadcast,
+  visit_field + universe mask, visit_call dispatch qua registry + cache, `_apply_universe_mask`/`_literal`),
+  6 file `src/operators_local/*` cài impl thật **27 operator**: arithmetic(10), cross_sectional
+  (rank/winsorize/scale/zscore), timeseries(9: ts_mean/std/delta/delay/rank/zscore/corr/decay_linear/
+  backfill), group_neutralize, regression_neut+vector_neut, trade_when+hump. Wire `operators_local/
+  __init__.py` import side-effect 6 submodule. Integration test parse→eval. Cập nhật test Phase 1
+  lỗi thời (registry placeholder → impl thật). **632 pass / 1 fail pre-existing**; ruff + mypy
+  --strict (src/engine + src/operators_local) clean. Final review opus: READY TO MERGE, 0 Critical/Important.
 - **In progress:** —
-- **Next step:** Phase 2 — Operator Engine. Viết plan đã có sẵn `docs/superpowers/plans/2026-06-24-phase-2-operator-engine.md`;
-  thực thi `src/operators_local/*` + `Evaluator` (AST→signal (T,N)) + golden test; nạp impl thật
-  cho 6 op placeholder + bổ sung operator còn lại; áp invariant no-look-ahead + NaN-out-of-universe.
-- **Blockers / open risks:** (R2/Gap#3) Gap bulk OHLCV chưa giải (calibration ρ phụ thuộc). Validate
-  "field tồn tại trong `available_fields()`" CHƯA làm (thuộc Phase 2 khi có MarketData thật). Legacy
-  `src/data/client.py` 9 lỗi mypy pre-existing + `test_db_postgres` 1 fail pre-existing (thiếu psycopg).
-- **MVP (Phases 1–3) reached:** no
+- **Next step:** Phase 3 — Backtester (MVP milestone): `PortfolioBuilder` (signal→weights: neut/decay/
+  trunc/scale/delay) + `Backtester` (weights→PnL delay-1) + equity curve từ alpha viết tay. Plan
+  `2026-06-24-phase-3-backtester.md` đã có sẵn.
+- **Blockers / open risks:** (R2/Gap#3) Gap bulk OHLCV chưa giải (calibration ρ phụ thuộc).
+  **Mới (Phase 2 review Minor):** (a) `inf` (từ divide/0, log/0) KHÔNG bị mask ở Evaluator — chỉ NaN
+  out-of-universe bị mask; cần làm sạch inf ở Evaluator hoặc tầng portfolio Phase 3+. (b) Fidelity WQ
+  của `trade_when`/`hump` khớp spec plan nhưng có thể lệch ngữ nghĩa WQ thật (trade_when khi cond
+  false; hump ngưỡng tương đối) — rủi ro calibration local↔Brain, lưu cho Phase 4.5. Validate "field
+  tồn tại" vẫn hoãn (cần MarketData thật). Legacy `client.py` 9 lỗi mypy + `test_db_postgres` 1 fail
+  pre-existing (psycopg).
+- **MVP (Phases 1–3) reached:** no (còn Phase 3)
 - **Calibration ρ (Spearman, Sharpe):** not measured yet
 
 ## Entries
@@ -99,3 +102,28 @@
   trùng nội dung với commit docs trên main (bf36d78) — merge sẽ auto-resolve (cùng nội dung).
 - **Next step:** Phase 2 — Operator Engine (plan `2026-06-24-phase-2-operator-engine.md` đã có sẵn).
 - **Tests:** Xanh. 87 unit test lang (8 file) + full suite 590 pass; 1 fail pre-existing test_db_postgres (psycopg).
+
+### [2026-06-24] Session 04 — Phase 2 Operator Engine (Evaluator + 27 operator)
+- **Phase:** Phase 2 — Operator Engine. HOÀN TẤT, sẵn sàng merge main.
+- **Done:** Thực thi 10 task TDD (subagent-driven-development): 3 implementer subagent (2.1+2.2 engine
+  core; 2.3-2.8 sáu file operator; 2.9 wire+integration) + 1 final review subagent (opus). `SubexprCache`
+  LRU; `EvalContext`+`Evaluator(NodeVisitor[Panel])` dispatch qua registry + cache canonical-hash + áp
+  universe mask sau mỗi Call; 27 operator impl thật (arithmetic 10, cross_sectional 4, timeseries 9,
+  group 1, neutralization 2, conditional 2). Golden test mỗi nhóm + integration parse→eval. Verify:
+  632 pass / 1 fail pre-existing; ruff + mypy --strict clean (src/engine + src/operators_local). Final
+  review opus: READY TO MERGE, 0 Critical/Important, 4 Minor (ghi chú phase sau).
+- **Decisions:** (1) Window time-series trailing `[t-d+1, t]` (đủ d quan sát kể cả t); thiếu → NaN —
+  chốt tường minh vì spec gốc không nói rõ biên. (2) `scale` dùng `OpCategory.SCALING` + `gp_usable=False`
+  (wrapper rescale gross-exposure, rank/sign-preserving) thay vì CROSS_SECTIONAL. (3) GROUP arg biểu diễn
+  bằng `Field(name)` trong AST (không thêm node type), `_literal()` đọc `Field.name` làm string. (4) Chạy
+  6 file operator TUẦN TỰ trong 1 subagent (không song song) để tránh git-index race trên cùng working
+  tree. (5) Golden test so với raw field phải áp universe mask lên `expected` (phản ánh invariant B6
+  Evaluator NaN-hóa out-of-universe) — không nới lỏng assertion. (6) Sửa `_apply_universe_mask` nhận
+  `Mask` (bool) thay `Panel` cho mypy. (7) Cập nhật test Phase 1 `test_default_registry_has_minimal_phase1_ops`
+  bỏ assert placeholder NotImplementedError (Phase 2 ghi đè impl thật vào REGISTRY singleton).
+- **In progress:** —
+- **Blockers / open risks:** (Minor review, phase sau) (a) `inf` từ divide/0, log/0 KHÔNG bị mask ở
+  Evaluator — cần làm sạch ở portfolio Phase 3+. (b) Fidelity WQ `trade_when`/`hump` khớp spec plan
+  nhưng có thể lệch WQ thật — rủi ro calibration Phase 4.5. Gap#3 bulk OHLCV vẫn mở.
+- **Next step:** Phase 3 — Backtester (MVP): PortfolioBuilder + Backtester delay-1 + equity curve.
+- **Tests:** Xanh. 632 pass / 1 fail pre-existing (psycopg). 29 golden + 4 integration + 9 engine unit mới.
