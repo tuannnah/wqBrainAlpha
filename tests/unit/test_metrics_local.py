@@ -111,3 +111,59 @@ def test_alpha_metrics_is_frozen():
                      fitness=1.0, per_year_sharpe={}, weight_concentration=0.1)
     with pytest.raises(AttributeError):
         m.sharpe = 2.0  # type: ignore[misc]
+
+
+def _two_year_panel() -> MarketData:
+    """4 ngày: 2 ngày năm 2021, 2 ngày năm 2022."""
+    t, n = 4, 2
+    dates = np.array(
+        ["2021-12-30", "2021-12-31", "2022-01-01", "2022-01-02"], dtype="datetime64[D]"
+    )
+    assets = np.array(["A", "B"], dtype=np.str_)
+    universe = np.ones((t, n), dtype=bool)
+    returns = np.zeros((t, n))
+    groups = {"sector": np.zeros((t, n), dtype=np.int64)}
+    return MarketData(dates=dates, assets=assets, fields={}, universe=universe,
+                      returns=returns, groups=groups)
+
+
+def test_per_year_sharpe_splits_by_data_years():
+    data = _two_year_panel()
+    daily_pnl = np.array([0.01, 0.01, -0.02, -0.02])  # 2021 toàn lãi, 2022 toàn lỗ
+    bt = BacktestResult(daily_pnl=daily_pnl, equity_curve=np.cumsum(daily_pnl),
+                        weights=np.zeros((4, 2)))
+    m = MetricsCalculator().compute(bt, data)
+    years = data.years()
+    assert set(m.per_year_sharpe) == set(years)
+    for year, sl in years.items():
+        expected = MetricsCalculator()._sharpe(daily_pnl[sl])
+        assert np.isclose(m.per_year_sharpe[year], expected)
+    # 2021 toàn lãi đều -> std=0 -> sharpe=0.0 theo quy ước; 2022 cũng vậy
+    assert m.per_year_sharpe[2021] == 0.0
+    assert m.per_year_sharpe[2022] == 0.0
+
+
+def test_weight_concentration_is_worst_day_max_name_share():
+    data = _two_year_panel()
+    daily_pnl = np.zeros(4)
+    # ngày 0: cân bằng 50/50 ; ngày 2: mã A chiếm 90% book -> concentration phải bắt ngày này
+    weights = np.array([
+        [0.5, -0.5],
+        [0.5, -0.5],
+        [0.9, -0.1],
+        [0.5, -0.5],
+    ])
+    bt = BacktestResult(daily_pnl=daily_pnl, equity_curve=np.cumsum(daily_pnl),
+                        weights=weights)
+    m = MetricsCalculator().compute(bt, data)
+    assert np.isclose(m.weight_concentration, 0.9)
+
+
+def test_weight_concentration_zero_when_all_weights_nan():
+    data = _two_year_panel()
+    daily_pnl = np.zeros(4)
+    weights = np.full((4, 2), np.nan)
+    bt = BacktestResult(daily_pnl=daily_pnl, equity_curve=np.cumsum(daily_pnl),
+                        weights=weights)
+    m = MetricsCalculator().compute(bt, data)
+    assert m.weight_concentration == 0.0
