@@ -67,11 +67,10 @@ class MetricsCalculator:
             return 0.0
         prev = weights[:-1]
         curr = weights[1:]
-        diff = np.abs(curr - prev)
-        both_nan = np.isnan(prev) & np.isnan(curr)
-        diff = np.where(both_nan, 0.0, diff)
-        with np.errstate(invalid="ignore"):
-            per_day = np.nansum(diff, axis=1)
+        # NaN một phía (mã vào/ra universe giữa 2 ngày) coi NaN = vị thế 0 (WQ-faithful),
+        # nên vẫn cộng |weight| của phía còn hữu hạn; NaN cả 2 phía -> 0 (giữ nguyên cũ).
+        diff = np.abs(np.nan_to_num(curr, nan=0.0) - np.nan_to_num(prev, nan=0.0))
+        per_day = diff.sum(axis=1)
         valid_rows = ~np.all(np.isnan(prev) | np.isnan(curr), axis=1)
         if not valid_rows.any():
             return 0.0

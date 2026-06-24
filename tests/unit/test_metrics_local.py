@@ -64,6 +64,26 @@ def test_turnover_matches_hand_calculation():
     assert np.isclose(m.turnover, expected_turnover)
 
 
+def test_turnover_counts_one_sided_nan_as_entering_universe():
+    # Mã B NaN ở ngày 0 (chưa vào universe) -> có weight 0.3 ở ngày 1 (vừa vào).
+    # Hàng [0]->[1] KHÔNG all-NaN-một-phía (mã A có weight cả 2 ngày) nên valid_rows
+    # vẫn giữ hàng này; turnover ngày đó phải tính |0.3 - 0| = 0.3 cho mã B, không bị
+    # np.nansum làm rớt.
+    data = _panel_3d_2n()
+    daily_pnl = np.zeros(3)
+    weights = np.array([
+        [0.5, np.nan],   # B chưa vào universe
+        [0.5, 0.3],      # B vừa vào universe với weight 0.3
+        [0.5, 0.3],      # giữ nguyên -> turnover ngày này = 0
+    ])
+    bt = BacktestResult(daily_pnl=daily_pnl, equity_curve=np.cumsum(daily_pnl),
+                        weights=weights)
+    m = MetricsCalculator().compute(bt, data)
+    # day0->day1: |0.5-0.5| + |0.3-0| = 0.3 ; day1->day2: |0.5-0.5| + |0.3-0.3| = 0.0
+    expected_turnover = np.mean([0.3, 0.0])
+    assert np.isclose(m.turnover, expected_turnover)
+
+
 def test_max_drawdown_matches_hand_calculation():
     data = _panel_3d_2n()
     daily_pnl = np.array([0.10, -0.20, 0.05])  # equity: 0.10, -0.10, -0.05
