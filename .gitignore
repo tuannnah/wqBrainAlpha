@@ -15,4 +15,4 @@ logs/
 build/
 dist/
 *.spec
-data/market_yf/
+data/market*/

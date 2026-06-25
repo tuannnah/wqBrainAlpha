@@ -6,13 +6,17 @@
 
 ## Current state
 - **Phase:** Phase 4.5 — Calibration ✅ HOÀN TẤT + **ρ THẬT ĐÃ ĐO & ĐẠT.** Tiếp theo: Phase 5 — Database.
-- **🎯 NORTH STAR ĐẠT (2026-06-25):** `calibrate` trên 55 ground-truth (DB phtrang1229) + panel yfinance
-  S&P500 (478 mã × 2618 ngày 2015-2025, `data/market_yf`): **spearman_sharpe ρ=0.6712 ≥ 0.5 bar** ✅,
-  spearman_fitness=0.8835, decile_hit_rate=0.40, n=42/55 (13 alpha local trả None — all-NaN signal/field
-  trên panel này). RANKING LOCAL ĐÁNG TIN (dù data xấp xỉ: S&P500 không phải TOP3000, vwap≈typical price).
-  Lệnh: `venv/Scripts/python.exe main.py calibrate --db-url sqlite:///wq_alpha_phtrang1229_gmail_com.db
-  --market-data-dir data/market_yf`. Panel sinh bởi `scripts/fetch_yfinance_panel.py` (Gap#3 fallback —
-  Brain API xác nhận không có bulk OHLCV).
+- **🎯 NORTH STAR ĐẠT + CỦNG CỐ (2026-06-25): ρ_sharpe=0.823, ρ_fitness=0.922, n=55.** Tiến trình:
+  (1) Ban đầu panel S&P500 2015-2025: ρ=0.671 n=42. (2) **Điều tra 13 alpha drop** → root cause
+  `EVAL KeyError: 'returns'` (returns là field WQ hợp lệ nhưng MarketData lưu riêng `.returns`, không trong
+  `.fields`); **fix** `make_local_scorer` expose returns (commit 5467c3b) → ρ=0.771 n=55. (3) **Mở rộng**
+  lịch sử 2015→2010 (467 mã × 3876 ngày) → **ρ=0.823**. RANKING LOCAL ĐÁNG TIN dù data xấp xỉ (S&P500≠TOP3000,
+  vwap≈typical price). Lệnh: `main.py calibrate --db-url sqlite:///wq_alpha_phtrang1229_gmail_com.db
+  --market-data-dir data/market_yf2010`. Panel: `scripts/fetch_yfinance_panel.py` (default start 2010).
+  Brain API xác nhận KHÔNG có bulk OHLCV (Gap#3) → yfinance fallback.
+- **Follow-up đã ghi:** (a) lỗ hổng `returns`-không-là-field còn ở `score_local_gate` (RefinementLoop) — mọi
+  alpha dùng returns sẽ fail local gate; nên sửa chung ở MarketData/Evaluator (Phase 0 core). (b) Mở rộng
+  universe >S&P500 cần nguồn ticker-kèm-GICS-sector (datahub chỉ có S&P500; 11 alpha group_neutralize cần sector).
 - **GROUND-TRUTH XONG:** 55 sim non-null sharpe trong `wq_alpha_phtrang1229_gmail_com.db` (min=-1.62 median=0.62 max=1.27; 12 âm/43 dương). `load_brain_records` đọc đủ 55. Login THẬT qua `WQBrainClient`+`.env`+cookie `.wq_session` (KHÔNG wqb-mcp — mcp trả 400/403). Scripts `gen/persist/run_groundtruth.py` đã commit (retry-timeout + resume).
 - **CHẶN ĐO ρ THẬT = Gap#3 (nguồn OHLCV panel):** ĐÃ PROBE Brain API (2026-06-25), KHẲNG ĐỊNH **không có endpoint trả giá trị field bulk**: `/data-fields/close`→200 CHỈ metadata; `/data-fields/close/values` & `/data` →404; `/data-sets`→metadata. Field data chỉ truy cập được TRONG simulation (server-side). => Pull OHLCV qua Brain API KHÔNG khả thi (đúng `fetch_to_parquet` NotImplementedError). Cần fallback: yfinance/stooq (miễn phí, xấp xỉ) HOẶC parquet user cung cấp. Sau khi có panel: `python main.py calibrate --db-url sqlite:///wq_alpha_phtrang1229_gmail_com.db --market-data-dir <parquet>`.
 - **Quyết định hướng đi:** Tích hợp MiniBrain vào tool sẵn có (KHÔNG build grenfield). Code mới

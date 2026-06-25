@@ -56,7 +56,7 @@ def _field_frame(data: pd.DataFrame, field: str, tickers: list[str]) -> pd.DataF
 
 def main() -> None:
     out_dir = sys.argv[1] if len(sys.argv) > 1 else "data/market_yf"
-    start = sys.argv[2] if len(sys.argv) > 2 else "2015-01-01"
+    start = sys.argv[2] if len(sys.argv) > 2 else "2010-01-01"  # lịch sử dài -> ρ vững hơn
     end = sys.argv[3] if len(sys.argv) > 3 else "2025-06-01"
 
     tickers, sectors = _sp500()
