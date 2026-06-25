@@ -5,7 +5,20 @@
 > append an entry and refresh `Current state` at the end of every session or phase.
 
 ## Current state
-- **Phase:** Phase 4.5 — Calibration ✅ HOÀN TẤT + **ρ THẬT ĐÃ ĐO & ĐẠT.** Tiếp theo: Phase 5 — Database.
+- **Phase:** Phase 5 — Database ✅ HOÀN TẤT (merged main 98fca96, pushed). Tiếp theo: **Phase 6 — Pool correlation** (local self-corr gate, dùng `load_pool`/`save_pool_pnl` của MiniBrainRepository).
+- **Done (Phase 5, 2026-06-25, subagent-driven + opus final review):** 5 model mới trong `src/storage/models.py`
+  (`ExpressionModel`/`EvaluationModel`/`PoolPnlModel`/`DeadFieldModel`/`BrainRecordModel`, B11 schema:
+  UNIQUE(expression_id,config_json,data_window) + idx_eval_sharpe/expr/status); `MIGRATION_ORDER` mở rộng
+  (port Postgres, đúng thứ tự FK); `MiniBrainRepository` (`src/storage/repository.py`: upsert_expression dedup
+  theo canonical_hash, record_evaluation lưu CẢ pass+fail+seed[R8], save/load_pool_pnl blob float64/datetime64[D],
+  dead_field self-learning, result_cache_get CHỈ hit status=passed, top_n); `ResultCache` (`src/cache/result_cache.py`
+  B12 tier3 DB-backed). **Branch thuần additive (844 insert, 0 delete)** — luồng Brain-sim cũ KHÔNG đụng,
+  init_db idempotent + AlphaModel cũ còn nguyên (verified). Final review opus: With fixes → ĐÃ fix `load_pool` `.copy()`
+  (np.frombuffer trả read-only → crash in-place Phase 6 max_corr). Full suite **753 pass / 1 psycopg tiền-tồn**.
+- **Phase 6 dùng được ngay:** `MiniBrainRepository.load_pool()` trả `{evaluation_id: pnl_array}` (đã ghi-được);
+  `save_pool_pnl(eval_id, dates, pnl)`. Minor defer: config_json/data_window là opaque key chưa canonical
+  (Phase 7/8 wire cache nên `json.dumps(..., sort_keys=True)`); dates_blob lưu nhưng load_pool chưa trả (by-design,
+  Phase 6 chỉ cần pnl-by-id). mypy debt trên src/storage là baseline `declarative_base()` legacy (cũ lẫn mới cùng pattern).
 - **🎯 NORTH STAR ĐẠT + CỦNG CỐ (2026-06-25): ρ_sharpe=0.823, ρ_fitness=0.922, n=55.** Tiến trình:
   (1) Ban đầu panel S&P500 2015-2025: ρ=0.671 n=42. (2) **Điều tra 13 alpha drop** → root cause
   `EVAL KeyError: 'returns'` (returns là field WQ hợp lệ nhưng MarketData lưu riêng `.returns`, không trong
@@ -27,40 +40,18 @@
   gate trước khi đốt sim (ĐÃ GỠ ở Phase 3 — D9). Spec: `docs/superpowers/specs/2026-06-23-minibrain-into-existing-tool-design.md`.
   Plans: `docs/superpowers/plans/2026-06-24-minibrain-integration-master-plan.md` (P0-P9) +
   `2026-06-24-phase-3-backtester.md` + `2026-06-24-phase-4-metrics-gates.md`.
-- **Done (Phase 3):** `src/backtest/config.py` (`PortfolioConfig` + `Neutralization`, stage separation),
-  `src/backtest/portfolio.py` (`PortfolioBuilder.build`: decay→neutralize→truncate→scale→delay; `_truncate`
-  dùng **water-filling lặp** — sửa correctness so plan vì 1-pass không cap đúng sau scale), `src/backtest/
-  backtester.py` (`Backtester.run` delay-1 `pnl=nansum(w*ret)`, delay áp ở portfolio không nhân đôi),
-  `src/backtest/gate.py` (`score_local_gate` cổng local tối thiểu: parse+eval+pnl hữu hạn). **D9:**
-  `RefinementLoop._evaluate` chèn `score_local_gate` BẮT BUỘC trước `simulate` khi `market_data` wire;
-  `market_data=None` → gate bỏ qua (bảo toàn hành vi cũ, 54 test loop xanh). **MVP demo thật:**
-  `equity_curve[-1]=-0.0937, sharpe~-3.150` (random walk fixture, chỉ chứng minh pipeline thông).
-  **658 pass / 1 fail pre-existing**; ruff + mypy --strict (src/backtest) clean. Final review opus:
-  READY TO MERGE, 0 Critical/Important, 2 Minor (phase sau).
-- **Done (Phase 4):** `src/backtest/metrics_local.py` (`AlphaMetrics` frozen/slots + `MetricsCalculator`:
-  sharpe/annual_return[simple, KHÔNG CAGR]/turnover/max_drawdown/fitness[floor từ config]/per_year_sharpe
-  [qua `data.years()`]/weight_concentration[ngày tệ nhất]). `src/backtest/gates.py` (`GateVerdict` +
-  `GateEvaluator`: hard gates depth/fields/self_corr[strict `<`]/concentration tách bạch soft scores
-  sharpe/fitness/turnover_band/per_year_min; ngưỡng CHỈ từ `config/thresholds.py`). `src/scoring/filter.py`
-  thêm `evaluate_local` (wrap `GateEvaluator`, giữ nguyên `passes`/`blocking_dimensions` sim-Brain).
-  `src/backtest/gate.py` rewire `score_local_gate(..., self_corr=0.0)` gọi `MetricsCalculator`+`GateEvaluator`
-  thật (tương thích ngược 3 call site RefinementLoop). Integration `tests/integration/test_metrics_gates.py`
-  thật trên `small_panel`: **demo `sharpe=-0.606 fitness=-0.322 turnover=0.107 concentration=0.099
-  gate_passed=True`**. Full suite **689 pass / 1 fail pre-existing** (psycopg). ruff + mypy --strict (src/backtest)
-  clean. Final review opus: **READY TO MERGE = YES, 0 Critical/Important.**
+- **Done Phase 0-4.5** (chi tiết trong Entries Session 02-07): P0 data foundation, P1 parser, P2 evaluator+27 op,
+  P3 backtester (MVP), P4 metrics+gates, P4.5 calibration (ρ_sharpe=0.823 đo thật). Tất cả merged main.
 - **In progress:** —
-- **Next step:** Phase 4.5 — Calibration: `CalibrationHarness`/`CalibrationReport` + loader `brain_record`
-  ground truth; tính `spearman_sharpe` trên ≥~50 alpha đã sim; gate tin cậy ranking theo `CALIBRATION_RHO_BAR`.
-  **PHỤ THUỘC** giải Gap#3 (bulk OHLCV) để có data sim thật.
-- **Blockers / open risks:** (R2/Gap#3) Gap bulk OHLCV chưa giải (calibration ρ phụ thuộc).
-  **Minor đã ghi (dọn sau, không chặn merge):** (1) `RuntimeWarning: Mean of empty slice` từ
-  `src/operators_local/timeseries.py` `ts_mean` (lookback đầu panel) — PRE-EXISTING, ngoài phạm vi P4; bọc
-  errstate/guard win rỗng ở tầng operator. (2) `src/scoring/filter.py` 2 lỗi mypy --strict PRE-EXISTING
-  (`passes`/`blocking_dimensions` untyped `source`) — P4 thêm 0 lỗi mới. (3) gate đếm depth cây TRẦN (không
-  cộng wrapper config) — nhất quán `pre_filter`, comment `MAX_DEPTH` đã sửa cho khớp. (4) `self_corr` luôn
-  0.0 đến khi Phase 6 wire `PoolCorrelation` (đã document). **Phase 2 Minor còn mở:** `inf` từ divide/0,
-  log/0 chưa mask ở Evaluator; fidelity WQ `trade_when`/`hump`. Legacy `client.py` 9 lỗi mypy +
-  `test_db_postgres` 1 fail pre-existing (psycopg).
+- **Next step:** **Phase 6 — Pool correlation** (plan `docs/superpowers/plans/2026-06-24-phase-6-pool-corr.md`):
+  `src/backtest/pool_corr.py`; gate tiêu thụ `max_corr`; passing alpha → `save_pool_pnl`; candidate mới tính
+  `max|ρ|` vs pool trên ngày aligned, hard gate 0.70. Phase 5 đã cấp sẵn `load_pool`/`save_pool_pnl`. Đây cũng
+  là chỗ wire `self_corr` (P4 để dormant=0.0) thành số thật.
+- **Blockers / open risks:** (R2/Gap#3) bulk OHLCV chưa giải (chỉ ảnh hưởng calibration mở rộng universe, KHÔNG
+  chặn P6). **Minor mở (dọn sau, không chặn):** (P5) config_json/data_window opaque key chưa canonical (Phase 7/8
+  cache nên sort_keys=True); mypy debt baseline `declarative_base()` legacy trên src/storage. (P4) `RuntimeWarning:
+  Mean of empty slice` `ts_mean`; `filter.py` 2 lỗi mypy pre-existing. (P2) `inf` divide/0, log/0 chưa mask ở
+  Evaluator; fidelity WQ `trade_when`/`hump`. Legacy `client.py` 9 lỗi mypy + `test_db_postgres` 1 fail (psycopg).
 - **MVP (Phases 1–3) reached:** ✅ YES (Phase 3 xong — parse→eval→build→backtest→equity chạy thông trên dữ liệu thật)
 - **Calibration ρ (Spearman, Sharpe):** not measured yet (Phase 4.5)
 
@@ -229,3 +220,31 @@
   `calibrate --market-data-dir <parquet>` → đo ρ thật → quyết định có tin ranking local không.
 - **Tests:** Xanh. 719 pass / 1 fail pre-existing (psycopg). Mới: test_calibration_stats (9) + _loader (5) +
   _report (2) + _harness (6) + integration (4) + test_calibrate_command (4).
+
+### [2026-06-25] Session 08 — Phase 5 Database (subagent-driven + opus final review, merged main)
+- **Phase:** Phase 5 — Database. HOÀN TẤT, merged main + pushed `01b999a..98fca96`.
+- **Done:** Thực thi plan `2026-06-24-phase-5-database.md` bằng **subagent-driven-development** (theo yêu cầu user
+  "subagent + superpower"): 6 task TDD, mỗi task 1 implementer (sonnet — file tiếng Việt có dấu, KHÔNG haiku) +
+  task-reviewer (sonnet) + fix-loop. 5.1 `models.py` +5 model (Expression/Evaluation/PoolPnl/DeadField/BrainRecord,
+  B11: UNIQUE(expr_id,config_json,data_window)+idx_eval_sharpe/expr/status); 5.2 `migrate.py` MIGRATION_ORDER đúng
+  thứ tự FK (port Postgres); 5.3 `MiniBrainRepository` (upsert dedup canonical_hash, record_evaluation pass+fail+seed,
+  save/load_pool_pnl blob, dead_field, result_cache_get chỉ status=passed, top_n) — reviewer probe sâu merge/blob/cache
+  đều đúng; 5.4 `ResultCache` (src/cache/, B12 tier3); 5.5 integration parse→visitors thật→repo→cache (`add`
+  commutative xác minh trong registry thật). Final whole-branch review (opus) = **With fixes**: 1 Important
+  `load_pool` trả mảng read-only (np.frombuffer) → crash in-place Phase 6 → ĐÃ fix `.copy()` + test writeable (e538cb6).
+  Branch **thuần additive 844 insert / 0 delete** — luồng Brain-sim cũ KHÔNG đụng, init_db idempotent + AlphaModel cũ
+  còn nguyên (verified). Full suite 753 pass / 1 psycopg tiền-tồn.
+- **Decisions:** (1) implementer dùng sonnet KHÔNG haiku (file có tiếng Việt có dấu — haiku xóa dấu). (2) Plan
+  chứa code đầy đủ nên implementer là transcription+TDD; final review trên opus (model mạnh nhất theo SDD). (3)
+  mypy --strict trên src/storage giữ baseline `declarative_base()` legacy (model cũ lẫn mới cùng pattern 2 lỗi/class)
+  — KHÔNG migrate sang DeclarativeBase/Mapped trong P5 (ngoài phạm vi); src/cache mypy SẠCH. (4) `DeadFieldModel`
+  (`dead_fields_minibrain`) tách khỏi `InvalidFieldModel` cũ (PK-shape khác, hai luồng độc lập). (5) `MiniBrainRepository`
+  tách `AlphaRepository` — không sửa class cũ.
+- **In progress:** —
+- **Blockers / open risks:** Minor defer (không chặn P6): config_json/data_window opaque key chưa canonical (Phase 7/8
+  cache nên `json.dumps(sort_keys=True)`); dates_blob lưu nhưng load_pool chưa trả (by-design, P6 chỉ cần pnl-by-id);
+  mypy baseline src/storage. Gap#3 bulk OHLCV không ảnh hưởng P6.
+- **Next step:** Phase 6 — Pool correlation: `src/backtest/pool_corr.py` + gate `max_corr` 0.70, wire `save_pool_pnl`
+  cho alpha pass + `self_corr` thật (P4 dormant). Dùng `load_pool`/`save_pool_pnl` của MiniBrainRepository (Phase 5).
+- **Tests:** Xanh. 753 pass / 1 psycopg tiền-tồn. Mới: test_storage_models_minibrain (7) + test_migrate_minibrain (2)
+  + test_minibrain_repository (14, gồm fix writeable) + test_result_cache (4) + integration (3).
