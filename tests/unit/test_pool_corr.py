@@ -99,3 +99,27 @@ def test_zero_variance_pool_series_is_skipped():
     rho, worst_id = pc.max_corr(candidate_pnl, dates)
     assert rho == 0.0
     assert worst_id is None
+
+
+def test_unsorted_dates_do_not_corrupt_alignment():
+    # Regression: dates KHÔNG sort tăng dần. Hai chuỗi thực ra giống hệt nhau
+    # (cùng (date -> pnl)) nhưng được lưu theo thứ tự ngày đảo lộn khác nhau.
+    # searchsorted thiếu sort sẽ ghép cặp sai -> rho ~0.913 thay vì 1.0.
+    raw_dates = _dates("2021-01-01", 5)
+    raw_pnl = np.array([0.01, -0.02, 0.03, 0.01, -0.01])
+
+    # Pool: đảo ngược hoàn toàn (giảm dần).
+    pool_order = np.array([4, 3, 2, 1, 0])
+    pool_dates = raw_dates[pool_order]
+    pool_pnl = raw_pnl[pool_order]
+
+    # Candidate: hoán vị khác (không sort, khác thứ tự pool).
+    cand_order = np.array([2, 0, 4, 1, 3])
+    cand_dates = raw_dates[cand_order]
+    cand_pnl = raw_pnl[cand_order]
+
+    pc = PoolCorrelation(pool={7: (pool_dates, pool_pnl)})
+    rho, worst_id = pc.max_corr(cand_pnl, cand_dates)
+    # Sau khi sort theo dates, hai chuỗi đồng nhất -> rho = 1.0.
+    assert np.isclose(rho, 1.0, atol=1e-9)
+    assert worst_id == 7

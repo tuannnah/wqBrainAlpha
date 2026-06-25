@@ -29,6 +29,12 @@ class PoolCorrelation:
     def max_corr(
         self, candidate_pnl: npt.NDArray[np.float64], dates: Dates
     ) -> tuple[float, int | None]:
+        """Trả (max(|rho|), id) qua toàn bộ pool; pool rỗng -> (0.0, None).
+
+        Caller KHÔNG cần sort dates trước: hàm tự sort cả candidate lẫn từng pool
+        entry theo dates trước khi align (xem _pairwise_rho), nên dates lệch thứ
+        tự vẫn cho kết quả đúng.
+        """
         if not self._pool:
             return 0.0, None
 
@@ -55,6 +61,17 @@ class PoolCorrelation:
         pool_pnl: npt.NDArray[np.float64],
         pool_dates: Dates,
     ) -> float | None:
+        # BẮT BUỘC sort theo dates trước khi searchsorted: searchsorted giả định
+        # mảng đã sort tăng dần. Nếu dates đầu vào lệch thứ tự (caller không đảm
+        # bảo — type alias Dates/storage/caller đều không ràng buộc), searchsorted
+        # sẽ ghép cặp PnL sai ngày (hoặc trả index ngoài biên) -> rho SAI âm thầm.
+        cand_order = np.argsort(candidate_dates)
+        candidate_dates = candidate_dates[cand_order]
+        candidate_pnl = candidate_pnl[cand_order]
+        pool_order = np.argsort(pool_dates)
+        pool_dates = pool_dates[pool_order]
+        pool_pnl = pool_pnl[pool_order]
+
         common = np.intersect1d(candidate_dates, pool_dates)
         if common.size < _MIN_OVERLAP_POINTS:
             return None
