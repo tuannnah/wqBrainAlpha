@@ -318,7 +318,10 @@ class MiniBrainRepository:
         try:
             rows = session.query(PoolPnlModel).all()
             return {
-                row.evaluation_id: np.frombuffer(row.pnl_blob, dtype=np.float64)
+                # .copy() bắt buộc: np.frombuffer() trần trả mảng read-only (view trên
+                # buffer bytes) — Phase 6 (max_corr) thao tác in-place (demean) trên mảng
+                # này sẽ raise ValueError nếu không copy thành bản ghi-được.
+                row.evaluation_id: np.frombuffer(row.pnl_blob, dtype=np.float64).copy()
                 for row in rows
             }
         finally:

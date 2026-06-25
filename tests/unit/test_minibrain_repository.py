@@ -89,6 +89,23 @@ def test_save_and_load_pool_pnl_roundtrip(repo):
     np.testing.assert_allclose(pool[eval_id], pnl)
 
 
+def test_load_pool_returns_writeable_array_for_inplace_ops(repo):
+    """Phase 6 (max_corr trên pool) cần thao tác in-place (vd demean `arr -= mean`) trên
+    mảng trả về từ load_pool; np.frombuffer() trần trả mảng read-only và sẽ raise
+    ValueError khi bị trừ in-place — load_pool phải trả bản ghi-được (.copy())."""
+    expr_id = repo.upsert_expression("close", "hash1", depth=1, complexity=1, fields={"close"})
+    eval_id = repo.record_evaluation(expr_id, _cfg_json(), "w1", _metrics(), 0.1, "passed", [], 1)
+    dates = np.array(["2021-01-01", "2021-01-02", "2021-01-03"], dtype="datetime64[D]")
+    pnl = np.array([0.01, -0.02, 0.03], dtype=np.float64)
+    repo.save_pool_pnl(eval_id, dates, pnl)
+
+    pool = repo.load_pool()
+
+    assert pool[eval_id].flags.writeable is True
+    pool[eval_id] -= 1.0  # thao tác in-place kiểu Phase 6 max_corr; không được raise
+    np.testing.assert_allclose(pool[eval_id], pnl - 1.0)
+
+
 def test_dead_field_add_and_check(repo):
     assert repo.is_dead_field("bad_field") is False
     repo.add_dead_field("bad_field", reason="brain rejected")
