@@ -5,23 +5,18 @@
 > append an entry and refresh `Current state` at the end of every session or phase.
 
 ## Current state
-- **Phase:** Phase 6 — Pool correlation ✅ HOÀN TẤT (merged main eb311aa, pushed). Tiếp theo: **Phase 7 — GP Engine**
-  (plan `docs/superpowers/plans/2026-06-24-phase-7-gp-engine.md`).
-- **Done (Phase 6, 2026-06-25, subagent-driven + opus final review):** self-corr từ tham số truyền tay (Phase 4) →
-  giá trị TÍNH THẬT từ pool. `src/backtest/pool_corr.py` `PoolCorrelation.max_corr` (max|Pearson ρ| align trên ngày
-  GIAO NHAU, bỏ qua alpha overlap<2/variance=0 — không ρ giả; trả (|ρ|, worst_id); **sort dates trước searchsorted**
-  — fix Critical giữa chừng tránh ghép cặp sai âm thầm; KHÔNG import storage/gp/llm — dependency rule B1).
-  `src/backtest/gates.py` `GateEvaluator.evaluate_with_pool` (lớp mỏng: tính self_corr từ pool rồi delegate evaluate()
-  cũ — KHÔNG sửa chữ ký cũ, ngưỡng 0.70 vẫn chỉ ở evaluate()/thresholds). `src/storage/repository.py`
-  `MiniBrainRepository.load_pool` mở rộng trả **`(dates, pnl)`** (trước chỉ pnl — Phase 6 cần dates để align alpha
-  khác độ dài; giải Minor "dates_blob chưa dùng" của Phase 5). Integration `tests/integration/test_pool_corr_gate.py`
-  end-to-end DB thật→PoolCorrelation→GateEvaluator. Full suite **768 pass / 1 psycopg tiền-tồn**. Final review opus:
-  **Ready=YES, 0 Critical/Important.**
-- **Adapt so plan gốc (plan Phase 6 viết TRƯỚC Phase 5, user duyệt 2 deviation):** (1) dùng `MiniBrainRepository`
-  + `PoolPnlModel` của Phase 5, KHÔNG thêm vào `AlphaRepository`/tạo model thứ 2 như plan gốc; (2) chỉ building
-  blocks — CHƯA wire vào `RefinementLoop` sống (loop hiện dùng `score_local_gate` Phase 3, chưa gọi
-  `evaluate_with_pool`). 2 Minor defer Phase 7/8: `_pairwise_rho` dup-date lossy (benign); `evaluate_with_pool`
-  bỏ `worst_id` (nên nhét vào hard_failures + thêm `if verdict.passed: repo.save_pool_pnl(...)` khi wire loop).
+- **Phase:** Phase 7 — GP Engine (building blocks 7.1-7.6) ✅ HOÀN TẤT (merged main 2553e08, pushed). Tiếp theo:
+  **Phase 8 — Short-list + CLI** HOẶC **Phase 7.7-7.9** (GPEngine integration + wire RefinementLoop) khi user chốt.
+- **Done (Phase 7 building blocks, 2026-06-26, subagent-driven + opus 2-round final review):** 6 task TDD building blocks GP:
+  `src/gp/individual.py` (Individual = AST Node + metadata: generation/fitness cache, slots non-frozen vì test gán fitness sau init);
+  `src/gp/fitness_vec.py` (FitnessVector 6 chiều `sharpe_deflated/per_year_min_sharpe/turnover_penalty/complexity_penalty/pool_corr_penalty/pop_corr_penalty` + `from_metrics` từ AlphaMetrics; siết Individual.fitness annotation qua TYPE_CHECKING);
+  `src/gp/seeds.py` (sinh Node cores từ `families.py.generate_candidates()` + `novel_ideas.NOVEL_ALPHAS` + LLM tùy chọn qua Protocol; **side-effect import `src.operators_local`** bắt buộc để parse validate qua registry);
+  `src/gp/init.py` (ramped half-and-half + seeding, depth cap MAX_DEPTH=7, rng inject `np.random.default_rng`);
+  `src/gp/variation.py` (typed crossover + point_mutation type-aware WINDOW resample từ `parent_spec.window_choices` / SCALAR perturb Gaussian / GROUP bỏ qua + subtree_mutation / hoist_mutation + dedup canonical_hash; **helper chung `_panel_compatible_subtrees(root, registry)` cho mọi variation operator** đảm bảo typed invariant);
+  `src/gp/selection.py` (NSGA-II Pareto front fast non-dominated sort + crowding distance + tie-break ngẫu nhiên qua rng inject; đảo dấu 2 chiều maximize qua `_MAXIMIZE_FIELDS`).
+- **B5 stage separation enforced ở registry:** `regression_neut/vector_neut/ts_decay_linear/ts_delay` đặt `gp_usable=False` trong `src/operators_local/` — GP chỉ search BARE SIGNAL CORE, không sinh cây bọc neut/decay/delay (đó là PortfolioConfig Phase 3).
+- **Final review opus 2-round:** Round 1 = With fixes (4 Critical typed-invariant + 2 Important — cùng nguyên nhân gốc thiếu helper PANEL-subtree chung, ~50% subtree_mut + 75% hoist + crossover sinh cây type-invalid trên seed kinh điển). Fix 7954468 root cause + 5 stress test 1000-iter `_check_panel_invariant` qua `spec.signature`. Round 2 = **Ready=YES, 0 Critical/Important**. Full suite **827 pass / 1 psycopg tiền-tồn**.
+- **Phạm vi đã chốt với user:** chỉ 7.1-7.6 building blocks (plan dừng dở ở Selection — đầu plan tham chiếu 7.7-7.9 nhưng chưa viết). GPEngine (7.7: ghép seeds→init→variation→selection→eval, persist mọi individual, joblib parallel, sub-expr+result cache) + wire RefinementLoop (7.8) + xóa `src/generation/template.py` legacy: defer Phase 8 hoặc viết bổ sung plan 7.7-7.9 sau.
 - **🎯 NORTH STAR ĐẠT + CỦNG CỐ (2026-06-25): ρ_sharpe=0.823, ρ_fitness=0.922, n=55.** Tiến trình:
   (1) Ban đầu panel S&P500 2015-2025: ρ=0.671 n=42. (2) **Điều tra 13 alpha drop** → root cause
   `EVAL KeyError: 'returns'` (returns là field WQ hợp lệ nhưng MarketData lưu riêng `.returns`, không trong
@@ -43,20 +38,23 @@
   gate trước khi đốt sim (ĐÃ GỠ ở Phase 3 — D9). Spec: `docs/superpowers/specs/2026-06-23-minibrain-into-existing-tool-design.md`.
   Plans: `docs/superpowers/plans/2026-06-24-minibrain-integration-master-plan.md` (P0-P9) +
   `2026-06-24-phase-3-backtester.md` + `2026-06-24-phase-4-metrics-gates.md`.
-- **Done Phase 0-6** (chi tiết Entries Session 02-09): P0 data, P1 parser, P2 evaluator+27 op, P3 backtester (MVP),
-  P4 metrics+gates, P4.5 calibration (ρ_sharpe=0.823), P5 database, P6 pool correlation. Tất cả merged main.
+- **Done Phase 0-7** (chi tiết Entries Session 02-10): P0 data, P1 parser, P2 evaluator+27 op, P3 backtester (MVP),
+  P4 metrics+gates, P4.5 calibration (ρ_sharpe=0.823), P5 database, P6 pool correlation, P7 GP building blocks
+  (Individual/FitnessVector/Seeds/Init/Variation/Selection). Tất cả merged main.
 - **In progress:** —
-- **Next step:** **Phase 7 — GP Engine** (plan `docs/superpowers/plans/2026-06-24-phase-7-gp-engine.md`): seeded init
-  typed-tree trong depth cap, typed crossover/mutation (repair), multi-objective fitness gồm pool+population corr
-  penalty (NSGA-II/fitness-sharing), persist mọi individual, joblib parallel, sub-expr+result cache. **Đây cũng là
-  nơi WIRE pool corr vào loop sống** (P6 mới làm building blocks): `if verdict.passed: repo.save_pool_pnl(...)` +
-  dùng `evaluate_with_pool` + cân nhắc surface `worst_id`.
+- **Next step:** **Phase 8 — Short-list + CLI** (plan `docs/superpowers/plans/2026-06-24-phase-8-cli.md`) HOẶC
+  viết bổ sung plan **7.7 GPEngine** (ghép seeds→init→variation→selection→eval, persist mọi individual, joblib
+  parallel, sub-expr+result cache) + **7.8** (wire RefinementLoop dùng `evaluate_with_pool` + `save_pool_pnl` khi
+  pass + xóa `src/generation/template.py` legacy) + 7.9 trước khi sang Phase 8. User chốt sau.
 - **Blockers / open risks:** (R2/Gap#3) bulk OHLCV chưa giải (chỉ ảnh hưởng calibration mở rộng universe). **Minor
-  mở (dọn sau):** (P6) `_pairwise_rho` dup-date lossy (benign); `evaluate_with_pool` bỏ worst_id (P7 nên dùng).
-  (P5) config_json/data_window opaque key chưa canonical (P7/8 cache nên sort_keys=True); mypy debt baseline
-  `declarative_base()` legacy trên src/storage. (P4) `RuntimeWarning: Mean of empty slice` `ts_mean`; `filter.py`
-  2 lỗi mypy pre-existing. (P2) `inf` divide/0, log/0 chưa mask Evaluator; fidelity WQ `trade_when`/`hump`. Legacy
-  `client.py` 9 lỗi mypy + `test_db_postgres` 1 fail (psycopg).
+  mở (dọn sau):** (P7.6) test coverage gap NSGA-II không assert `len(fronts)` cho chuỗi dominance, crowding không
+  assert phần tử giữa hữu hạn; `_objective` gọi lặp trong crowding (vi mô O(MN²)). (P7.4) `ramped_half_and_half`
+  ZeroDivisionError tiềm ẩn `max_depth<min_depth` (không thực tế MAX_DEPTH=7). (P6) `_pairwise_rho` dup-date lossy
+  (benign); `evaluate_with_pool` bỏ `worst_id` (P7.7+ nên dùng). (P5) config_json/data_window opaque key chưa
+  canonical (P7/8 cache nên sort_keys=True); mypy debt baseline `declarative_base()` legacy trên src/storage.
+  (P4) `RuntimeWarning: Mean of empty slice` `ts_mean`; `filter.py` 2 lỗi mypy pre-existing. (P2) `inf` divide/0,
+  log/0 chưa mask Evaluator; fidelity WQ `trade_when`/`hump`. Legacy `client.py` 9 lỗi mypy + `test_db_postgres`
+  1 fail (psycopg).
 - **MVP (Phases 1–3) reached:** ✅ YES (Phase 3 xong — parse→eval→build→backtest→equity chạy thông trên dữ liệu thật)
 - **Calibration ρ (Spearman, Sharpe):** not measured yet (Phase 4.5)
 
@@ -287,3 +285,40 @@
   + result cache. ĐÂY LÀ NƠI WIRE pool corr vào loop sống.
 - **Tests:** Xanh. 768 pass / 1 psycopg tiền-tồn. Mới: test_pool_corr (9, gồm fix sort regression) + test_gates_pool_corr
   (4) + chỉnh test_minibrain_repository (+1 mới, sửa 2 cũ cho format tuple) + integration test_pool_corr_gate (1).
+
+### [2026-06-26] Session 10 — Phase 7 GP Engine building blocks (subagent-driven + opus 2-round, merged main)
+- **Phase:** Phase 7 — GP Engine BUILDING BLOCKS (7.1-7.6). HOÀN TẤT, merged main + pushed `3e36bc1..2553e08`.
+- **Done:** Thực thi plan `2026-06-24-phase-7-gp-engine.md` bằng **subagent-driven-development**: 6 task TDD,
+  mỗi task 1 implementer (sonnet) + task-reviewer + fix-loop. **7.1** Individual (slots NON-frozen vì test gán
+  fitness sau init); **7.2** FitnessVector 6 chiều + from_metrics; **7.3** Seeds (`generate_candidates()` API thật,
+  side-effect import operators_local cho registry); **7.4** Init (ramped half-and-half, deviation `min_depth=1`
+  param backward-compat); **7.5** Variation (typed crossover + point_mutation type-aware WINDOW resample từ
+  window_choices; fix Important: brief code mẫu perturb Gaussian mọi Constant kể cả WINDOW); **7.6** NSGA-II
+  Selection (đảo dấu, liệt kê tay 6 field thay getattr cho mypy). 3 fix giữa task: (a) dấu tiếng Việt seeds.py
+  (subagent xóa dấu); (b) Important Task 7.5 WINDOW type-aware; (c) **final fix LỚN sau opus round-1**.
+- **Final review opus 2-round:** Round-1 = With fixes. **4 Critical typed-invariant + 2 Important** chỉ lộ ở
+  whole-branch gate (mỗi task review riêng đều OK vì chỉ kiểm scope task): (1) `_random_leaf` đặt Constant ở PANEL
+  slot; (2) `subtree_mutation` thay không phân biệt vai trò → ~50% type-invalid; (3) `hoist_mutation` nhấc Constant
+  lên root → 75% trên seed kinh điển; (4) `crossover` cho phép swap Constant-root vào PANEL. Cùng nguyên nhân gốc:
+  thiếu helper PANEL-subtree dùng chung. **Important:** 4 op (regression_neut/vector_neut/ts_decay_linear/ts_delay)
+  thiếu `gp_usable=False` → vi phạm B5 stage separation; dấu tiếng Việt thiếu trong test_gp_init/seeds.py.
+  **Fix 7954468:** helper `_panel_compatible_subtrees(root, registry)` dùng chung 4 nơi + `_random_leaf` typed
+  `kind=PANEL/SCALAR` + `gp_usable=False` cho 4 op + khôi phục dấu test files + 5 stress test 1000-iter
+  `_check_panel_invariant` qua spec.signature (RED→GREEN); 2 test cũ encode defect đã flip cho khớp invariant đúng.
+  **Round-2 = Ready=YES, 0 Critical/Important.** Suite **827 pass / 1 psycopg tiền-tồn**.
+- **Decisions:** (1) Phạm vi Phase 7 = chỉ 7.1-7.6 building blocks (plan dừng dở ở 7.6 Selection). 7.7 GPEngine
+  integration + 7.8 wire RefinementLoop + 7.9 defer (cần viết bổ sung plan hoặc gộp Phase 8). (2) Implementer
+  sonnet KHÔNG haiku (file tiếng Việt có dấu — haiku xóa). Final review opus 2-round (mạnh nhất theo SDD). (3)
+  Fix gộp 6 finding final review thành 1 implementer round (đúng SDD red-flag "ONE fix per finding list, không
+  per-finding fixers"). (4) `Individual` slots NON-frozen (brief 7.1 cố ý — test gán fitness/generation sau init).
+  (5) `dataclass` `_objective` if/elif liệt kê tay 6 field thay getattr động (mypy strict mất type-narrow trên
+  frozen+slots). (6) Side-effect import `operators_local` trong seeds.py có docstring + noqa giải thích — bắt buộc
+  cho registry validate parse, không phải hack.
+- **In progress:** —
+- **Blockers / open risks:** Minor defer (xem Current state). (P5) config_json/data_window opaque key (P7/8 cache).
+  (P6) `_pairwise_rho` dup-date lossy; `evaluate_with_pool` bỏ `worst_id` (Phase 8 nên dùng).
+- **Next step:** Phase 8 — Short-list + CLI HOẶC bổ sung plan 7.7-7.9. User chốt sau.
+- **Tests:** Xanh. 827 pass / 1 psycopg tiền-tồn. Mới (7 file): test_gp_individual (6) + test_gp_fitness_vec (11)
+  + test_gp_seeds (6) + test_gp_init (8) + test_gp_variation (15, gồm fix WINDOW) + test_gp_selection (8) +
+  test_gp_panel_invariant (5 stress 1000-iter typed invariant). Sửa: test_lang_registry (2 test encode defect
+  cũ flip cho khớp invariant B5 đúng).
