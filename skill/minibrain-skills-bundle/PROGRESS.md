@@ -6,7 +6,8 @@
 
 ## Current state
 - **Phase:** Phase 4.5 — Calibration ✅ CODE HOÀN TẤT (merged main + pushed `1d21396..4dab94b`). Tiếp theo: Phase 5 — Database (hoặc giải Gap#3 + chạy ρ thật khi quota Brain mở).
-- **CHẶN ĐO ρ THẬT:** Harness + CLI `calibrate` xong & test trên synthetic/fixture, nhưng **ρ trên dữ liệu THẬT chưa đo** vì bộ ground-truth 50 sim BLOCKED — Brain account `phtrang1229` trả API 402 (hết quota) sau vài sim. 60 expr OHLCV-only + scripts (`scripts/gen_groundtruth.py` seed 20260624, `scripts/persist_groundtruth.py`, `scripts/run_groundtruth.py`) đã sẵn; resume khi quota mở (login THẬT đã thông qua `WQBrainClient` + `.env` + cookie `.wq_session`, KHÔNG dùng wqb-mcp).
+- **GROUND-TRUTH XONG:** 55 sim non-null sharpe trong `wq_alpha_phtrang1229_gmail_com.db` (min=-1.62 median=0.62 max=1.27; 12 âm/43 dương). `load_brain_records` đọc đủ 55. Login THẬT qua `WQBrainClient`+`.env`+cookie `.wq_session` (KHÔNG wqb-mcp — mcp trả 400/403). Scripts `gen/persist/run_groundtruth.py` đã commit (retry-timeout + resume).
+- **CHẶN ĐO ρ THẬT = Gap#3 (nguồn OHLCV panel):** ĐÃ PROBE Brain API (2026-06-25), KHẲNG ĐỊNH **không có endpoint trả giá trị field bulk**: `/data-fields/close`→200 CHỈ metadata; `/data-fields/close/values` & `/data` →404; `/data-sets`→metadata. Field data chỉ truy cập được TRONG simulation (server-side). => Pull OHLCV qua Brain API KHÔNG khả thi (đúng `fetch_to_parquet` NotImplementedError). Cần fallback: yfinance/stooq (miễn phí, xấp xỉ) HOẶC parquet user cung cấp. Sau khi có panel: `python main.py calibrate --db-url sqlite:///wq_alpha_phtrang1229_gmail_com.db --market-data-dir <parquet>`.
 - **Quyết định hướng đi:** Tích hợp MiniBrain vào tool sẵn có (KHÔNG build grenfield). Code mới
   đặt trong `src/` (không phải `minibrain/`), tái dùng login/fetch/DB/sim/AI/submit. Mỗi phase =
   1 nhánh git → merge main → push. **Bỏ đường cũ** (LLM→sim trực tiếp): mọi candidate qua local
