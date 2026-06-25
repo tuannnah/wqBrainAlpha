@@ -5,20 +5,23 @@
 > append an entry and refresh `Current state` at the end of every session or phase.
 
 ## Current state
-- **Phase:** Phase 5 — Database ✅ HOÀN TẤT (merged main 98fca96, pushed). Tiếp theo: **Phase 6 — Pool correlation** (local self-corr gate, dùng `load_pool`/`save_pool_pnl` của MiniBrainRepository).
-- **Done (Phase 5, 2026-06-25, subagent-driven + opus final review):** 5 model mới trong `src/storage/models.py`
-  (`ExpressionModel`/`EvaluationModel`/`PoolPnlModel`/`DeadFieldModel`/`BrainRecordModel`, B11 schema:
-  UNIQUE(expression_id,config_json,data_window) + idx_eval_sharpe/expr/status); `MIGRATION_ORDER` mở rộng
-  (port Postgres, đúng thứ tự FK); `MiniBrainRepository` (`src/storage/repository.py`: upsert_expression dedup
-  theo canonical_hash, record_evaluation lưu CẢ pass+fail+seed[R8], save/load_pool_pnl blob float64/datetime64[D],
-  dead_field self-learning, result_cache_get CHỈ hit status=passed, top_n); `ResultCache` (`src/cache/result_cache.py`
-  B12 tier3 DB-backed). **Branch thuần additive (844 insert, 0 delete)** — luồng Brain-sim cũ KHÔNG đụng,
-  init_db idempotent + AlphaModel cũ còn nguyên (verified). Final review opus: With fixes → ĐÃ fix `load_pool` `.copy()`
-  (np.frombuffer trả read-only → crash in-place Phase 6 max_corr). Full suite **753 pass / 1 psycopg tiền-tồn**.
-- **Phase 6 dùng được ngay:** `MiniBrainRepository.load_pool()` trả `{evaluation_id: pnl_array}` (đã ghi-được);
-  `save_pool_pnl(eval_id, dates, pnl)`. Minor defer: config_json/data_window là opaque key chưa canonical
-  (Phase 7/8 wire cache nên `json.dumps(..., sort_keys=True)`); dates_blob lưu nhưng load_pool chưa trả (by-design,
-  Phase 6 chỉ cần pnl-by-id). mypy debt trên src/storage là baseline `declarative_base()` legacy (cũ lẫn mới cùng pattern).
+- **Phase:** Phase 6 — Pool correlation ✅ HOÀN TẤT (merged main eb311aa, pushed). Tiếp theo: **Phase 7 — GP Engine**
+  (plan `docs/superpowers/plans/2026-06-24-phase-7-gp-engine.md`).
+- **Done (Phase 6, 2026-06-25, subagent-driven + opus final review):** self-corr từ tham số truyền tay (Phase 4) →
+  giá trị TÍNH THẬT từ pool. `src/backtest/pool_corr.py` `PoolCorrelation.max_corr` (max|Pearson ρ| align trên ngày
+  GIAO NHAU, bỏ qua alpha overlap<2/variance=0 — không ρ giả; trả (|ρ|, worst_id); **sort dates trước searchsorted**
+  — fix Critical giữa chừng tránh ghép cặp sai âm thầm; KHÔNG import storage/gp/llm — dependency rule B1).
+  `src/backtest/gates.py` `GateEvaluator.evaluate_with_pool` (lớp mỏng: tính self_corr từ pool rồi delegate evaluate()
+  cũ — KHÔNG sửa chữ ký cũ, ngưỡng 0.70 vẫn chỉ ở evaluate()/thresholds). `src/storage/repository.py`
+  `MiniBrainRepository.load_pool` mở rộng trả **`(dates, pnl)`** (trước chỉ pnl — Phase 6 cần dates để align alpha
+  khác độ dài; giải Minor "dates_blob chưa dùng" của Phase 5). Integration `tests/integration/test_pool_corr_gate.py`
+  end-to-end DB thật→PoolCorrelation→GateEvaluator. Full suite **768 pass / 1 psycopg tiền-tồn**. Final review opus:
+  **Ready=YES, 0 Critical/Important.**
+- **Adapt so plan gốc (plan Phase 6 viết TRƯỚC Phase 5, user duyệt 2 deviation):** (1) dùng `MiniBrainRepository`
+  + `PoolPnlModel` của Phase 5, KHÔNG thêm vào `AlphaRepository`/tạo model thứ 2 như plan gốc; (2) chỉ building
+  blocks — CHƯA wire vào `RefinementLoop` sống (loop hiện dùng `score_local_gate` Phase 3, chưa gọi
+  `evaluate_with_pool`). 2 Minor defer Phase 7/8: `_pairwise_rho` dup-date lossy (benign); `evaluate_with_pool`
+  bỏ `worst_id` (nên nhét vào hard_failures + thêm `if verdict.passed: repo.save_pool_pnl(...)` khi wire loop).
 - **🎯 NORTH STAR ĐẠT + CỦNG CỐ (2026-06-25): ρ_sharpe=0.823, ρ_fitness=0.922, n=55.** Tiến trình:
   (1) Ban đầu panel S&P500 2015-2025: ρ=0.671 n=42. (2) **Điều tra 13 alpha drop** → root cause
   `EVAL KeyError: 'returns'` (returns là field WQ hợp lệ nhưng MarketData lưu riêng `.returns`, không trong
@@ -40,18 +43,20 @@
   gate trước khi đốt sim (ĐÃ GỠ ở Phase 3 — D9). Spec: `docs/superpowers/specs/2026-06-23-minibrain-into-existing-tool-design.md`.
   Plans: `docs/superpowers/plans/2026-06-24-minibrain-integration-master-plan.md` (P0-P9) +
   `2026-06-24-phase-3-backtester.md` + `2026-06-24-phase-4-metrics-gates.md`.
-- **Done Phase 0-4.5** (chi tiết trong Entries Session 02-07): P0 data foundation, P1 parser, P2 evaluator+27 op,
-  P3 backtester (MVP), P4 metrics+gates, P4.5 calibration (ρ_sharpe=0.823 đo thật). Tất cả merged main.
+- **Done Phase 0-6** (chi tiết Entries Session 02-09): P0 data, P1 parser, P2 evaluator+27 op, P3 backtester (MVP),
+  P4 metrics+gates, P4.5 calibration (ρ_sharpe=0.823), P5 database, P6 pool correlation. Tất cả merged main.
 - **In progress:** —
-- **Next step:** **Phase 6 — Pool correlation** (plan `docs/superpowers/plans/2026-06-24-phase-6-pool-corr.md`):
-  `src/backtest/pool_corr.py`; gate tiêu thụ `max_corr`; passing alpha → `save_pool_pnl`; candidate mới tính
-  `max|ρ|` vs pool trên ngày aligned, hard gate 0.70. Phase 5 đã cấp sẵn `load_pool`/`save_pool_pnl`. Đây cũng
-  là chỗ wire `self_corr` (P4 để dormant=0.0) thành số thật.
-- **Blockers / open risks:** (R2/Gap#3) bulk OHLCV chưa giải (chỉ ảnh hưởng calibration mở rộng universe, KHÔNG
-  chặn P6). **Minor mở (dọn sau, không chặn):** (P5) config_json/data_window opaque key chưa canonical (Phase 7/8
-  cache nên sort_keys=True); mypy debt baseline `declarative_base()` legacy trên src/storage. (P4) `RuntimeWarning:
-  Mean of empty slice` `ts_mean`; `filter.py` 2 lỗi mypy pre-existing. (P2) `inf` divide/0, log/0 chưa mask ở
-  Evaluator; fidelity WQ `trade_when`/`hump`. Legacy `client.py` 9 lỗi mypy + `test_db_postgres` 1 fail (psycopg).
+- **Next step:** **Phase 7 — GP Engine** (plan `docs/superpowers/plans/2026-06-24-phase-7-gp-engine.md`): seeded init
+  typed-tree trong depth cap, typed crossover/mutation (repair), multi-objective fitness gồm pool+population corr
+  penalty (NSGA-II/fitness-sharing), persist mọi individual, joblib parallel, sub-expr+result cache. **Đây cũng là
+  nơi WIRE pool corr vào loop sống** (P6 mới làm building blocks): `if verdict.passed: repo.save_pool_pnl(...)` +
+  dùng `evaluate_with_pool` + cân nhắc surface `worst_id`.
+- **Blockers / open risks:** (R2/Gap#3) bulk OHLCV chưa giải (chỉ ảnh hưởng calibration mở rộng universe). **Minor
+  mở (dọn sau):** (P6) `_pairwise_rho` dup-date lossy (benign); `evaluate_with_pool` bỏ worst_id (P7 nên dùng).
+  (P5) config_json/data_window opaque key chưa canonical (P7/8 cache nên sort_keys=True); mypy debt baseline
+  `declarative_base()` legacy trên src/storage. (P4) `RuntimeWarning: Mean of empty slice` `ts_mean`; `filter.py`
+  2 lỗi mypy pre-existing. (P2) `inf` divide/0, log/0 chưa mask Evaluator; fidelity WQ `trade_when`/`hump`. Legacy
+  `client.py` 9 lỗi mypy + `test_db_postgres` 1 fail (psycopg).
 - **MVP (Phases 1–3) reached:** ✅ YES (Phase 3 xong — parse→eval→build→backtest→equity chạy thông trên dữ liệu thật)
 - **Calibration ρ (Spearman, Sharpe):** not measured yet (Phase 4.5)
 
@@ -248,3 +253,37 @@
   cho alpha pass + `self_corr` thật (P4 dormant). Dùng `load_pool`/`save_pool_pnl` của MiniBrainRepository (Phase 5).
 - **Tests:** Xanh. 753 pass / 1 psycopg tiền-tồn. Mới: test_storage_models_minibrain (7) + test_migrate_minibrain (2)
   + test_minibrain_repository (14, gồm fix writeable) + test_result_cache (4) + integration (3).
+
+### [2026-06-25] Session 09 — Phase 6 Pool correlation (subagent-driven + opus final review, merged main)
+- **Phase:** Phase 6 — Pool correlation. HOÀN TẤT, merged main + pushed `707d12b..eb311aa`.
+- **Done:** Thực thi plan `2026-06-24-phase-6-pool-corr.md` bằng **subagent-driven-development** (theo yêu cầu user
+  "subagent + superpower"): 5 task (4.1 code + final review/merge), mỗi task 1 implementer (sonnet) + task-reviewer
+  + fix-loop. **6.1** `src/backtest/pool_corr.py` `PoolCorrelation.max_corr` (max|Pearson ρ| align np.intersect1d
+  trên dates giao nhau, bỏ qua alpha overlap<2/std=0 — KHÔNG ρ giả; trả (|ρ|, worst_id); KHÔNG import storage/gp/llm
+  — dependency rule B1). **6.1-fix Critical** (review opus tìm + sonnet fix `fe977a5`): `_pairwise_rho` `np.argsort`
+  cả 2 phía theo dates TRƯỚC `intersect1d`/`searchsorted` — trước đó dates chưa sort → ghép cặp sai âm thầm (ρ
+  đáng lẽ 1.0 ra 0.913) hoặc IndexError; regression test `test_unsorted_dates_do_not_corrupt_alignment`. **6.2**
+  `src/backtest/gates.py` `GateEvaluator.evaluate_with_pool` (lớp MỎNG: tính self_corr từ `pool_corr.max_corr` rồi
+  delegate `evaluate()` cũ — chữ ký cũ byte-identical, ngưỡng 0.70 vẫn chỉ ở `evaluate()`/`SELF_CORR_MAX`). **6.3**
+  (ADAPT) `MiniBrainRepository.load_pool` mở rộng trả `dict[int, tuple[(dates, pnl)]]` — giải Minor "dates_blob
+  chưa dùng" Phase 5; CHỈ sửa load_pool, KHÔNG đụng save_pool_pnl/model/AlphaRepository; pnl giữ `.copy()` (Phase 5
+  in-place fix). **6.4** integration `tests/integration/test_pool_corr_gate.py` end-to-end DB sqlite thật → upsert
+  +record_evaluation (FK thật) → save_pool_pnl → load_pool → PoolCorrelation → `evaluate_with_pool`: pool rỗng pass,
+  identical hard-fail self_corr, độc lập pass. Full suite **768 pass / 1 psycopg tiền-tồn**. Final review opus:
+  **Ready=YES, 0 Critical/Important** (tái lập fix sort + xác minh chuỗi dtype + không caller nào vỡ).
+- **Decisions:** (1) Plan Phase 6 viết TRƯỚC Phase 5 — pre-flight phát hiện 2 xung đột, **user duyệt 2 deviation**:
+  (a) dùng `MiniBrainRepository` + `PoolPnlModel` Phase 5 (đã có) thay vì thêm vào `AlphaRepository`+tạo model thứ 2
+  như plan gốc; (b) chỉ building blocks — KHÔNG wire vào `RefinementLoop` sống (loop hiện dùng `score_local_gate`
+  Phase 3, defer wire `evaluate_with_pool` + `save_pool_pnl(if passed)` sang Phase 7/8). (2) Fix sort dates THUỘC
+  6.1 (không defer 6.3) — alignment correctness là trách nhiệm đơn vị sở hữu logic; type alias `Dates`/docstring
+  không tuyên bố precondition sort.
+- **In progress:** —
+- **Blockers / open risks:** 2 Minor defer Phase 7/8: `_pairwise_rho` dup-date lossy (benign — PnL thật không trùng
+  ngày; có thể dedupe hoặc doc precondition); `evaluate_with_pool` bỏ `worst_id` (P7 nên nhét vào `hard_failures`
+  để rejection actionable cho refiner + thêm `if verdict.passed: repo.save_pool_pnl(...)` khi wire loop). Gap#3
+  bulk OHLCV không ảnh hưởng P7.
+- **Next step:** Phase 7 — GP Engine (plan `2026-06-24-phase-7-gp-engine.md`): seed init typed-tree, typed cross/mut,
+  multi-obj fitness gồm pool+pop corr penalty (NSGA-II/sharing), persist mọi individual, joblib parallel, sub-expr
+  + result cache. ĐÂY LÀ NƠI WIRE pool corr vào loop sống.
+- **Tests:** Xanh. 768 pass / 1 psycopg tiền-tồn. Mới: test_pool_corr (9, gồm fix sort regression) + test_gates_pool_corr
+  (4) + chỉnh test_minibrain_repository (+1 mới, sửa 2 cũ cho format tuple) + integration test_pool_corr_gate (1).
