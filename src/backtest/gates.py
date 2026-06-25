@@ -16,8 +16,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import numpy as np
+import numpy.typing as npt
+
 from config.thresholds import MAX_DEPTH, SELF_CORR_MAX, TURNOVER_BAND, WEIGHT_CONCENTRATION_CAP
 from src.backtest.metrics_local import AlphaMetrics
+from src.backtest.pool_corr import PoolCorrelation
+from src.local_types import Dates
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +72,20 @@ class GateEvaluator:
             hard_failures=hard_failures,
             soft_scores=soft_scores,
         )
+
+    def evaluate_with_pool(
+        self,
+        m: AlphaMetrics,
+        candidate_pnl: npt.NDArray[np.float64],
+        candidate_dates: Dates,
+        pool_corr: PoolCorrelation,
+        depth: int,
+        fields_ok: bool,
+    ) -> GateVerdict:
+        """Như evaluate(), nhưng self_corr tính thật từ pool_corr.max_corr(...) (Phase 6,
+        B9 master design) thay vì nhận tay — entrypoint nên dùng cho mọi candidate mới."""
+        self_corr, _worst_id = pool_corr.max_corr(candidate_pnl, candidate_dates)
+        return self.evaluate(m, self_corr=self_corr, depth=depth, fields_ok=fields_ok)
 
     def _turnover_band_score(self, turnover: float) -> float:
         lo, hi = TURNOVER_BAND
