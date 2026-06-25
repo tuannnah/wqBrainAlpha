@@ -86,13 +86,15 @@ def test_save_and_load_pool_pnl_roundtrip(repo):
     repo.save_pool_pnl(eval_id, dates, pnl)
     pool = repo.load_pool()
     assert eval_id in pool
-    np.testing.assert_allclose(pool[eval_id], pnl)
+    loaded_dates, loaded_pnl = pool[eval_id]
+    assert np.array_equal(loaded_dates, dates)
+    np.testing.assert_allclose(loaded_pnl, pnl)
 
 
 def test_load_pool_returns_writeable_array_for_inplace_ops(repo):
     """Phase 6 (max_corr trên pool) cần thao tác in-place (vd demean `arr -= mean`) trên
-    mảng trả về từ load_pool; np.frombuffer() trần trả mảng read-only và sẽ raise
-    ValueError khi bị trừ in-place — load_pool phải trả bản ghi-được (.copy())."""
+    mảng pnl trả về từ load_pool; np.frombuffer() trần trả mảng read-only và sẽ raise
+    ValueError khi bị trừ in-place — load_pool phải trả bản pnl ghi-được (.copy())."""
     expr_id = repo.upsert_expression("close", "hash1", depth=1, complexity=1, fields={"close"})
     eval_id = repo.record_evaluation(expr_id, _cfg_json(), "w1", _metrics(), 0.1, "passed", [], 1)
     dates = np.array(["2021-01-01", "2021-01-02", "2021-01-03"], dtype="datetime64[D]")
@@ -101,9 +103,47 @@ def test_load_pool_returns_writeable_array_for_inplace_ops(repo):
 
     pool = repo.load_pool()
 
-    assert pool[eval_id].flags.writeable is True
-    pool[eval_id] -= 1.0  # thao tác in-place kiểu Phase 6 max_corr; không được raise
-    np.testing.assert_allclose(pool[eval_id], pnl - 1.0)
+    _, loaded_pnl = pool[eval_id]
+    assert loaded_pnl.flags.writeable is True
+    loaded_pnl -= 1.0  # thao tác in-place kiểu Phase 6 max_corr; không được raise
+    np.testing.assert_allclose(loaded_pnl, pnl - 1.0)
+
+
+def test_load_pool_roundtrips_dates_and_pnl_as_tuple(repo):
+    """Khóa hành vi: load_pool trả {evaluation_id: (dates, pnl)} đúng format mà
+    PoolCorrelation.__init__ (Task 6.1) mong đợi — kể cả khi 2 alpha trong pool có lịch
+    sử dài-ngắn khác nhau (alpha A 3 ngày, alpha B 10 ngày, mốc thời gian khác nhau)."""
+    expr_a = repo.upsert_expression("close", "hash_a", depth=1, complexity=1, fields={"close"})
+    eval_a = repo.record_evaluation(expr_a, _cfg_json(), "w1", _metrics(), 0.1, "passed", [], 1)
+    dates_a = np.array(["2021-01-01", "2021-01-02", "2021-01-03"], dtype="datetime64[D]")
+    pnl_a = np.array([0.01, -0.02, 0.03], dtype=np.float64)
+    repo.save_pool_pnl(eval_a, dates_a, pnl_a)
+
+    expr_b = repo.upsert_expression("open", "hash_b", depth=1, complexity=1, fields={"open"})
+    eval_b = repo.record_evaluation(expr_b, _cfg_json(), "w1", _metrics(), 0.2, "passed", [], 2)
+    dates_b = np.array(
+        ["2022-06-01", "2022-06-02", "2022-06-03", "2022-06-04", "2022-06-05",
+         "2022-06-06", "2022-06-07", "2022-06-08", "2022-06-09", "2022-06-10"],
+        dtype="datetime64[D]",
+    )
+    pnl_b = np.arange(10, dtype=np.float64) * 0.001
+    repo.save_pool_pnl(eval_b, dates_b, pnl_b)
+
+    pool = repo.load_pool()
+
+    assert set(pool.keys()) == {eval_a, eval_b}
+
+    loaded_dates_a, loaded_pnl_a = pool[eval_a]
+    assert loaded_dates_a.shape == (3,)
+    assert loaded_pnl_a.shape == (3,)
+    assert np.array_equal(loaded_dates_a, dates_a)
+    np.testing.assert_allclose(loaded_pnl_a, pnl_a)
+
+    loaded_dates_b, loaded_pnl_b = pool[eval_b]
+    assert loaded_dates_b.shape == (10,)
+    assert loaded_pnl_b.shape == (10,)
+    assert np.array_equal(loaded_dates_b, dates_b)
+    np.testing.assert_allclose(loaded_pnl_b, pnl_b)
 
 
 def test_dead_field_add_and_check(repo):

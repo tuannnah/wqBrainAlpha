@@ -10,6 +10,7 @@ import numpy as np
 import numpy.typing as npt
 
 from src.backtest.metrics_local import AlphaMetrics
+from src.local_types import Dates
 from src.simulation.simulator import SimulationResult
 from src.storage.models import (
     AlphaModel,
@@ -311,19 +312,24 @@ class MiniBrainRepository:
         finally:
             session.close()
 
-    def load_pool(self) -> dict[int, npt.NDArray[np.float64]]:
-        """Đọc TẤT CẢ PoolPnlModel, trả {evaluation_id: pnl_array} (Phase 6 max_corr chỉ
-        cần pnl theo evaluation_id, không cần dates)."""
+    def load_pool(self) -> dict[int, tuple[Dates, npt.NDArray[np.float64]]]:
+        """Đọc TẤT CẢ PoolPnlModel, trả {evaluation_id: (dates, pnl)} — PoolCorrelation
+        (Task 6.1) cần CẢ dates để align candidate với từng alpha trong pool có lịch sử
+        dài-ngắn khác nhau (PoolCorrelation.__init__ nhận đúng dict[int, tuple[Dates,
+        NDArray[float64]]] này)."""
         session = self.session_factory()
         try:
             rows = session.query(PoolPnlModel).all()
-            return {
-                # .copy() bắt buộc: np.frombuffer() trần trả mảng read-only (view trên
-                # buffer bytes) — Phase 6 (max_corr) thao tác in-place (demean) trên mảng
-                # này sẽ raise ValueError nếu không copy thành bản ghi-được.
-                row.evaluation_id: np.frombuffer(row.pnl_blob, dtype=np.float64).copy()
-                for row in rows
-            }
+            result: dict[int, tuple[Dates, npt.NDArray[np.float64]]] = {}
+            for row in rows:
+                dates = np.frombuffer(row.dates_blob, dtype="datetime64[D]")
+                # .copy() bắt buộc cho pnl: np.frombuffer() trần trả mảng read-only (view
+                # trên buffer bytes) — Phase 6 (max_corr) thao tác in-place (demean) trên
+                # mảng này sẽ raise ValueError nếu không copy thành bản ghi-được. dates chỉ
+                # đọc (sort/searchsorted không in-place) nên không cần copy.
+                pnl = np.frombuffer(row.pnl_blob, dtype=np.float64).copy()
+                result[row.evaluation_id] = (dates, pnl)
+            return result
         finally:
             session.close()
 
