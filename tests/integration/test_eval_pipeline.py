@@ -46,5 +46,7 @@ def test_gp_function_set_loai_wrapper_config() -> None:
     gp_names = {s.name for s in reg.gp_function_set()}
     assert "group_neutralize" not in gp_names
     assert "scale" not in gp_names
-    assert "regression_neut" in gp_names
-    assert "vector_neut" in gp_names
+    # B5 stage separation: neutralization (regression_neut/vector_neut) là wrapper-stage
+    # của PortfolioConfig Phase 3, KHÔNG phải signal core -> loại khỏi function set GP.
+    assert "regression_neut" not in gp_names
+    assert "vector_neut" not in gp_names

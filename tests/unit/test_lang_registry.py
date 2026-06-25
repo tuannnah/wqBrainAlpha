@@ -103,3 +103,17 @@ def test_default_registry_add_is_commutative_others_not():
     assert reg.get("add").commutative is True
     assert reg.get("subtract").commutative is False
     assert reg.get("divide").commutative is False
+
+
+def test_neutralization_decay_delay_not_in_gp_function_set():
+    """B5 stage separation: regression_neut/vector_neut (neutralization) và
+    ts_decay_linear/ts_delay (config wrapper của PortfolioConfig Phase 3) KHÔNG được nằm
+    trong function set GP — chúng là stage wrapper, không phải signal core."""
+    import src.operators_local  # noqa: F401  (side-effect: nạp operator thật vào REGISTRY)
+
+    reg = default_registry()
+    fn_names = {spec.name for spec in reg.gp_function_set()}
+    for excluded in ("regression_neut", "vector_neut", "ts_decay_linear", "ts_delay"):
+        assert excluded not in fn_names, (
+            f"operator stage-wrapper {excluded!r} không được có trong gp_function_set()"
+        )

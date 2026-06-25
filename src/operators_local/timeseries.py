@@ -46,7 +46,8 @@ def ts_std(ctx: EvalContext, x: Panel, d: int) -> Panel:
 
 
 @register(name="ts_delay", category=OpCategory.TIME_SERIES,
-          signature=(ArgKind.PANEL, ArgKind.WINDOW), bounded=False, commutative=False)
+          signature=(ArgKind.PANEL, ArgKind.WINDOW), bounded=False, commutative=False,
+          gp_usable=False)
 def ts_delay(ctx: EvalContext, x: Panel, d: int) -> Panel:
     out = np.full_like(x, np.nan, dtype=np.float64)
     d = int(d)
@@ -122,7 +123,8 @@ def ts_corr(ctx: EvalContext, x: Panel, y: Panel, d: int) -> Panel:
 
 
 @register(name="ts_decay_linear", category=OpCategory.TIME_SERIES,
-          signature=(ArgKind.PANEL, ArgKind.WINDOW), bounded=False, commutative=False)
+          signature=(ArgKind.PANEL, ArgKind.WINDOW), bounded=False, commutative=False,
+          gp_usable=False)
 def ts_decay_linear(ctx: EvalContext, x: Panel, d: int) -> Panel:
     out = np.full_like(x, np.nan, dtype=np.float64)
     d = int(d)
