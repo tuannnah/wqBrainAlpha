@@ -35,8 +35,10 @@ def test_vector_neut_truc_giao_voi_y(small_panel) -> None:
     assert abs(dot) < 1e-6
 
 
-def test_categoria_e_gp_usable(small_panel) -> None:
+def test_categoria_e_gp_usable_false(small_panel) -> None:
+    """B5 stage separation: regression_neut/vector_neut là wrapper-stage (neutralization là
+    PortfolioConfig của Phase 3, KHÔNG phải signal core của GP) -> gp_usable=False."""
     spec_r = default_registry().get("regression_neut")
     spec_v = default_registry().get("vector_neut")
-    assert spec_r.gp_usable is True
-    assert spec_v.gp_usable is True
+    assert spec_r.gp_usable is False
+    assert spec_v.gp_usable is False

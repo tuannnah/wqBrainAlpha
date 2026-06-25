@@ -20,9 +20,13 @@ _MAX_CROSSOVER_RETRIES = 10
 
 
 def _panel_compatible_subtrees(root: Node, registry: OperatorRegistry) -> list[Node]:
-    """Subtree mà vai trò của nó trong cây cha (nếu có) là ArgKind.PANEL. Root luôn hợp lệ
-    (không phải tham số của ai)."""
-    result: list[Node] = [root]
+    """Mọi subtree đóng vai ArgKind.PANEL trong cây gốc — tâm điểm hợp lệ cho mọi variation
+    operator (crossover/subtree/hoist). ``root`` chỉ được tính nếu bản thân nó là tín hiệu
+    PANEL (``Call`` hoặc ``Field``); root là ``Constant`` (literal số đứng trần) KHÔNG phải
+    PANEL nên bị loại — tránh tráo Constant vào slot PANEL của cây khác."""
+    result: list[Node] = []
+    if isinstance(root, (Call, Field)):
+        result.append(root)
 
     def _walk(node: Node) -> None:
         if not isinstance(node, Call):
@@ -61,6 +65,8 @@ def crossover(
     for _ in range(_MAX_CROSSOVER_RETRIES):
         points_a = _panel_compatible_subtrees(a, registry)
         points_b = _panel_compatible_subtrees(b, registry)
+        if not points_a or not points_b:
+            return a, b  # một bên không có điểm PANEL nào (vd Constant đứng trần) -> không tráo
         pa = points_a[rng.integers(0, len(points_a))]
         pb = points_b[rng.integers(0, len(points_b))]
 
@@ -166,9 +172,13 @@ def subtree_mutation(
     node: Node, registry: OperatorRegistry, rng: np.random.Generator,
     fields: tuple[str, ...], max_depth: int = MAX_DEPTH,
 ) -> Node:
-    """Thay 1 subtree ngẫu nhiên bằng cây ngẫu nhiên mới, depth giới hạn theo ``remaining``
-    (đảm bảo cây kết quả không vượt ``max_depth``). Trả cây mới."""
-    targets = all_subtrees(node)
+    """Thay 1 subtree PANEL-compatible bằng cây ngẫu nhiên mới, depth giới hạn theo
+    ``remaining`` (đảm bảo cây kết quả không vượt ``max_depth``). Chỉ chọn tâm điểm trong
+    các vị trí PANEL (qua ``_panel_compatible_subtrees``) — replacement luôn là cây PANEL
+    nên kết quả type-safe (không chèn Constant vào slot WINDOW/SCALAR). Trả cây mới."""
+    targets = _panel_compatible_subtrees(node, registry)
+    if not targets:
+        return node  # không có vị trí PANEL nào (vd Constant đứng trần) -> giữ nguyên
     target = targets[rng.integers(0, len(targets))]
     target_depth = DepthVisitor().visit(target)
     full_depth = DepthVisitor().visit(node)
@@ -180,10 +190,12 @@ def subtree_mutation(
     return _replace_subtree(node, target, new_subtree)
 
 
-def hoist_mutation(node: Node, rng: np.random.Generator) -> Node:
-    """Nâng 1 subtree KHÔNG PHẢI root lên làm cây toàn bộ — chống bloat (B13/R6) bằng cách
-    rút ngắn cây. Cây chỉ 1 node (leaf đơn) -> trả nguyên ``node`` (không có gì để hoist)."""
-    candidates = [s for s in all_subtrees(node) if s is not node]
+def hoist_mutation(node: Node, rng: np.random.Generator, registry: OperatorRegistry | None = None) -> Node:
+    """Nâng 1 subtree PANEL-compatible KHÔNG PHẢI root lên làm cây toàn bộ — chống bloat
+    (B13/R6) bằng cách rút ngắn cây. Chỉ chọn từ các vị trí PANEL nên gốc kết quả luôn là
+    tín hiệu (Call/Field), KHÔNG bao giờ Constant. Không có ứng viên -> trả nguyên ``node``."""
+    reg = registry if registry is not None else default_registry()
+    candidates = [s for s in _panel_compatible_subtrees(node, reg) if s is not node]
     if not candidates:
         return node
     return candidates[rng.integers(0, len(candidates))]

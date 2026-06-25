@@ -14,10 +14,24 @@ from src.gp.variation import (
     subtree_mutation,
 )
 from src.lang.ast import Call, Constant, Field, Node
-from src.lang.registry import ArgKind, default_registry
+from src.lang.registry import ArgKind, OperatorRegistry, default_registry
 from src.lang.visitors import DepthVisitor, Serializer
 
 _FIELDS = ("close", "volume", "returns")
+
+
+def _check_panel_invariant(node: Node, registry: OperatorRegistry) -> None:
+    """Mỗi đối số ở slot ArgKind.PANEL của một Call phải là Call hoặc Field (tín hiệu),
+    không bao giờ là Constant (literal số). Khoá regression cho lỗi typed GP Phase 7."""
+    if not isinstance(node, Call):
+        return
+    spec = registry.get(node.op)
+    for child, kind in zip(node.args, spec.signature):
+        if kind is ArgKind.PANEL:
+            assert not isinstance(child, Constant), (
+                f"vi phạm bất biến PANEL: {node.op!r} có Constant ở slot PANEL"
+            )
+        _check_panel_invariant(child, registry)
 
 
 def _tree_a() -> Node:
@@ -192,3 +206,47 @@ def test_subtree_mutation_is_deterministic_for_same_seed():
     m1 = subtree_mutation(_tree_a(), registry, np.random.default_rng(8), fields=_FIELDS, max_depth=7)
     m2 = subtree_mutation(_tree_a(), registry, np.random.default_rng(8), fields=_FIELDS, max_depth=7)
     assert Serializer().visit(m1) == Serializer().visit(m2)
+
+
+# --- Bất biến kiểu (typed GP): variation không bao giờ tạo Constant-at-PANEL ---
+
+def _tree_with_constant_leaf() -> Node:
+    """Cây có cả Constant ở slot WINDOW (5.0) lẫn signal — mồi cho hoist/subtree mutation
+    để lộ lỗi tráo subtree vào/từ vị trí sai kiểu."""
+    return Call(op="ts_mean", args=(Call(op="rank", args=(Field("close"),)), Constant(5.0)))
+
+
+def test_subtree_mutation_preserves_type_invariant():
+    """1000 lần subtree_mutation trên seed kinh điển: mọi cây kết quả phải giữ bất biến
+    PANEL (không Constant ở slot PANEL)."""
+    registry = default_registry()
+    seed_tree = _tree_with_constant_leaf()
+    for seed in range(1000):
+        rng = np.random.default_rng(seed)
+        mutated = subtree_mutation(seed_tree, registry, rng, fields=_FIELDS, max_depth=7)
+        _check_panel_invariant(mutated, registry)
+
+
+def test_hoist_mutation_never_returns_constant_root():
+    """1000 lần hoist trên cây có Constant leaf: gốc kết quả luôn là Call hoặc Field, KHÔNG
+    bao giờ là Constant (Constant đứng trần không phải tín hiệu PANEL)."""
+    seed_tree = _tree_with_constant_leaf()
+    for seed in range(1000):
+        rng = np.random.default_rng(seed)
+        hoisted = hoist_mutation(seed_tree, rng)
+        assert not isinstance(hoisted, Constant), (
+            f"seed={seed}: hoist trả Constant root — vi phạm bất biến PANEL"
+        )
+
+
+def test_crossover_never_swaps_constant_root():
+    """Crossover cá thể chỉ-Constant với cây bình thường không được sinh Constant-at-PANEL
+    ở bất kỳ con nào (root Constant không phải subtree PANEL-compatible)."""
+    registry = default_registry()
+    const_only = Constant(3.0)
+    normal = _tree_a()
+    for seed in range(200):
+        rng = np.random.default_rng(seed)
+        ca, cb = crossover(const_only, normal, rng, max_depth=7)
+        _check_panel_invariant(ca, registry)
+        _check_panel_invariant(cb, registry)

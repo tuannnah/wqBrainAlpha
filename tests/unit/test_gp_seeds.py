@@ -1,6 +1,6 @@
-"""Test seeds.py: seed cores tu families/novel_ideas parse thanh Node hop le, seed LLM
-qua fake hypothesis_gen/translator (khong mang thuc), all_seed_cores gop dung + fail-fast
-khi with_llm=True thieu dependency."""
+"""Test seeds.py: seed cores từ families/novel_ideas parse thành Node hợp lệ, seed LLM
+qua fake hypothesis_gen/translator (không mạng thực), all_seed_cores gộp đúng + fail-fast
+khi with_llm=True thiếu dependency."""
 
 from __future__ import annotations
 

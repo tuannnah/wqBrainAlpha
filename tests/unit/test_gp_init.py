@@ -1,5 +1,5 @@
-"""Test init.py: random_tree full/grow dung depth, ramped_half_and_half da dang do sau,
-init_population uu tien seed + lap day random, tat ca <= max_depth, deterministic theo rng
+"""Test init.py: random_tree full/grow đúng depth, ramped_half_and_half đa dạng độ sâu,
+init_population ưu tiên seed + lấp đầy random, tất cả <= max_depth, deterministic theo rng
 inject."""
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def test_ramped_half_and_half_spans_multiple_depths():
     assert len(trees) == 20
     assert min(depths) >= 2
     assert max(depths) <= 5
-    assert len(depths) > 1  # da dang do sau, khong don mot muc
+    assert len(depths) > 1  # đa dạng độ sâu, không dồn một mức
 
 
 def test_init_population_uses_all_seeds_when_fewer_than_population_size():
@@ -64,7 +64,7 @@ def test_init_population_uses_all_seeds_when_fewer_than_population_size():
     )
     assert len(pop) == 10
     assert all(isinstance(ind, Individual) for ind in pop)
-    assert any(ind.expr == seed for ind in pop)  # seed nguyen ban co mat
+    assert any(ind.expr == seed for ind in pop)  # seed nguyên bản có mặt
 
 
 def test_init_population_caps_seeds_when_more_than_population_size():

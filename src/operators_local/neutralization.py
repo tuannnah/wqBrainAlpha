@@ -11,7 +11,8 @@ from src.local_types import Panel
 
 
 @register(name="regression_neut", category=OpCategory.NEUTRALIZATION,
-          signature=(ArgKind.PANEL, ArgKind.PANEL), bounded=False, commutative=False)
+          signature=(ArgKind.PANEL, ArgKind.PANEL), bounded=False, commutative=False,
+          gp_usable=False)
 def regression_neut(ctx: EvalContext, y: Panel, x: Panel) -> Panel:
     """Residual cross-sectional per-row của y hồi quy OLS (với intercept) theo x."""
     out = np.full_like(y, np.nan, dtype=np.float64)
@@ -32,7 +33,8 @@ def regression_neut(ctx: EvalContext, y: Panel, x: Panel) -> Panel:
 
 
 @register(name="vector_neut", category=OpCategory.NEUTRALIZATION,
-          signature=(ArgKind.PANEL, ArgKind.PANEL), bounded=False, commutative=False)
+          signature=(ArgKind.PANEL, ArgKind.PANEL), bounded=False, commutative=False,
+          gp_usable=False)
 def vector_neut(ctx: EvalContext, x: Panel, y: Panel) -> Panel:
     """Trừ phần chiếu của x lên y mỗi hàng: x - (x.y / y.y) * y, chỉ trên in-universe."""
     out = np.full_like(x, np.nan, dtype=np.float64)

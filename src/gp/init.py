@@ -27,29 +27,36 @@ def random_tree(
     fields: tuple[str, ...],
     full: bool,
     min_depth: int = 1,
+    *,
+    kind: ArgKind = ArgKind.PANEL,
 ) -> Node:
     """Sinh 1 cây ngẫu nhiên sâu tối đa ``depth``, sâu tối thiểu ``min_depth``. full=True:
     mọi nhánh đi tới đúng depth (cây "full"). full=False ("grow"): dừng sớm ngẫu nhiên ở
     mỗi tầng, NHƯNG không dừng trước khi đạt ``min_depth`` (đảm bảo cây grow ở tầng thấp
-    nhất của ramped half-and-half vẫn đạt sàn độ sâu, không co thành leaf đơn)."""
+    nhất của ramped half-and-half vẫn đạt sàn độ sâu, không co thành leaf đơn).
+
+    ``kind`` là vai trò mà cây sinh ra sẽ đóng trong cây cha: mặc định ``ArgKind.PANEL``
+    (cây phải là tín hiệu — leaf chỉ được là Field, KHÔNG Constant)."""
     if depth <= 1:
-        return _random_leaf(rng, fields)
+        return _random_leaf(rng, fields, kind=kind)
 
     must_expand = min_depth > 1  # còn phải mở rộng để chạm sàn min_depth
     stop_early = (not full) and (not must_expand) and rng.random() < (1.0 / depth)
     if stop_early:
-        return _random_leaf(rng, fields)
+        return _random_leaf(rng, fields, kind=kind)
 
     ops = registry.gp_function_set()
     if not ops:
-        return _random_leaf(rng, fields)
+        return _random_leaf(rng, fields, kind=kind)
     spec = ops[rng.integers(0, len(ops))]
 
     args: list[Node] = []
-    for kind in spec.signature:
-        match kind:
+    for arg_kind in spec.signature:
+        match arg_kind:
             case ArgKind.PANEL:
-                args.append(random_tree(registry, rng, depth - 1, fields, full, min_depth - 1))
+                args.append(random_tree(
+                    registry, rng, depth - 1, fields, full, min_depth - 1, kind=ArgKind.PANEL,
+                ))
             case ArgKind.WINDOW:
                 choice = spec.window_choices[rng.integers(0, len(spec.window_choices))]
                 args.append(Constant(float(choice)))
@@ -64,10 +71,14 @@ def random_tree(
     return Call(op=spec.name, args=tuple(args))
 
 
-def _random_leaf(rng: np.random.Generator, fields: tuple[str, ...]) -> Node:
-    if rng.random() < 0.7:  # ưu tiên field hơn constant ở leaf (tín hiệu thật > số tay)
-        return Field(fields[rng.integers(0, len(fields))])
-    return Constant(float(rng.integers(2, 60)))  # constant kiểu window nhỏ, hợp lý làm leaf
+def _random_leaf(
+    rng: np.random.Generator, fields: tuple[str, ...], *, kind: ArgKind = ArgKind.PANEL,
+) -> Node:
+    """Leaf cho cây ngẫu nhiên. Ở slot PANEL CHỈ trả ``Field`` (tín hiệu thật — Constant là
+    literal số, không phải PANEL signal). Ở slot SCALAR mới được trả ``Constant`` float."""
+    if kind is ArgKind.SCALAR:
+        return Constant(float(rng.uniform(*_SCALAR_RANGE)))
+    return Field(fields[rng.integers(0, len(fields))])
 
 
 def ramped_half_and_half(
