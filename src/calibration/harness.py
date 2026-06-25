@@ -132,6 +132,13 @@ def make_local_scorer(data: "MarketData") -> LocalScorer:
     from src.lang.parser import ParseError, parse
     from src.lang.registry import default_registry
 
+    # `returns` là field WQ hợp lệ nhưng MarketData lưu riêng ở .returns (cho backtester),
+    # KHÔNG trong .fields -> expr tham chiếu `returns` sẽ KeyError. Expose nó như field để
+    # re-score được (giá trị y hệt mảng close-to-close backtester dùng). Lỗ hổng tương tự
+    # tồn tại ở src/backtest/gate.py::score_local_gate (RefinementLoop) — follow-up sửa chung.
+    if "returns" not in data.fields:
+        data.fields["returns"] = data.returns
+
     cfg = PortfolioConfig(
         neutralization=Neutralization.NONE, decay=0, truncation=0.0, scale_book=1.0, delay=1,
     )

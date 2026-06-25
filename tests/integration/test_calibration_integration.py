@@ -47,6 +47,15 @@ def test_unparseable_expression_returns_none(small_panel: MarketData) -> None:
     assert scorer("rank(") is None
 
 
+def test_returns_is_queryable_as_field(small_panel: MarketData) -> None:
+    # `returns` là field WQ hợp lệ; MarketData lưu nó ở .returns (không trong .fields).
+    # make_local_scorer phải expose nó để expr tham chiếu `returns` re-score được (không None).
+    scorer = make_local_scorer(small_panel)
+    score = scorer("rank(returns)")
+    assert score is not None
+    assert math.isfinite(score.sharpe)
+
+
 def test_harness_end_to_end_with_real_scorer(small_panel: MarketData) -> None:
     harness = CalibrationHarness(scorer=make_local_scorer(small_panel))
     report = harness.run(_records())
