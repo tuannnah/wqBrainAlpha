@@ -13,7 +13,7 @@ from config.thresholds import MAX_DEPTH
 from src.gp.individual import Individual
 from src.gp.init import random_tree
 from src.lang.ast import Call, Constant, Field, Node
-from src.lang.registry import ArgKind, OperatorRegistry, default_registry
+from src.lang.registry import ArgKind, OperatorRegistry, OperatorSpec, default_registry
 from src.lang.visitors import DepthVisitor, all_subtrees
 
 _MAX_CROSSOVER_RETRIES = 10
@@ -71,12 +71,42 @@ def crossover(
     return a, b
 
 
+def _constant_arg_kind(root: Node, target: Constant, registry: OperatorRegistry) -> ArgKind | None:
+    """Trả ArgKind của ``target`` xét theo vị trí trong cây cha; None nếu target là root
+    (Constant đứng trần — không có cha) hoặc parent op không có trong registry."""
+
+    def _walk(node: Node) -> ArgKind | None:
+        if not isinstance(node, Call):
+            return None
+        try:
+            spec = registry.get(node.op)
+        except KeyError:
+            return None
+        for child, kind in zip(node.args, spec.signature):
+            if child is target:
+                return kind
+            found = _walk(child)
+            if found is not None:
+                return found
+        return None
+
+    return _walk(root)
+
+
 def point_mutation(
     node: Node, registry: OperatorRegistry, rng: np.random.Generator, fields: tuple[str, ...],
 ) -> Node:
-    """Đổi tại CHỖ 1 node: Field -> field khác; Constant -> perturb Gaussian; Call -> đổi
-    op sang operator khác CÙNG signature (không có thì giữ nguyên). Trả cây mới (AST bất
-    biến — không sửa ``node`` gốc)."""
+    """Đổi tại CHỖ 1 node, type-aware theo vai trò trong cây cha:
+
+    - Field -> field khác.
+    - Constant ở vị trí WINDOW của cha -> resample từ ``parent_spec.window_choices`` (giữ
+      đúng kiểu int — KHÔNG perturb Gaussian, vì float lẻ ở window là type-invalid theo WQ).
+    - Constant ở vị trí SCALAR (hoặc Constant đứng trần không có cha) -> perturb Gaussian σ=0.5.
+    - Constant ở vị trí khác (vd GROUP literal) -> giữ nguyên.
+    - Call -> đổi op sang operator khác CÙNG signature (không có thì giữ nguyên).
+
+    Trả cây mới (AST bất biến — không sửa ``node`` gốc).
+    """
     targets = all_subtrees(node)
     target = targets[rng.integers(0, len(targets))]
 
@@ -85,8 +115,19 @@ def point_mutation(
         return _replace_subtree(node, target, replacement)
 
     if isinstance(target, Constant):
-        replacement = Constant(float(target.value) + float(rng.normal(0, 0.5)))
-        return _replace_subtree(node, target, replacement)
+        kind = _constant_arg_kind(node, target, registry)
+        if kind is ArgKind.WINDOW:
+            # tìm parent spec để lấy window_choices (đúng theo CHÍNH operator cha — không
+            # default; brand-mới nếu cha có choices riêng)
+            parent_spec = _find_parent_spec(node, target, registry)
+            choices = parent_spec.window_choices if parent_spec is not None else (5, 10, 20, 60, 120)
+            replacement = Constant(float(choices[rng.integers(0, len(choices))]))
+            return _replace_subtree(node, target, replacement)
+        if kind is ArgKind.SCALAR or kind is None:
+            replacement = Constant(float(target.value) + float(rng.normal(0, 0.5)))
+            return _replace_subtree(node, target, replacement)
+        # Constant ở GROUP/PANEL slot (hiếm — vd group literal): không perturb
+        return node
 
     # target là Call: đổi op sang operator khác cùng signature
     assert isinstance(target, Call)  # narrowing — leaf đã xử lý ở hai nhánh trên
@@ -100,6 +141,25 @@ def point_mutation(
     new_op = candidates[rng.integers(0, len(candidates))]
     replacement = Call(op=new_op.name, args=target.args)
     return _replace_subtree(node, target, replacement)
+
+
+def _find_parent_spec(
+    root: Node, target: Constant, registry: OperatorRegistry,
+) -> OperatorSpec | None:
+    """Tìm OperatorSpec của Call CHA trực tiếp của ``target``; None nếu không tìm thấy."""
+    if not isinstance(root, Call):
+        return None
+    try:
+        spec: OperatorSpec | None = registry.get(root.op)
+    except KeyError:
+        spec = None
+    for child in root.args:
+        if child is target:
+            return spec
+        found = _find_parent_spec(child, target, registry)
+        if found is not None:
+            return found
+    return None
 
 
 def subtree_mutation(

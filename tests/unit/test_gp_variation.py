@@ -14,7 +14,7 @@ from src.gp.variation import (
     subtree_mutation,
 )
 from src.lang.ast import Call, Constant, Field, Node
-from src.lang.registry import default_registry
+from src.lang.registry import ArgKind, default_registry
 from src.lang.visitors import DepthVisitor, Serializer
 
 _FIELDS = ("close", "volume", "returns")
@@ -85,3 +85,110 @@ def test_dedup_population_removes_structural_duplicates_keeps_first():
     assert len(result) == 2
     assert result[0] is ind1
     assert result[1] is ind3
+
+
+# --- Type-aware Constant mutation: WINDOW phải int từ window_choices, SCALAR có thể float ---
+
+def test_point_mutation_window_stays_int_from_choices():
+    """Constant ở slot WINDOW (vd ts_mean(close, 5)) phải resample từ window_choices của
+    chính operator cha — KHÔNG perturb Gaussian (float lẻ -> type-invalid theo WQ)."""
+    registry = default_registry()
+    spec = registry.get("ts_mean")
+    allowed = set(spec.window_choices)
+    tree = Call(op="ts_mean", args=(Field("close"), Constant(5.0)))
+    rng = np.random.default_rng(123)
+    # mutate nhiều lần, chỉ kiểm các lần điểm chọn rơi vào Constant
+    for _ in range(60):
+        mutated = point_mutation(tree, registry, rng, fields=_FIELDS)
+        assert isinstance(mutated, Call)
+        win_node = mutated.args[1]
+        # nếu Constant đổi -> giá trị phải là int VÀ thuộc window_choices
+        if isinstance(win_node, Constant) and win_node.value != 5.0:
+            assert win_node.value.is_integer(), f"window phải là int, got {win_node.value!r}"
+            assert int(win_node.value) in allowed, f"window {int(win_node.value)} ngoài choices {allowed}"
+
+
+def test_point_mutation_scalar_can_perturb_gaussian():
+    """Constant ở slot SCALAR -> perturb Gaussian (có thể ra float lẻ). Đăng ký 1
+    operator tổng hợp tại chỗ có signature (PANEL, SCALAR) để kiểm — tránh phụ thuộc
+    vào operator hiện hữu mà có thể có sig khác về sau."""
+    from src.lang.registry import OpCategory, OperatorSpec
+    registry = default_registry()
+    registry.register(OperatorSpec(
+        name="_test_panel_scalar", category=OpCategory.ARITHMETIC,
+        signature=(ArgKind.PANEL, ArgKind.SCALAR),
+        impl=lambda *_: None, bounded=False,
+    ))
+    try:
+        tree = Call(op="_test_panel_scalar", args=(Field("close"), Constant(1.0)))
+        saw_non_integer = False
+        for seed in range(40):
+            rng = np.random.default_rng(seed)
+            mutated = point_mutation(tree, registry, rng, fields=_FIELDS)
+            assert isinstance(mutated, Call)
+            scalar_node = mutated.args[1]
+            if isinstance(scalar_node, Constant) and not scalar_node.value.is_integer():
+                saw_non_integer = True
+                break
+        assert saw_non_integer, "SCALAR perturb phải có thể ra giá trị non-integer ít nhất 1 lần"
+    finally:
+        # cleanup: xóa operator test để không rò ra test khác
+        registry._ops.pop("_test_panel_scalar", None)
+
+
+# --- "Cây con != cha mẹ" cho cả 3 variation operator ---
+
+def test_point_mutation_produces_different_tree():
+    """Có seed sao cho point_mutation thực sự thay đổi cây (không phải trùng giá trị)."""
+    registry = default_registry()
+    tree = _tree_a()
+    serialized_orig = Serializer().visit(tree)
+    saw_diff = False
+    for seed in range(30):
+        mutated = point_mutation(tree, registry, np.random.default_rng(seed), fields=_FIELDS)
+        if Serializer().visit(mutated) != serialized_orig:
+            saw_diff = True
+            break
+    assert saw_diff, "point_mutation phải sinh được cây khác cha mẹ với ít nhất 1 seed"
+
+
+def test_subtree_mutation_produces_different_tree():
+    registry = default_registry()
+    tree = _tree_a()
+    serialized_orig = Serializer().visit(tree)
+    saw_diff = False
+    for seed in range(30):
+        mutated = subtree_mutation(tree, registry, np.random.default_rng(seed), fields=_FIELDS, max_depth=7)
+        if Serializer().visit(mutated) != serialized_orig:
+            saw_diff = True
+            break
+    assert saw_diff, "subtree_mutation phải sinh được cây khác cha mẹ với ít nhất 1 seed"
+
+
+def test_crossover_produces_different_tree():
+    """Với cha mẹ khác nhau, crossover phải sinh được ít nhất 1 con khác cả hai cha mẹ."""
+    sa, sb = Serializer().visit(_tree_a()), Serializer().visit(_tree_b())
+    saw_diff = False
+    for seed in range(30):
+        ca, cb = crossover(_tree_a(), _tree_b(), np.random.default_rng(seed), max_depth=7)
+        sca, scb = Serializer().visit(ca), Serializer().visit(cb)
+        if sca != sa or scb != sb:
+            saw_diff = True
+            break
+    assert saw_diff, "crossover phải sinh được cây khác cha mẹ với ít nhất 1 seed"
+
+
+# --- Determinism đối xứng cho point/subtree mutation ---
+
+def test_point_mutation_is_deterministic_for_same_seed():
+    registry = default_registry()
+    m1 = point_mutation(_tree_a(), registry, np.random.default_rng(7), fields=_FIELDS)
+    m2 = point_mutation(_tree_a(), registry, np.random.default_rng(7), fields=_FIELDS)
+    assert Serializer().visit(m1) == Serializer().visit(m2)
+
+
+def test_subtree_mutation_is_deterministic_for_same_seed():
+    registry = default_registry()
+    m1 = subtree_mutation(_tree_a(), registry, np.random.default_rng(8), fields=_FIELDS, max_depth=7)
+    m2 = subtree_mutation(_tree_a(), registry, np.random.default_rng(8), fields=_FIELDS, max_depth=7)
+    assert Serializer().visit(m1) == Serializer().visit(m2)
