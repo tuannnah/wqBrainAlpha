@@ -11,11 +11,16 @@ from sqlalchemy.orm import sessionmaker
 from src.storage.db import init_db
 from src.storage.models import (
     AlphaModel,
+    BrainRecordModel,
     DataFieldModel,
+    DeadFieldModel,
+    EvaluationModel,
+    ExpressionModel,
     FailureModel,
     FetchStateModel,
     InvalidFieldModel,
     OperatorModel,
+    PoolPnlModel,
     SimulationModel,
     SubmissionModel,
 )
@@ -30,6 +35,11 @@ MIGRATION_ORDER = [
     SimulationModel,
     FailureModel,
     SubmissionModel,
+    ExpressionModel,   # evaluations tham chiếu expressions
+    EvaluationModel,   # pool_pnl tham chiếu evaluations
+    PoolPnlModel,
+    DeadFieldModel,
+    BrainRecordModel,
 ]
 
 
