@@ -1,15 +1,15 @@
-"""Hat giong GP: cores (signal thuan, khong config wrapper) tu 3 nguon -- families.py
-(khung cong thuc kinh dien), novel_ideas.py (10 alpha dataset it nguoi khai thac), va tuy
-chon LLM (hypothesis -> translator). Day la "ramped half-and-half + SEEDING" cua B13 --
-GP ngau nhien thuan lang phi danh gia tren cay vo nghia; seed kinh nghiem huong tim kiem
-toi cau truc co gia thuyet kinh te. CHI tra Node (chua boc Individual) -- init.py (Task
-7.4) la noi ghep seed vao quan the ban dau.
+"""Hạt giống GP: cores (signal thuần, không config wrapper) từ 3 nguồn -- families.py
+(khung công thức kinh điển), novel_ideas.py (10 alpha dataset ít người khai thác), và tùy
+chọn LLM (hypothesis -> translator). Đây là "ramped half-and-half + SEEDING" của B13 --
+GP ngẫu nhiên thuần lãng phí đánh giá trên cây vô nghĩa; seed kinh nghiệm hướng tìm kiếm
+tới cấu trúc có giả thuyết kinh tế. CHỈ trả Node (chưa bọc Individual) -- init.py (Task
+7.4) là nơi ghép seed vào quần thể ban đầu.
 
-Luu y registry: ta dung ``parse`` (validate=True) de chi giu seed hop le theo registry
-operator THAT (Phase 2), nen import side-effect ``src.operators_local`` o module-level de
-nap toan bo operator vao REGISTRY truoc khi parse -- neu khong, registry chi co tap toi
-thieu Phase 1 va gan nhu moi seed se bi loc bo. Seed dung operator chua dang ky (vd
-``ts_min``) se parse loi va bi bo qua co log -- chap nhan duoc, khong sap toan bo seeding.
+Lưu ý registry: ta dùng ``parse`` (validate=True) để chỉ giữ seed hợp lệ theo registry
+operator THẬT (Phase 2), nên import side-effect ``src.operators_local`` ở module-level để
+nạp toàn bộ operator vào REGISTRY trước khi parse -- nếu không, registry chỉ có tập tối
+thiểu Phase 1 và gần như mọi seed sẽ bị lọc bỏ. Seed dùng operator chưa đăng ký (vd
+``ts_min``) sẽ parse lỗi và bị bỏ qua có log -- chấp nhận được, không sập toàn bộ seeding.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Protocol, runtime_checkable
 
-import src.operators_local  # noqa: F401  (side-effect: nap operator that vao REGISTRY)
+import src.operators_local  # noqa: F401  (side-effect: nạp operator thật vào REGISTRY)
 from src.lang.ast import Node
 from src.lang.parser import ParseError, parse
 
@@ -26,38 +26,38 @@ logger = logging.getLogger(__name__)
 
 @runtime_checkable
 class _HypothesisGenLike(Protocol):
-    """Giao dien toi gian cho generator gia thuyet (src/llm/hypothesis.py)."""
+    """Giao diện tối giản cho generator giả thuyết (src/llm/hypothesis.py)."""
 
     def generate(self, direction: str) -> object: ...
 
 
 @runtime_checkable
 class _TranslatorLike(Protocol):
-    """Giao dien toi gian cho translator gia thuyet -> AlphaCandidate (src/llm/translator.py).
+    """Giao diện tối giản cho translator giả thuyết -> AlphaCandidate (src/llm/translator.py).
 
-    Tra ``None`` khi tu choi (field khong hop le); nguoc lai tra object co ``.expression``.
+    Trả ``None`` khi từ chối (field không hợp lệ); ngược lại trả object có ``.expression``.
     """
 
     def translate(self, hypothesis: object) -> object | None: ...
 
 
 def _parse_all(expressions: list[str], *, source: str) -> list[Node]:
-    """Parse tung bieu thuc; bo qua (log warning) cai nao parse loi -- 1 seed loi khong
-    duoc lam sap toan bo qua trinh seeding."""
+    """Parse từng biểu thức; bỏ qua (log warning) cái nào parse lỗi -- 1 seed lỗi không
+    được làm sập toàn bộ quá trình seeding."""
     nodes: list[Node] = []
     for expr in expressions:
         try:
             nodes.append(parse(expr))
         except ParseError as exc:
-            logger.warning("seed tu %s parse loi, bo qua: %r (%s)", source, expr, exc)
+            logger.warning("seed từ %s parse lỗi, bỏ qua: %r (%s)", source, expr, exc)
     return nodes
 
 
 def seed_cores_from_families() -> list[Node]:
-    """Seed tu cac khung cong thuc kinh dien (src/generation/families.py).
+    """Seed từ các khung công thức kinh điển (src/generation/families.py).
 
-    Ham export that la ``generate_candidates`` (gop moi ho + loai trung) -- KHAC ten gia
-    dinh ``generate_family_candidates`` trong brief; da xac minh bang grep va dung ten that.
+    Hàm export thật là ``generate_candidates`` (gộp mọi họ + loại trùng) -- KHÁC tên giả
+    định ``generate_family_candidates`` trong brief; đã xác minh bằng grep và dùng tên thật.
     """
     from src.generation.families import generate_candidates
 
@@ -66,7 +66,7 @@ def seed_cores_from_families() -> list[Node]:
 
 
 def seed_cores_from_novel_ideas() -> list[Node]:
-    """Seed tu 10 alpha dataset it nguoi khai thac (src/generation/novel_ideas.py)."""
+    """Seed từ 10 alpha dataset ít người khai thác (src/generation/novel_ideas.py)."""
     from src.generation.novel_ideas import NOVEL_ALPHAS
 
     return _parse_all([c.expression for c in NOVEL_ALPHAS], source="novel_ideas")
@@ -77,21 +77,21 @@ def seed_cores_from_llm(
     translator: _TranslatorLike,
     research_directions: list[str],
 ) -> list[Node]:
-    """Seed tu LLM: hypothesis_gen.generate(direction) -> Hypothesis ->
-    translator.translate(hypothesis) -> AlphaCandidate | None -> parse. Khong catch loi
-    mang/LLM o day -- caller (Task 7.7/CLI) quyet dinh retry/timeout."""
+    """Seed từ LLM: hypothesis_gen.generate(direction) -> Hypothesis ->
+    translator.translate(hypothesis) -> AlphaCandidate | None -> parse. Không catch lỗi
+    mạng/LLM ở đây -- caller (Task 7.7/CLI) quyết định retry/timeout."""
     nodes: list[Node] = []
     for direction in research_directions:
         hypothesis = hypothesis_gen.generate(direction)
         candidate = translator.translate(hypothesis)
         if candidate is None:
-            logger.info("LLM seed bi translator tu choi cho huong: %s", direction)
+            logger.info("LLM seed bị translator từ chối cho hướng: %s", direction)
             continue
         expression = candidate.expression  # type: ignore[attr-defined]
         try:
             nodes.append(parse(expression))
         except ParseError as exc:
-            logger.warning("LLM seed parse loi, bo qua: %r (%s)", expression, exc)
+            logger.warning("LLM seed parse lỗi, bỏ qua: %r (%s)", expression, exc)
     return nodes
 
 
@@ -102,14 +102,14 @@ def all_seed_cores(
     translator: _TranslatorLike | None = None,
     research_directions: list[str] | None = None,
 ) -> list[Node]:
-    """Gop toan bo seed: families + novel_ideas luon chay (re, khong mang); LLM tuy chon,
-    fail-fast neu with_llm=True ma thieu dependency (tranh am tham bo qua phan LLM khi
-    caller tuong da bat)."""
+    """Gộp toàn bộ seed: families + novel_ideas luôn chạy (rẻ, không mạng); LLM tùy chọn,
+    fail-fast nếu with_llm=True mà thiếu dependency (tránh âm thầm bỏ qua phần LLM khi
+    caller tưởng đã bật)."""
     nodes = seed_cores_from_families() + seed_cores_from_novel_ideas()
     if with_llm:
         if hypothesis_gen is None or translator is None or not research_directions:
             raise ValueError(
-                "with_llm=True can hypothesis_gen, translator, research_directions day du"
+                "with_llm=True cần hypothesis_gen, translator, research_directions đầy đủ"
             )
         nodes += seed_cores_from_llm(hypothesis_gen, translator, research_directions)
     return nodes
