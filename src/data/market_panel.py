@@ -45,8 +45,25 @@ class MarketData:
             raise ValueError("dates phải là datetime64")
 
     def field(self, name: str) -> Panel:
-        """Mảng (T,N) của field; KeyError nếu không có."""
-        return self.fields[name]
+        """Mảng (T,N) của field; KeyError nếu không có.
+
+        `returns` là field WQ hợp lệ nhưng được lưu riêng ở thuộc tính `.returns` (backtester
+        dùng cho PnL), KHÔNG trong `.fields`. Resolve nó như field phái sinh để mọi biểu thức
+        tham chiếu `returns` eval được ở MỌI nơi (Evaluator/score_local_gate/calibration), không
+        chỉ riêng calibration. `fields["returns"]` tường minh (nếu caller đưa vào) được ưu tiên.
+        """
+        if name in self.fields:
+            return self.fields[name]
+        if name == "returns":
+            return self.returns
+        raise KeyError(name)
+
+    def field_names(self) -> set[str]:
+        """Tên MỌI field truy vấn được qua `field()`: `fields` + `returns` phái sinh.
+
+        Dùng cho validate `fields_ok` (gate) — nhất quán với `field()`, tránh chặn nhầm alpha
+        dùng `returns` (field WQ hợp lệ nhưng lưu riêng ngoài `.fields`)."""
+        return set(self.fields) | {"returns"}
 
     def years(self) -> dict[int, slice]:
         """Slice hàng theo từng năm dương lịch (cho per-year Sharpe)."""

@@ -24,6 +24,15 @@ def test_unknown_field_fails(small_panel: MarketData) -> None:
     assert verdict.passed is False
 
 
+def test_returns_field_not_blocked_by_fields_ok(small_panel: MarketData) -> None:
+    # `returns` là field WQ hợp lệ (lưu ở .returns, ngoài .fields). Trước fix: fields_ok=False
+    # -> hard gate fail; eval cũng KeyError. Sau fix: KHÔNG bị chặn bởi fields_ok và eval được.
+    verdict = score_local_gate("rank(returns)", PortfolioConfig(delay=1), small_panel)
+    assert isinstance(verdict, LocalGateVerdict)
+    assert "fields_ok" not in verdict.reason
+    assert "eval lỗi" not in verdict.reason
+
+
 def test_score_local_gate_fails_when_self_corr_too_high(small_panel: MarketData) -> None:
     # self_corr cao phải chặn pass dù expr hợp lệ và sinh pnl được — hành vi Phase 4 MỚI,
     # Phase 3 cũ KHÔNG có tham số self_corr nên test này xác nhận chữ ký đã mở rộng.

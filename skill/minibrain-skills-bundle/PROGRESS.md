@@ -14,9 +14,11 @@
   vwap≈typical price). Lệnh: `main.py calibrate --db-url sqlite:///wq_alpha_phtrang1229_gmail_com.db
   --market-data-dir data/market_yf2010`. Panel: `scripts/fetch_yfinance_panel.py` (default start 2010).
   Brain API xác nhận KHÔNG có bulk OHLCV (Gap#3) → yfinance fallback.
-- **Follow-up đã ghi:** (a) lỗ hổng `returns`-không-là-field còn ở `score_local_gate` (RefinementLoop) — mọi
-  alpha dùng returns sẽ fail local gate; nên sửa chung ở MarketData/Evaluator (Phase 0 core). (b) Mở rộng
-  universe >S&P500 cần nguồn ticker-kèm-GICS-sector (datahub chỉ có S&P500; 11 alpha group_neutralize cần sector).
+- **Follow-up:** (a) ✅ ĐÃ SỬA TẬN GỐC lỗ hổng `returns`-không-là-field: `MarketData.field()` resolve
+  `returns`→`.returns` (field phái sinh) + `MarketData.field_names()` (gồm returns) dùng cho `fields_ok`
+  ở `score_local_gate`. Fix MỘT chỗ (Phase 0 core) → hết lỗi ở Evaluator + RefinementLoop gate + calibration;
+  gỡ patch tạm trong make_local_scorer. Full suite 723 pass; ρ vẫn 0.823 (central fix ≡ patch cũ). (b) Mở rộng
+  universe >S&P500 cần nguồn ticker-kèm-GICS-sector (datahub chỉ có S&P500; 11 alpha group_neutralize cần sector) — CHƯA làm.
 - **GROUND-TRUTH XONG:** 55 sim non-null sharpe trong `wq_alpha_phtrang1229_gmail_com.db` (min=-1.62 median=0.62 max=1.27; 12 âm/43 dương). `load_brain_records` đọc đủ 55. Login THẬT qua `WQBrainClient`+`.env`+cookie `.wq_session` (KHÔNG wqb-mcp — mcp trả 400/403). Scripts `gen/persist/run_groundtruth.py` đã commit (retry-timeout + resume).
 - **CHẶN ĐO ρ THẬT = Gap#3 (nguồn OHLCV panel):** ĐÃ PROBE Brain API (2026-06-25), KHẲNG ĐỊNH **không có endpoint trả giá trị field bulk**: `/data-fields/close`→200 CHỈ metadata; `/data-fields/close/values` & `/data` →404; `/data-sets`→metadata. Field data chỉ truy cập được TRONG simulation (server-side). => Pull OHLCV qua Brain API KHÔNG khả thi (đúng `fetch_to_parquet` NotImplementedError). Cần fallback: yfinance/stooq (miễn phí, xấp xỉ) HOẶC parquet user cung cấp. Sau khi có panel: `python main.py calibrate --db-url sqlite:///wq_alpha_phtrang1229_gmail_com.db --market-data-dir <parquet>`.
 - **Quyết định hướng đi:** Tích hợp MiniBrain vào tool sẵn có (KHÔNG build grenfield). Code mới

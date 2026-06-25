@@ -49,7 +49,7 @@ def score_local_gate(
         return LocalGateVerdict(False, f"parse lỗi: {exc}")
 
     fields = FieldCollector().visit(node)
-    fields_ok = fields.issubset(set(data.fields.keys()))
+    fields_ok = fields.issubset(data.field_names())  # gồm `returns` phái sinh
     depth = DepthVisitor().visit(node)
 
     ctx = EvalContext(data=data, registry=default_registry(), cache=None)
