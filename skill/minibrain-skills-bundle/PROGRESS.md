@@ -5,7 +5,14 @@
 > append an entry and refresh `Current state` at the end of every session or phase.
 
 ## Current state
-- **Phase:** Phase 4.5 — Calibration ✅ CODE HOÀN TẤT (merged main + pushed `1d21396..4dab94b`). Tiếp theo: Phase 5 — Database (hoặc giải Gap#3 + chạy ρ thật khi quota Brain mở).
+- **Phase:** Phase 4.5 — Calibration ✅ HOÀN TẤT + **ρ THẬT ĐÃ ĐO & ĐẠT.** Tiếp theo: Phase 5 — Database.
+- **🎯 NORTH STAR ĐẠT (2026-06-25):** `calibrate` trên 55 ground-truth (DB phtrang1229) + panel yfinance
+  S&P500 (478 mã × 2618 ngày 2015-2025, `data/market_yf`): **spearman_sharpe ρ=0.6712 ≥ 0.5 bar** ✅,
+  spearman_fitness=0.8835, decile_hit_rate=0.40, n=42/55 (13 alpha local trả None — all-NaN signal/field
+  trên panel này). RANKING LOCAL ĐÁNG TIN (dù data xấp xỉ: S&P500 không phải TOP3000, vwap≈typical price).
+  Lệnh: `venv/Scripts/python.exe main.py calibrate --db-url sqlite:///wq_alpha_phtrang1229_gmail_com.db
+  --market-data-dir data/market_yf`. Panel sinh bởi `scripts/fetch_yfinance_panel.py` (Gap#3 fallback —
+  Brain API xác nhận không có bulk OHLCV).
 - **GROUND-TRUTH XONG:** 55 sim non-null sharpe trong `wq_alpha_phtrang1229_gmail_com.db` (min=-1.62 median=0.62 max=1.27; 12 âm/43 dương). `load_brain_records` đọc đủ 55. Login THẬT qua `WQBrainClient`+`.env`+cookie `.wq_session` (KHÔNG wqb-mcp — mcp trả 400/403). Scripts `gen/persist/run_groundtruth.py` đã commit (retry-timeout + resume).
 - **CHẶN ĐO ρ THẬT = Gap#3 (nguồn OHLCV panel):** ĐÃ PROBE Brain API (2026-06-25), KHẲNG ĐỊNH **không có endpoint trả giá trị field bulk**: `/data-fields/close`→200 CHỈ metadata; `/data-fields/close/values` & `/data` →404; `/data-sets`→metadata. Field data chỉ truy cập được TRONG simulation (server-side). => Pull OHLCV qua Brain API KHÔNG khả thi (đúng `fetch_to_parquet` NotImplementedError). Cần fallback: yfinance/stooq (miễn phí, xấp xỉ) HOẶC parquet user cung cấp. Sau khi có panel: `python main.py calibrate --db-url sqlite:///wq_alpha_phtrang1229_gmail_com.db --market-data-dir <parquet>`.
 - **Quyết định hướng đi:** Tích hợp MiniBrain vào tool sẵn có (KHÔNG build grenfield). Code mới
