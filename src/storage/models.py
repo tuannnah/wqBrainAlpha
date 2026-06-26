@@ -207,6 +207,29 @@ class DeadFieldModel(Base):
     created_at = Column(DateTime, default=_utcnow)
 
 
+class BrainSimLinkModel(Base):
+    """Cầu liên kết một expression MiniBrain (theo ``canonical_hash``) với kết quả SIM THẬT
+    trên WorldQuant Brain. Tách khỏi ``AlphaModel``/``SimulationModel`` (luồng LLM cũ) — cầu
+    này keyed theo ``canonical_hash`` là danh tính chung của expression MiniBrain, phục vụ
+    feedback vòng kín (so local↔Brain, decorrelate tầng 2 bằng ``self_corr`` Brain thật)."""
+
+    __tablename__ = "brain_sim_links"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    canonical_hash = Column(String, nullable=False, index=True)
+    expr_string = Column(Text, nullable=False)
+    wq_alpha_id = Column(String)
+    region = Column(String)
+    universe = Column(String)
+    sharpe = Column(Float)
+    fitness = Column(Float)
+    turnover = Column(Float)
+    self_corr = Column(Float)
+    status = Column(String, nullable=False)
+    raw_json = Column(Text)
+    created_at = Column(DateTime, default=_utcnow)
+
+
 class BrainRecordModel(Base):
     """Ground truth Brain-sim cho CalibrationHarness (Phase 4.5): expression + metrics thật
     từ Brain, để so Spearman ρ với metrics local."""
