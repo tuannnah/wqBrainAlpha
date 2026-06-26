@@ -461,7 +461,7 @@ def _make_validated_simulator(client, pf, session_factory, region, universe):
 
 def _portfolio_config_from_opts(
     neutralization: str, decay: int, truncation: float, delay: int,
-):
+) -> "PortfolioConfig":  # noqa: F821
     """Dựng PortfolioConfig từ option CLI; neutralization là tên enum không phân biệt hoa."""
     from src.backtest.config import Neutralization, PortfolioConfig
 
@@ -563,6 +563,8 @@ def score_one_cmd(
     _setup_logging()
 
     import src.operators_local  # noqa: F401  (nạp 27 operator vào registry)
+
+    from pathlib import Path
 
     from src.data.adapters.parquet_source import ParquetSource
     from src.pipeline.runner import score_one

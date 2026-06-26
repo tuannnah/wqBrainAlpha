@@ -3,7 +3,6 @@ parquet tạm để CLI đọc lại qua --market-data-dir."""
 
 from __future__ import annotations
 
-import numpy as np  # noqa: F401 — fixture small_panel dùng numpy qua conftest
 from typer.testing import CliRunner
 
 from main import app
