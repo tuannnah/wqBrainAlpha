@@ -49,3 +49,102 @@ def test_idea_outcome_and_report_are_frozen() -> None:
 
 def test_quota_exhausted_is_exception() -> None:
     assert issubclass(QuotaExhausted, Exception)
+
+
+class _FakeIdeaSource:
+    """Trả các batch cố định rồi cạn ([] -> ClosedLoop dừng)."""
+
+    def __init__(self, batches: list[list[ShortlistCandidate]]) -> None:
+        self._batches = list(batches)
+
+    def next_batch(self) -> list[ShortlistCandidate]:
+        return self._batches.pop(0) if self._batches else []
+
+
+class _FakeRefiner:
+    """Trả IdeaOutcome theo map expr->outcome; expr không có map -> failed mặc định.
+    Nếu expr nằm trong `quota_on` -> ném QuotaExhausted (giả lập Brain hết quota)."""
+
+    def __init__(self, outcomes: dict[str, IdeaOutcome], quota_on: set[str] | None = None) -> None:
+        self._outcomes = outcomes
+        self._quota_on = quota_on or set()
+        self.calls: list[str] = []
+
+    def refine_and_sim(self, candidate: ShortlistCandidate) -> IdeaOutcome:
+        self.calls.append(candidate.expr)
+        if candidate.expr in self._quota_on:
+            raise QuotaExhausted("het quota")
+        return self._outcomes.get(
+            candidate.expr,
+            IdeaOutcome(expr=candidate.expr, canonical_hash="h_" + candidate.expr,
+                        passed=False, wq_alpha_id=None, sharpe=None, fitness=None,
+                        turnover=None, self_corr=None, sims_used=1, stop_reason="patience"),
+        )
+
+
+def _passed(expr: str) -> IdeaOutcome:
+    return IdeaOutcome(expr=expr, canonical_hash="h_" + expr, passed=True,
+                       wq_alpha_id="WQ_" + expr, sharpe=1.5, fitness=1.2, turnover=0.2,
+                       self_corr=0.3, sims_used=2, stop_reason="passed")
+
+
+def test_run_persists_each_outcome_and_counts(repo) -> None:  # noqa: ANN001
+    src = _FakeIdeaSource([[_cand("close"), _cand("open")]])
+    refiner = _FakeRefiner({"close": _passed("close")})  # open -> failed mặc định
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo)
+    report = loop.run()
+    assert isinstance(report, ClosedLoopReport)
+    assert report.ideas_tried == 2
+    assert report.n_passed == 1
+    assert report.n_abandoned == 1
+    assert report.sims_used == 3  # 2 (close passed) + 1 (open failed)
+    assert report.stop_reason == "no_more_ideas"
+    sims = repo.load_brain_sims()
+    assert len(sims) == 2
+    assert {s.status for s in sims} == {"passed", "failed"}
+
+
+def test_run_stops_on_quota_exhausted(repo) -> None:  # noqa: ANN001
+    src = _FakeIdeaSource([[_cand("a"), _cand("b"), _cand("c")]])
+    refiner = _FakeRefiner({"a": _passed("a")}, quota_on={"b"})  # b -> hết quota
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo)
+    report = loop.run()
+    assert report.stop_reason == "quota"
+    assert report.ideas_tried == 1   # chỉ 'a' xong; 'b' ném quota trước khi tính
+    assert refiner.calls == ["a", "b"]  # 'c' không bao giờ được gọi
+    assert len(repo.load_brain_sims()) == 1  # chỉ 'a' kịp ghi
+
+
+def test_run_skips_duplicate_expr_within_session(repo) -> None:  # noqa: ANN001
+    src = _FakeIdeaSource([[_cand("dup"), _cand("dup")]])
+    refiner = _FakeRefiner({"dup": _passed("dup")})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo)
+    report = loop.run()
+    assert refiner.calls == ["dup"]  # lần 2 bị bỏ qua
+    assert report.ideas_tried == 1
+
+
+def test_run_stops_on_empty_batch(repo) -> None:  # noqa: ANN001
+    src = _FakeIdeaSource([])  # cạn ngay
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo)
+    report = loop.run()
+    assert report.ideas_tried == 0
+    assert report.stop_reason == "no_more_ideas"
+
+
+def test_run_respects_max_ideas(repo) -> None:  # noqa: ANN001
+    # idea_source vô hạn (mỗi batch 1 ý tưởng mới) -> max_ideas chặn.
+    class _Infinite:
+        def __init__(self) -> None:
+            self.i = 0
+
+        def next_batch(self) -> list[ShortlistCandidate]:
+            self.i += 1
+            return [_cand(f"x{self.i}")]
+
+    loop = ClosedLoop(idea_source=_Infinite(), refiner=_FakeRefiner({}), repo=repo,
+                      max_ideas=3)
+    report = loop.run()
+    assert report.ideas_tried == 3
+    assert report.stop_reason == "no_more_ideas"

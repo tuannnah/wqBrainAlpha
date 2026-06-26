@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from src.pipeline.shortlist import ShortlistCandidate
+from src.storage.repository import MiniBrainRepository
 
 
 class QuotaExhausted(Exception):
@@ -56,4 +57,63 @@ class _RefinesIdea(Protocol):
 
 
 class ClosedLoop:
-    """Skeleton — Task 2 sẽ bổ sung toàn bộ logic vòng lặp."""
+    """Vòng kín: lấy ý tưởng → refine+sim mỗi cái → persist kết quả SIM → dừng khi hết
+    quota / cạn ý tưởng. Thuần điều phối; mọi dependency injected."""
+
+    def __init__(
+        self,
+        idea_source: _GeneratesIdeas,
+        refiner: _RefinesIdea,
+        repo: MiniBrainRepository,
+        *,
+        region: str = "USA",
+        universe: str = "TOP3000",
+        max_ideas: int | None = None,
+    ) -> None:
+        self.idea_source = idea_source
+        self.refiner = refiner
+        self.repo = repo
+        self.region = region
+        self.universe = universe
+        self.max_ideas = max_ideas
+
+    def run(self) -> ClosedLoopReport:
+        """Lặp: next_batch → mỗi ý tưởng refine_and_sim → record_brain_sim → đếm. Dừng khi
+        batch rỗng (cạn ý tưởng), đạt max_ideas, hoặc refiner ném QuotaExhausted (hết quota
+        Brain). Bỏ qua expr đã thấy trong phiên (tránh refine trùng)."""
+        ideas_tried = 0
+        sims_used = 0
+        n_passed = 0
+        n_abandoned = 0
+        seen: set[str] = set()
+
+        while True:
+            batch = self.idea_source.next_batch()
+            if not batch:
+                return ClosedLoopReport(ideas_tried, sims_used, n_passed, n_abandoned,
+                                        "no_more_ideas")
+            for cand in batch:
+                if self.max_ideas is not None and ideas_tried >= self.max_ideas:
+                    return ClosedLoopReport(ideas_tried, sims_used, n_passed, n_abandoned,
+                                            "no_more_ideas")
+                if cand.expr in seen:
+                    continue
+                seen.add(cand.expr)
+                try:
+                    outcome = self.refiner.refine_and_sim(cand)
+                except QuotaExhausted:
+                    return ClosedLoopReport(ideas_tried, sims_used, n_passed, n_abandoned,
+                                            "quota")
+                self.repo.record_brain_sim(
+                    canonical_hash=outcome.canonical_hash, expr_string=outcome.expr,
+                    wq_alpha_id=outcome.wq_alpha_id, region=self.region,
+                    universe=self.universe, sharpe=outcome.sharpe, fitness=outcome.fitness,
+                    turnover=outcome.turnover, self_corr=outcome.self_corr,
+                    status="passed" if outcome.passed else "failed",
+                )
+                ideas_tried += 1
+                sims_used += outcome.sims_used
+                if outcome.passed:
+                    n_passed += 1
+                else:
+                    n_abandoned += 1
