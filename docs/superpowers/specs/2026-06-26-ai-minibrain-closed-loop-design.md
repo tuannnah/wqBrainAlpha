@@ -23,6 +23,12 @@ quả SIM lưu DB và feed ngược để cải thiện các engine. Vòng chạ
    quan — vì **trùng thì không nộp được**).
 5. **AI backend cấu hình `.env`:** `LLM_BACKEND` ∈ {deepseek, claude-cli, codex-cli} + model
    + quality. (DeepSeek hiện lỗi 402 → mặc định CLI miễn phí.)
+6. **Decorrelate 2 tầng:** gate local CHỈ hard-reject theo self-corr (+ depth/fields/
+   concentration); Sharpe/fitness là soft (chỉ xếp hạng). Tầng 1 = decorrelate local trên
+   yf2010 (pre-filter rẻ, lọc trước khi tốn sim — ρ_sharpe=0.823 nên ranking đáng tin). Tầng
+   2 = self-corr AUTHORITATIVE của Brain: pool nạp từ PnL alpha đã nộp thật (`get_alpha_pnl`/
+   `get_user_alphas`) + chạy `check_correlation`/`get_submission_check` TRƯỚC khi nộp. yf2010
+   GIỮ NGUYÊN (không đổi nguồn) cho ranking + pre-filter; chỉ BỔ SUNG nguồn pool Brain thật.
 
 ## Mô hình hợp nhất (cốt lõi)
 
@@ -53,8 +59,8 @@ nguồn nguyên liệu sinh; RefinementLoop là bộ refine+sim+feedback tiêu t
    ↓ mỗi core là một "ý tưởng"
 [AI refine ≤5/idea]       ── RefinementLoop: AlphaRefiner đề xuất biến thể
    ↓ mỗi biến thể: score_one (gate local) + decorrelate; referee patience=5
-[đạt gate + ít tương quan] → [Brain SIM]  ── Simulator + WQBrainClient (KHÔNG trần)
-   ↓ kết quả SIM
+[đạt gate local + ít tương quan T1] → [Brain SIM]  ── Simulator + WQBrainClient (KHÔNG trần)
+   ↓ kết quả SIM (+ check_correlation/submission-check T2 trước khi nộp)
 [persist DB + feedback]   ── (a)(b)(c)(d) bên dưới
    ↓
 [lặp] đến khi Brain báo hết quota → dừng gọn, mọi thứ đã persist.
@@ -85,7 +91,7 @@ D9); `Simulator`/`WQBrainClient`; `PoolCorrelation` + dead-field + `CalibrationH
 
 | # | Cơ chế | Nối vào | Ghi chú |
 |---|--------|---------|---------|
-| a | Pool self-corr decorrelate | alpha pass-SIM → PnL vào pool → `build_shortlist`/gate decorrelate vòng sau | Khung pool local đã có; ưu tiên dùng PnL thật khi có |
+| a | Pool self-corr decorrelate **2 tầng** | T1: PnL local (yf2010) → pool pre-filter trước sim. T2: PnL alpha đã nộp thật từ Brain (`get_alpha_pnl`/`get_user_alphas`) → pool authoritative + `check_correlation`/`get_submission_check` trước khi nộp | Chặn-nộp THẬT là tương quan trên data Brain; local chỉ pre-filter rẻ |
 | b | Avoid-list + dead-field | fail gate local / fail SIM / abandon-sau-5 → ghi để GP/AI không sinh lại; field Brain từ chối → blacklist | dead-field model đã có (P5); avoid-list theo canonical_hash |
 | c | Tự tái calibrate ρ | sau mỗi N sim mới → `CalibrationHarness` tính lại ρ Spearman (local vs Brain) | cảnh báo nếu ρ tụt dưới ngưỡng (độ tin ranking) |
 | d | AI học từ SIM | outcome SIM gần đây + pool → prompt `AlphaRefiner`/idea | **trọng tâm: đẩy ý tưởng mới ít tương quan** (trùng = không nộp được) |
