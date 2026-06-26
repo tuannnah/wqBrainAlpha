@@ -5,8 +5,8 @@
 > append an entry and refresh `Current state` at the end of every session or phase.
 
 ## Current state
-- **Phase:** Phase 7 — GP Engine (building blocks 7.1-7.6) ✅ HOÀN TẤT (merged main 2553e08, pushed). Tiếp theo:
-  **Phase 8 — Short-list + CLI** HOẶC **Phase 7.7-7.9** (GPEngine integration + wire RefinementLoop) khi user chốt.
+- **Phase:** Phase 7 — GP Engine ✅ HOÀN TẤT 100% (building blocks 7.1-7.6 + integration 7.7-7.9, merged main
+  6d9ae8d, pushed). **Tiếp theo: Phase 8 — Short-list + CLI** (`docs/superpowers/plans/2026-06-24-phase-8-cli.md`).
 - **Done (Phase 7 building blocks, 2026-06-26, subagent-driven + opus 2-round final review):** 6 task TDD building blocks GP:
   `src/gp/individual.py` (Individual = AST Node + metadata: generation/fitness cache, slots non-frozen vì test gán fitness sau init);
   `src/gp/fitness_vec.py` (FitnessVector 6 chiều `sharpe_deflated/per_year_min_sharpe/turnover_penalty/complexity_penalty/pool_corr_penalty/pop_corr_penalty` + `from_metrics` từ AlphaMetrics; siết Individual.fitness annotation qua TYPE_CHECKING);
@@ -41,11 +41,16 @@
 - **Done Phase 0-7** (chi tiết Entries Session 02-10): P0 data, P1 parser, P2 evaluator+27 op, P3 backtester (MVP),
   P4 metrics+gates, P4.5 calibration (ρ_sharpe=0.823), P5 database, P6 pool correlation, P7 GP building blocks
   (Individual/FitnessVector/Seeds/Init/Variation/Selection). Tất cả merged main.
+- **Done Phase 7.7-7.9 (2026-06-26, inline executing-plans + Opus):** `src/gp/engine.py` (GPEngine: vòng lặp
+  tiến hóa μ+λ end-to-end — `run()` ghép seeds→init→`_make_offspring`(crossover/point/subtree/hoist/copy)→eval
+  qua Phase 2/3/4/6→`nsga2_select`; `_evaluate_individual` trả (fv,status,reasons,bt) với status passed/
+  failed_gate/error; `_persist` upsert+record_evaluation mọi outcome+save_pool_pnl khi pass; `_config_json`
+  sort_keys=True cho cache key canonical); `src/gp/seed_adapter.py` (GPSeedGenerator implement Protocol
+  `idea_generator.generate_ideas(n)` cho RefinementLoop, dependency rule B1 không import src.llm); CLI
+  `main.py generate --method=gp` thay TemplateGenerator (ParquetSource.load → GPEngine.run). Xóa
+  `src/generation/template.py` + `tests/test_template.py`.
 - **In progress:** —
-- **Next step:** **Phase 8 — Short-list + CLI** (plan `docs/superpowers/plans/2026-06-24-phase-8-cli.md`) HOẶC
-  viết bổ sung plan **7.7 GPEngine** (ghép seeds→init→variation→selection→eval, persist mọi individual, joblib
-  parallel, sub-expr+result cache) + **7.8** (wire RefinementLoop dùng `evaluate_with_pool` + `save_pool_pnl` khi
-  pass + xóa `src/generation/template.py` legacy) + 7.9 trước khi sang Phase 8. User chốt sau.
+- **Next step:** **Phase 8 — Short-list + CLI** (plan `docs/superpowers/plans/2026-06-24-phase-8-cli.md`).
 - **Blockers / open risks:** (R2/Gap#3) bulk OHLCV chưa giải (chỉ ảnh hưởng calibration mở rộng universe). **Minor
   mở (dọn sau):** (P7.6) test coverage gap NSGA-II không assert `len(fronts)` cho chuỗi dominance, crowding không
   assert phần tử giữa hữu hạn; `_objective` gọi lặp trong crowding (vi mô O(MN²)). (P7.4) `ramped_half_and_half`
@@ -322,3 +327,30 @@
   + test_gp_seeds (6) + test_gp_init (8) + test_gp_variation (15, gồm fix WINDOW) + test_gp_selection (8) +
   test_gp_panel_invariant (5 stress 1000-iter typed invariant). Sửa: test_lang_registry (2 test encode defect
   cũ flip cho khớp invariant B5 đúng).
+
+### [2026-06-26] Session 11 — Phase 7.7-7.9: GPEngine + adapter + CLI (Phase 7 hoàn tất 100%)
+- **Phase:** Phase 7 — GP Engine, hoàn tất phần integration (7.7-7.9) sau khi building blocks 7.1-7.6 đã merge.
+- **Done:** (7.7) `src/gp/engine.py` — `GPEngine.run()` vòng lặp tiến hóa μ+λ end-to-end: init_population (seed
+  cores + ramped) → `_make_offspring` (crossover/point/subtree/hoist/copy theo rate) → đánh giá offspring TRƯỚC
+  chọn lọc → `dedup_population` → `nsga2_select`; `_evaluate_individual` (eval→portfolio→backtest→metrics→gate,
+  trả (fv,status,reasons,bt)); `_persist` (upsert_expression + record_evaluation mọi outcome pass/fail/seed +
+  save_pool_pnl khi pass); `_config_json` sort_keys=True. Test: 10 unit + 2 integration (small_panel + DB thật).
+  (7.8) `src/gp/seed_adapter.py` — GPSeedGenerator implement Protocol `idea_generator.generate_ideas(n)` cho
+  RefinementLoop (3 test); CLI `main.py generate --method=gp` (ParquetSource.load → GPEngine.run) thay
+  TemplateGenerator; xóa `src/generation/template.py` + `tests/test_template.py`. (7.9) merge --no-ff → main
+  (6d9ae8d), pushed origin.
+- **Decisions:** (1) **Chữ ký building blocks lệch plan** — `init_population(registry,rng,population_size,
+  seed_cores,fields,max_depth)`, `crossover(a,b,rng,max_depth)` (KHÔNG nhận registry), `subtree_mutation`/
+  `point_mutation` cần `fields: tuple[str,...]`, `all_seed_cores(*,with_llm=...)` keyword-only — adapt run() theo
+  file thật, KHÔNG sửa Phase trước. (2) **Đánh giá offspring TRƯỚC `nsga2_select`** (μ+λ chuẩn): selection.py
+  assert mọi cá thể có fitness, nên không thể đưa offspring chưa eval vào — lệch mô tả plan Step 10 (plan định
+  select rồi mới eval thế hệ cuối), nhưng đúng NSGA-II và đúng assertion. (3) `_persist` tái lập metrics từ bt
+  cho passed/failed_gate (redundant 1 lần compute — minor defer như plan ghi).
+- **In progress:** —
+- **Blockers / open risks:** engine.py ~350 dòng (plan ước <300; phần dôi là docstring tiếng Việt chi tiết —
+  chấp nhận). Redundant `pool_corr.max_corr` gọi 2 lần/cá thể (defer). main.py còn 13 lỗi ruff tiền-tồn (E402
+  import + F841 ở lệnh sweep-config) — KHÔNG thuộc lệnh generate mới, defer dọn legacy.
+- **Next step:** **Phase 8 — Short-list + CLI** (`docs/superpowers/plans/2026-06-24-phase-8-cli.md`).
+- **Tests:** Xanh. Full suite 840 pass / 1 psycopg tiền-tồn (`test_db_postgres`). Mới: test_gp_engine (10) +
+  test_gp_seed_adapter (3) + test_gp_engine_run integration (2). ruff sạch src/gp; mypy --strict sạch engine.py +
+  seed_adapter.py.
