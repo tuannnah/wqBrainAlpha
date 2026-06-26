@@ -461,33 +461,60 @@ def _make_validated_simulator(client, pf, session_factory, region, universe):
 
 @app.command()
 def generate(
-    method: str = typer.Option("template", help="Phương pháp sinh (hiện hỗ trợ: template)"),
-    count: int = typer.Option(100),
+    method: str = typer.Option("gp", help="Phương pháp sinh (hỗ trợ: gp)"),
+    count: int = typer.Option(50, help="Kích thước quần thể GP (số alpha quần thể cuối)"),
+    n_generations: int = typer.Option(3, help="Số thế hệ tiến hóa GP"),
+    seed: int = typer.Option(42, help="Seed master cho determinism (R8)"),
+    market_data_dir: str = typer.Option(
+        ..., help="Thư mục parquet MarketData (ParquetSource) để đánh giá thật"
+    ),
+    universe: str = typer.Option("TOP3000", help="Universe panel"),
 ) -> None:
-    """Sinh alpha hợp lệ qua pre-filter và lưu vào DB."""
+    """Sinh alpha qua GPEngine (Phase 7): seed→biến đổi→đánh giá thật qua Phase 2/3/4/6
+    →chọn lọc NSGA-II→persist mọi outcome (pass/fail/seed) vào DB MiniBrain."""
     _setup_logging()
-    from src.generation.template import TemplateGenerator
-    from src.simulation.pre_filter import PreFilter
 
-    engine = init_db(make_engine())
-    session_factory = make_session_factory(engine)
-    fields, operators, field_types, matrix_only_ops, operator_arity = _cached_symbols(session_factory)
-    if not fields:
-        console.print("[red]Chưa có fields trong DB — chạy fetch-fields trước.[/red]")
+    if method != "gp":
+        console.print(f"[red]Method '{method}' không được hỗ trợ. Chỉ có: gp[/red]")
         raise typer.Exit(code=1)
 
-    pf = PreFilter(
-        known_operators=operators or None, known_fields=set(fields),
-        field_types=field_types, matrix_only_ops=matrix_only_ops,
-        operator_arity=operator_arity,
-    )
-    gen = TemplateGenerator(fields, pf)
-    alphas = gen.generate(count)
+    import src.operators_local  # noqa: F401  (side-effect: nạp 27 operator vào registry)
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.data.adapters.parquet_source import ParquetSource
+    from src.gp.engine import GPEngine
+    from src.lang.registry import default_registry
+    from src.storage.repository import MiniBrainRepository
 
-    repo = AlphaRepository(session_factory)
-    for expr in alphas:
-        repo.save_alpha(expr, source=method)
-    console.print(f"[green]Đã sinh {len(alphas)} alpha[/green] (method={method})")
+    engine_db = init_db(make_engine())
+    session_factory = make_session_factory(engine_db)
+
+    panel_source = ParquetSource(market_data_dir)
+    try:
+        data = panel_source.load("1900-01-01", "2999-12-31", universe)
+    except (FileNotFoundError, AssertionError, OSError) as exc:
+        console.print(f"[red]Không load được MarketData từ {market_data_dir}: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    repo = MiniBrainRepository(session_factory)
+    cfg = PortfolioConfig(
+        neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+        scale_book=1.0, delay=1,
+    )
+    gp_engine = GPEngine(
+        data=data, repo=repo, config=cfg, registry=default_registry(),
+        pop_size=count, n_generations=n_generations, seed=seed,
+    )
+    result = gp_engine.run()
+    best_sharpe = (
+        result.best_by_sharpe.fitness.sharpe_deflated
+        if result.best_by_sharpe is not None and result.best_by_sharpe.fitness is not None
+        else "N/A"
+    )
+    console.print(
+        f"[green]GP done[/green]: gen={result.generations_run} "
+        f"evaluated={result.n_evaluated} passed={result.n_passed} "
+        f"best_sharpe={best_sharpe}"
+    )
 
 
 def _make_deepseek(model: str | None = None):
