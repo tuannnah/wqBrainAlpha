@@ -6,6 +6,7 @@ B1); KHÔNG import cứng src.gp (generate_many dùng Protocol structural)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 import numpy as np
 import numpy.typing as npt
@@ -20,8 +21,9 @@ from src.data.market_panel import MarketData
 from src.engine.evaluator import EvalContext, Evaluator
 from src.lang.parser import ParseError, parse
 from src.lang.registry import default_registry
-from src.lang.visitors import DepthVisitor, FieldCollector
+from src.lang.visitors import DepthVisitor, FieldCollector, Serializer
 from src.local_types import Dates
+from src.pipeline.shortlist import ShortlistCandidate, build_shortlist
 
 _EMPTY_METRICS = AlphaMetrics(
     sharpe=0.0, annual_return=0.0, turnover=0.0, max_drawdown=0.0,
@@ -106,3 +108,50 @@ def score_one(
     `_score_one_full` cho ngữ nghĩa lỗi/pool đầy đủ."""
     res = _score_one_full(expr, cfg, data, pool)
     return res.metrics, res.verdict
+
+
+class _GPIndividualLike(Protocol):
+    expr: object
+    fitness: object | None
+
+
+class _GPRunResultLike(Protocol):
+    final_population: list[_GPIndividualLike]
+
+
+class _RunsGP(Protocol):
+    def run(self) -> _GPRunResultLike: ...
+
+
+def generate_many(
+    gp_engine: _RunsGP,
+    cfg: PortfolioConfig,
+    data: MarketData,
+    top_k: int,
+    max_corr: float,
+    pool: dict[int, tuple[Dates, npt.NDArray[np.float64]]] | None = None,
+) -> list[ShortlistCandidate]:
+    """Chạy `gp_engine.run()` → final_population; với mỗi Individual đã eval (fitness không
+    None), serialize AST → string, chấm lại qua `_score_one_full` (một nguồn AlphaMetrics +
+    PnL duy nhất, KHÔNG backtest 2 lần), giữ cái pass gate, rồi `build_shortlist` top_k +
+    decorrelate pool-aware. Individual fitness=None (chưa eval trong GP) bị bỏ qua."""
+    result = gp_engine.run()
+    serializer = Serializer()
+    pool_corr = PoolCorrelation(pool=pool) if pool else None
+
+    candidates: list[ShortlistCandidate] = []
+    seen: set[str] = set()
+    for ind in result.final_population:
+        if ind.fitness is None:
+            continue
+        expr_str = serializer.visit(ind.expr)  # type: ignore[arg-type]
+        if expr_str in seen:
+            continue
+        seen.add(expr_str)
+        res = _score_one_full(expr_str, cfg, data, pool)
+        if not res.verdict.passed:
+            continue
+        candidates.append(
+            ShortlistCandidate(expr=expr_str, metrics=res.metrics, pnl=res.pnl, dates=res.dates)
+        )
+    return build_shortlist(candidates, top_k=top_k, max_corr=max_corr, pool_corr=pool_corr)
