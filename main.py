@@ -533,6 +533,7 @@ def generate(
     )
 
     pool = repo.load_pool() or None
+    # generate_many re-score qua score_one (một nguồn AlphaMetrics duy nhất) — chấp nhận backtest lại.
     shortlist = generate_many(
         gp_engine=gp_engine, cfg=cfg, data=data, top_k=top_k, max_corr=max_corr, pool=pool,
     )
@@ -563,8 +564,6 @@ def score_one_cmd(
     _setup_logging()
 
     import src.operators_local  # noqa: F401  (nạp 27 operator vào registry)
-
-    from pathlib import Path
 
     from src.data.adapters.parquet_source import ParquetSource
     from src.pipeline.runner import score_one

@@ -45,3 +45,11 @@ def test_deterministic_same_inputs_same_output(small_panel) -> None:  # noqa: AN
     assert m1 == m2
     assert v1.passed == v2.passed
     assert v1.hard_failures == v2.hard_failures
+
+
+def test_type_invalid_expression_returns_failing_verdict_not_exception(small_panel) -> None:  # noqa: ANN001
+    """Cây parse được nhưng sai kiểu (literal ở sai vị trí) -> verdict fail, KHÔNG ném."""
+    from src.backtest.config import PortfolioConfig
+    metrics, verdict = score_one("ts_mean(close, rank(volume))", PortfolioConfig(), small_panel)
+    assert verdict.passed is False
+    assert metrics.sharpe == 0.0

@@ -73,6 +73,20 @@ def test_empty_candidates_returns_empty_list() -> None:
     assert build_shortlist([], top_k=5, max_corr=0.7) == []
 
 
+def test_pairwise_abs_rho_returns_none_on_insufficient_overlap() -> None:
+    from src.pipeline.shortlist import _pairwise_abs_rho
+    d1 = _dates("2021-01-01", 1)
+    p1 = np.array([0.01])
+    assert _pairwise_abs_rho(p1, d1, p1, d1) is None  # <2 điểm chung
+
+
+def test_pairwise_abs_rho_returns_none_on_zero_variance() -> None:
+    from src.pipeline.shortlist import _pairwise_abs_rho
+    d = _dates("2021-01-01", 5)
+    const = np.ones(5)
+    assert _pairwise_abs_rho(const, d, const, d) is None  # phương sai 0
+
+
 def test_does_not_mutate_input_list() -> None:
     dates = _dates("2021-01-01", 10)
     cands = [

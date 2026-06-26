@@ -33,6 +33,14 @@ def _pairwise_abs_rho(
 ) -> float | None:
     """Pearson |rho| trên giao ngày chung; None nếu thiếu điểm/phương sai bằng 0 (giống
     PoolCorrelation._pairwise_rho Phase 6) — KHÔNG bịa rho=0 giả."""
+    # BẮT BUỘC sort theo dates trước searchsorted: giữ ngang hàng với
+    # PoolCorrelation._pairwise_rho Phase 6 (pool_corr.py:68-73).
+    ord_a = np.argsort(dates_a)
+    dates_a = dates_a[ord_a]
+    pnl_a = pnl_a[ord_a]
+    ord_b = np.argsort(dates_b)
+    dates_b = dates_b[ord_b]
+    pnl_b = pnl_b[ord_b]
     common = np.intersect1d(dates_a, dates_b)
     if common.size < 2:
         return None
@@ -69,7 +77,7 @@ def build_shortlist(
             break
         if pool_corr is not None:
             pool_rho, _worst = pool_corr.max_corr(cand.pnl, cand.dates)
-            if abs(pool_rho) >= max_corr:
+            if pool_rho >= max_corr:
                 continue
         too_correlated = False
         for chosen in kept:

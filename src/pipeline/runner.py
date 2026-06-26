@@ -68,7 +68,7 @@ def _score_one_full(
     ctx = EvalContext(data=data, registry=default_registry(), cache=None)
     try:
         signal = Evaluator(ctx).evaluate(node)
-    except (KeyError, ValueError) as exc:
+    except (KeyError, ValueError, TypeError) as exc:
         return _ScoreResult(
             _EMPTY_METRICS,
             GateVerdict(passed=False, hard_failures=[f"eval lỗi: {exc}"]),
