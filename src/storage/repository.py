@@ -14,6 +14,7 @@ from src.local_types import Dates
 from src.simulation.simulator import SimulationResult
 from src.storage.models import (
     AlphaModel,
+    BrainSimLinkModel,
     DeadFieldModel,
     EvaluationModel,
     ExpressionModel,
@@ -433,5 +434,62 @@ class MiniBrainRepository:
                 .all()
             )
             return [(r[0], r[1], r[2] if r[2] is not None else 0.0) for r in rows]
+        finally:
+            session.close()
+
+    def record_brain_sim(
+        self, canonical_hash: str, expr_string: str, *, wq_alpha_id: str | None,
+        region: str, universe: str, sharpe: float | None, fitness: float | None,
+        turnover: float | None, self_corr: float | None, status: str,
+        raw_json: str | None = None,
+    ) -> int:
+        """Ghi kết quả SIM Brain cho 1 expression MiniBrain. Merge theo khóa duy nhất
+        (canonical_hash, region, universe): đã có -> cập nhật outcome mới nhất (không nhân
+        đôi); chưa có -> insert. Trả id row."""
+        session = self.session_factory()
+        try:
+            existing = (
+                session.query(BrainSimLinkModel)
+                .filter_by(canonical_hash=canonical_hash, region=region, universe=universe)
+                .first()
+            )
+            row = existing or BrainSimLinkModel(
+                canonical_hash=canonical_hash, region=region, universe=universe,
+            )
+            row.expr_string = expr_string
+            row.wq_alpha_id = wq_alpha_id
+            row.sharpe = sharpe
+            row.fitness = fitness
+            row.turnover = turnover
+            row.self_corr = self_corr
+            row.status = status
+            row.raw_json = raw_json
+            if existing is None:
+                session.add(row)
+            session.commit()
+            return row.id  # type: ignore[return-value]
+        finally:
+            session.close()
+
+    def load_brain_sims(self) -> list[BrainSimLinkModel]:
+        """Trả mọi link Brain SIM đã ghi (cho calibrate feedback + avoid-list)."""
+        session = self.session_factory()
+        try:
+            return session.query(BrainSimLinkModel).all()  # type: ignore[no-any-return]
+        finally:
+            session.close()
+
+    def brain_pnl_pool(self) -> dict[str, float]:
+        """Trả {canonical_hash: self_corr} cho các link status='passed' có self_corr != None
+        — tra cứu nhanh self-corr Brain THẬT của alpha đã nộp (decorrelate tầng 2)."""
+        session = self.session_factory()
+        try:
+            rows = (
+                session.query(BrainSimLinkModel)
+                .filter(BrainSimLinkModel.status == "passed")
+                .filter(BrainSimLinkModel.self_corr.isnot(None))
+                .all()
+            )
+            return {r.canonical_hash: float(r.self_corr) for r in rows}
         finally:
             session.close()

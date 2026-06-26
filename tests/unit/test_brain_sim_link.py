@@ -38,3 +38,38 @@ def test_brain_sim_link_table_created_and_insertable(repo) -> None:  # noqa: ANN
         assert got.created_at is not None
     finally:
         s.close()
+
+
+def test_record_brain_sim_inserts_then_updates_by_key(repo) -> None:  # noqa: ANN001
+    """record_brain_sim merge theo (canonical_hash, region, universe): lần 2 cập nhật,
+    KHÔNG nhân đôi row."""
+    id1 = repo.record_brain_sim(
+        "hA", "rank(close)", wq_alpha_id="WQ1", region="USA", universe="TOP3000",
+        sharpe=1.0, fitness=0.9, turnover=0.2, self_corr=0.3, status="passed",
+    )
+    id2 = repo.record_brain_sim(
+        "hA", "rank(close)", wq_alpha_id="WQ1", region="USA", universe="TOP3000",
+        sharpe=1.8, fitness=1.5, turnover=0.25, self_corr=0.35, status="passed",
+    )
+    assert id1 == id2  # cùng key -> cùng row
+    sims = repo.load_brain_sims()
+    assert len(sims) == 1
+    assert sims[0].sharpe == 1.8  # đã cập nhật giá trị mới
+
+
+def test_load_brain_sims_returns_all(repo) -> None:  # noqa: ANN001
+    repo.record_brain_sim("h1", "close", wq_alpha_id=None, region="USA", universe="TOP3000",
+                          sharpe=1.0, fitness=1.0, turnover=0.1, self_corr=0.1, status="passed")
+    repo.record_brain_sim("h2", "open", wq_alpha_id=None, region="USA", universe="TOP3000",
+                          sharpe=None, fitness=None, turnover=None, self_corr=None, status="error")
+    assert len(repo.load_brain_sims()) == 2
+
+
+def test_brain_pnl_pool_only_passed_with_self_corr(repo) -> None:  # noqa: ANN001
+    """brain_pnl_pool chỉ trả link passed có self_corr != None."""
+    repo.record_brain_sim("hp", "close", wq_alpha_id="W", region="USA", universe="TOP3000",
+                          sharpe=1.0, fitness=1.0, turnover=0.1, self_corr=0.5, status="passed")
+    repo.record_brain_sim("hf", "open", wq_alpha_id="W2", region="USA", universe="TOP3000",
+                          sharpe=0.0, fitness=0.0, turnover=0.0, self_corr=None, status="failed")
+    pool = repo.brain_pnl_pool()
+    assert pool == {"hp": 0.5}
