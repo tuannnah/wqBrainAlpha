@@ -5,8 +5,24 @@
 > append an entry and refresh `Current state` at the end of every session or phase.
 
 ## Current state
-- **Phase:** Phase 7 — GP Engine ✅ HOÀN TẤT 100% (building blocks 7.1-7.6 + integration 7.7-7.9, merged main
-  6d9ae8d, pushed). **Tiếp theo: Phase 8 — Short-list + CLI** (`docs/superpowers/plans/2026-06-24-phase-8-cli.md`).
+- **Phase:** Phase 8 — Short-list + CLI ✅ HOÀN TẤT (merged main 98df6af, pushed). Phase 7 GP Engine cũng đã
+  xong 100% trước đó (merged 6d9ae8d). **MVP→scale gần như đủ:** parse→eval→backtest→metrics→gate→pool-corr→GP→
+  short-list→CLI đều thông. **Tiếp theo:** chạy thật end-to-end trên panel (`generate`/`score-one` với
+  `--market-data-dir data/market_yf2010`), đo lại ρ, hoặc Phase 9 nếu master plan còn (P9).
+- **Done (Phase 8, 2026-06-26, subagent-driven sonnet + opus final review):** `src/pipeline/shortlist.py`
+  (`ShortlistCandidate` + `build_shortlist`: rank fitness giảm dần + decorrelate |ρ| PnL với cái đã giữ VÀ pool,
+  helper `_pairwise_abs_rho` argsort+None-semantics khớp Phase 6); `src/pipeline/runner.py` (`score_one`
+  parse→eval→portfolio→backtest→metrics→pool-corr→gate KHÔNG đốt sim; helper `_score_one_full` trả thêm pnl/dates
+  chống backtest 2 lần; `generate_many` drive `GPEngine.run()` → re-score → `build_shortlist`, dùng Protocol
+  structural KHÔNG import src.gp — dependency rule B1); CLI `main.py`: lệnh mới `score-one` (nạp pool từ DB, không
+  persist, `--no-pool`) + nâng cấp `generate` (in short-list qua generate_many) + helper
+  `_portfolio_config_from_opts` (expose `--neutralization/--decay/--truncation/--delay/--top-k/--max-corr`). Xử lý
+  lỗi: parse/eval/all-NaN/**TypeError** (literal sai vị trí) → verdict fail, CLI không crash. `calibrate` đã wired
+  từ Phase 4.5 → Task 8.5 no-op.
+- **Lệch plan gốc (2026-06-24-phase-8-cli.md) — spec mới 2026-06-26 cập nhật:** GPEngine dùng `run()/GPRunResult`
+  (không `evolve()`); `generate` nâng cấp tại chỗ (không lệnh mới); `_score_one_full` chống tính 2 lần (đưa vào
+  DoD); `load_pool()` trả kèm dates → Ambiguity #1 hết. ⚠️ `generate` ĐỔI NGHĨA output: in short-list đã
+  decorrelate thay vì thống kê GP thô (backward-compat awareness).
 - **Done (Phase 7 building blocks, 2026-06-26, subagent-driven + opus 2-round final review):** 6 task TDD building blocks GP:
   `src/gp/individual.py` (Individual = AST Node + metadata: generation/fitness cache, slots non-frozen vì test gán fitness sau init);
   `src/gp/fitness_vec.py` (FitnessVector 6 chiều `sharpe_deflated/per_year_min_sharpe/turnover_penalty/complexity_penalty/pool_corr_penalty/pop_corr_penalty` + `from_metrics` từ AlphaMetrics; siết Individual.fitness annotation qua TYPE_CHECKING);
@@ -50,7 +66,9 @@
   `main.py generate --method=gp` thay TemplateGenerator (ParquetSource.load → GPEngine.run). Xóa
   `src/generation/template.py` + `tests/test_template.py`.
 - **In progress:** —
-- **Next step:** **Phase 8 — Short-list + CLI** (plan `docs/superpowers/plans/2026-06-24-phase-8-cli.md`).
+- **Next step:** Chạy thật end-to-end (`main.py generate --market-data-dir data/market_yf2010 --count N
+  --n-generations G --top-k K` → short-list; `main.py score-one "<expr>" --market-data-dir ...`), kiểm pipeline
+  trên dữ liệu thật + đo lại ρ; cân nhắc Phase 9 nếu master plan còn hạng mục.
 - **Blockers / open risks:** (R2/Gap#3) bulk OHLCV chưa giải (chỉ ảnh hưởng calibration mở rộng universe). **Minor
   mở (dọn sau):** (P7.6) test coverage gap NSGA-II không assert `len(fronts)` cho chuỗi dominance, crowding không
   assert phần tử giữa hữu hạn; `_objective` gọi lặp trong crowding (vi mô O(MN²)). (P7.4) `ramped_half_and_half`
@@ -354,3 +372,30 @@
 - **Tests:** Xanh. Full suite 840 pass / 1 psycopg tiền-tồn (`test_db_postgres`). Mới: test_gp_engine (10) +
   test_gp_seed_adapter (3) + test_gp_engine_run integration (2). ruff sạch src/gp; mypy --strict sạch engine.py +
   seed_adapter.py.
+
+### [2026-06-26] Session 12 — Phase 8: Short-list + CLI (subagent-driven)
+- **Phase:** Phase 8 — Short-list + CLI, HOÀN TẤT (merged main 98df6af, pushed).
+- **Done:** Brainstorm → spec (`docs/superpowers/specs/2026-06-26-phase-8-shortlist-cli-design.md`) → plan
+  (`docs/superpowers/plans/2026-06-26-phase-8-shortlist-cli.md`) → subagent-driven 5 task TDD:
+  (8.1) `build_shortlist` rank+decorrelate pool-aware; (8.2) `score_one` + `_score_one_full` (chống backtest 2
+  lần); (8.3) `generate_many` drive GPEngine.run + Protocol structural (B1); (8.4) CLI `score-one` + nâng cấp
+  `generate` + config flags; (8.5) review/merge/push. Implementer sonnet (tiếng Việt có dấu — haiku xóa dấu),
+  task-reviewer sonnet mỗi task, final whole-branch review opus.
+- **Decisions:** re-score qua score_one (1 nguồn AlphaMetrics) thay vì đọc DB; `generate` nâng cấp tại chỗ;
+  score-one nạp pool không persist; expose config flags. GPEngine dùng `run()/GPRunResult` (plan gốc giả định
+  `evolve()` — lỗi thời, spec mới sửa). `_score_one_full` chống tính 2 lần. `calibrate` đã wired (Phase 4.5) →
+  8.5 no-op.
+- **Review:** Per-task: 8.1 (1 Important = false-positive đã adjudicate: max_corr luôn trả float không None), 8.2
+  (2 Minor), 8.3 (2 Minor), 8.4 (1 Important = thiếu return type → fix 8e8002e). Final opus: 1 Important = eval
+  **TypeError** (literal sai vị trí, vd `ts_mean(close, rank(volume))`) escape → crash CLI; fix 7ccd900 (thêm
+  TypeError vào except + test RED→GREEN) + Minors (argsort `_pairwise_abs_rho` khớp Phase 6, bỏ `abs` dư, dọn
+  dead import, comment). Verdict 'with fixes' → đã fix hết.
+- **In progress:** —
+- **Blockers / open risks:** (Gap#3) bulk OHLCV chưa giải (chỉ ảnh hưởng calibration mở rộng universe). Minor
+  còn ngỏ (đã ghi ledger, low-risk): `if pool:` plan-mandated (empty dict {} đi nhánh no-pool, vô hại);
+  `_EMPTY_METRICS.per_year_sharpe` dict chia sẻ cấp module (frozen chặn rebind); main.py mypy chưa strict-clean
+  (Protocol invariance + E402/F841 tiền-tồn). `generate` ĐỔI NGHĨA output (short-list thay thống kê GP thô).
+- **Next step:** Chạy thật end-to-end trên panel + đo lại ρ; cân nhắc Phase 9.
+- **Tests:** Xanh. Full suite 861 pass / 1 psycopg tiền-tồn (`test_db_postgres`). Mới: test_shortlist (8) +
+  test_runner_score_one (6) + test_runner_generate_many (3) + test_cli_score_one_generate (4). ruff sạch
+  src/pipeline; mypy --strict sạch shortlist.py + runner.py (auto.py 3 lỗi tiền-tồn ngoài Phase 8).
