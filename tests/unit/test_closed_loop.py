@@ -148,3 +148,50 @@ def test_run_respects_max_ideas(repo) -> None:  # noqa: ANN001
     report = loop.run()
     assert report.ideas_tried == 3
     assert report.stop_reason == "no_more_ideas"
+
+
+def test_calibration_tracker_computes_rho_at_interval(repo) -> None:  # noqa: ANN001
+    from src.pipeline.closed_loop import CalibrationTracker
+    # seed 3 cặp (local, brain) tương quan dương hoàn hảo -> rho=1.0
+    from src.backtest.metrics_local import AlphaMetrics
+    for i, (ls, bs) in enumerate([(0.5, 1.0), (1.0, 2.0), (1.5, 3.0)]):
+        eid = repo.upsert_expression(f"e{i}", f"h{i}", 1, 1, {"close"})
+        m = AlphaMetrics(sharpe=ls, annual_return=0.1, turnover=0.2, max_drawdown=0.05,
+                         fitness=1.0, per_year_sharpe={2021: 1.0}, weight_concentration=0.05)
+        repo.record_evaluation(eid, "{}", "default", m, 0.0, "passed", [], 1)
+        repo.record_brain_sim(f"h{i}", f"e{i}", wq_alpha_id=None, region="USA",
+                              universe="TOP3000", sharpe=bs, fitness=1.0, turnover=0.2,
+                              self_corr=0.1, status="passed")
+    tr = CalibrationTracker(repo, every=2, rho_bar=0.5)
+    assert tr.maybe_calibrate(1) is None      # chưa tới mốc (1 < 2)
+    rho = tr.maybe_calibrate(2)               # tới mốc bội số 2
+    assert rho is not None
+    assert rho == pytest.approx(1.0, abs=1e-9)
+    assert tr.last_rho == pytest.approx(1.0, abs=1e-9)
+
+
+def test_closed_loop_skips_avoided_exprs_from_db(repo) -> None:  # noqa: ANN001
+    # pre-seed 1 expr failed trên Brain -> ClosedLoop phải bỏ qua, không refine lại.
+    repo.record_brain_sim("hbad", "bad_expr", wq_alpha_id=None, region="USA",
+                          universe="TOP3000", sharpe=0.0, fitness=0.0, turnover=0.0,
+                          self_corr=None, status="failed")
+    src = _FakeIdeaSource([[_cand("bad_expr"), _cand("good_expr")]])
+    refiner = _FakeRefiner({"good_expr": _passed("good_expr")})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo)
+    report = loop.run()
+    assert refiner.calls == ["good_expr"]   # bad_expr bị avoid-list bỏ qua
+    assert report.ideas_tried == 1
+
+
+def test_closed_loop_report_includes_rho_when_tracker_set(repo) -> None:  # noqa: ANN001
+    from src.pipeline.closed_loop import CalibrationTracker
+    src = _FakeIdeaSource([[_cand("close")]])
+    refiner = _FakeRefiner({"close": _passed("close")})
+    tracker = CalibrationTracker(repo, every=1, rho_bar=0.5)
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      calibration_tracker=tracker)
+    report = loop.run()
+    # 1 cặp (close) -> spearman < 2 cặp -> NaN -> last_rho có thể NaN; report.rho_sharpe gán
+    # từ tracker.last_rho (không crash). Cốt lõi: field tồn tại + vòng chạy xong.
+    assert hasattr(report, "rho_sharpe")
+    assert report.ideas_tried == 1
