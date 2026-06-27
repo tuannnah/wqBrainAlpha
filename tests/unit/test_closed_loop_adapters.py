@@ -76,11 +76,23 @@ def repo() -> MiniBrainRepository:
 
 
 def test_gp_idea_source_yields_candidates_and_advances_seed(small_panel, repo) -> None:  # noqa: ANN001
+    from unittest.mock import patch
     cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
                           scale_book=1.0, delay=1)
     src = GPIdeaSource(small_panel, repo, cfg, default_registry(),
                        pop_size=6, n_generations=0, base_seed=42, top_k=5, max_corr=0.99)
-    b1 = src.next_batch()
-    b2 = src.next_batch()
-    assert all(isinstance(c, ShortlistCandidate) for c in b1)
-    assert isinstance(b2, list)  # batch 2 dùng seed khác (42 -> 43), không crash
+    seeds_seen: list[int] = []
+
+    class _StubEngine:
+        def __init__(self, *a, seed: int, **k) -> None:
+            seeds_seen.append(seed)
+        def run(self):
+            from src.gp.engine import GPRunResult
+            return GPRunResult(generations_run=0, final_population=[], best_by_sharpe=None,
+                               n_evaluated=0, n_passed=0, seed=42)
+
+    with patch("src.app.closed_loop_adapters.GPEngine", _StubEngine):
+        b1 = src.next_batch()
+        b2 = src.next_batch()
+    assert seeds_seen == [42, 43]  # seed tăng dần mỗi batch
+    assert isinstance(b1, list) and isinstance(b2, list)
