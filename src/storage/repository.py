@@ -493,3 +493,51 @@ class MiniBrainRepository:
             return {r.canonical_hash: float(r.self_corr) for r in rows}
         finally:
             session.close()
+
+    def avoided_exprs(self) -> set[str]:
+        """Trả {expr_string} của các link Brain SIM status='failed' — vòng kín bỏ qua, tránh
+        refine lại ý tưởng đã hỏng trên Brain (avoid-list bền B11)."""
+        session = self.session_factory()
+        try:
+            rows = (
+                session.query(BrainSimLinkModel.expr_string)
+                .filter(BrainSimLinkModel.status == "failed")
+                .all()
+            )
+            return {r[0] for r in rows}
+        finally:
+            session.close()
+
+    def brain_local_sharpe_pairs(self) -> list[tuple[float, float]]:
+        """Trả [(local_sharpe, brain_sharpe)] cho expression có CẢ local evaluation lẫn Brain
+        sim (match theo canonical_hash), cả hai sharpe != None. Phục vụ calibrate ρ Spearman
+        (local vs Brain). Mỗi canonical_hash lấy 1 local sharpe (eval đầu tiên có sharpe)."""
+        session = self.session_factory()
+        try:
+            pairs: list[tuple[float, float]] = []
+            links = (
+                session.query(BrainSimLinkModel)
+                .filter(BrainSimLinkModel.sharpe.isnot(None))
+                .all()
+            )
+            for link in links:
+                expr = (
+                    session.query(ExpressionModel)
+                    .filter_by(canonical_hash=link.canonical_hash)
+                    .first()
+                )
+                if expr is None:
+                    continue
+                ev = (
+                    session.query(EvaluationModel)
+                    .filter(EvaluationModel.expression_id == expr.id)
+                    .filter(EvaluationModel.sharpe.isnot(None))
+                    .order_by(EvaluationModel.id)
+                    .first()
+                )
+                if ev is None:
+                    continue
+                pairs.append((float(ev.sharpe), float(link.sharpe)))
+            return pairs
+        finally:
+            session.close()
