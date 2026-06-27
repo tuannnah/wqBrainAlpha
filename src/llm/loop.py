@@ -49,6 +49,11 @@ class LoopResult:
     # Vì sao vòng dừng: 'abandon' (referee bỏ hướng) | 'budget' (hết trần sim) |
     # 'patience' (hết kiên nhẫn) | 'no_seed' (không dịch được seed nào).
     stop_reason: str = ""
+    # Metric Brain của candidate tốt nhất — adapter map sang IdeaOutcome (Phase 4B).
+    best_passed: bool = False
+    best_alpha_id: str | None = None
+    best_metrics: dict = field(default_factory=dict)
+    best_self_corr: float | None = None
 
 
 @dataclass
@@ -533,6 +538,10 @@ class RefinementLoop:
             failures=self.repo.recent_failures(50),
             sims_used=self.sims_used,
             stop_reason=stop_reason,
+            best_passed=best_ev.passed,
+            best_alpha_id=best_ev.alpha_id,
+            best_metrics=dict(best_ev.metrics),
+            best_self_corr=best_ev.pool_corr,
         )
 
     def run_from_seed(self, expression: str, on_progress=None) -> LoopResult:

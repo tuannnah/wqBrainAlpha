@@ -83,3 +83,14 @@ def test_run_from_seed_unparseable_seed_returns_no_seed() -> None:
     result = loop.run_from_seed("khong_hop_le(")
     assert result.best_candidate is None
     assert result.stop_reason == "no_seed"
+
+
+def test_run_from_seed_loopresult_carries_brain_metrics() -> None:
+    """LoopResult sau run_from_seed mang best_passed + best_metrics (sharpe/fitness/turnover)
+    + best_alpha_id, để adapter map sang IdeaOutcome. Dùng fake simulator pass có metric."""
+    loop = _make_loop()
+    result = loop.run_from_seed("rank(close)")
+    assert result.best_passed is True
+    assert "sharpe" in result.best_metrics
+    # alpha_id do repo.save_alpha trả (fake repo sqlite in-memory) — không None khi đã sim
+    assert result.best_alpha_id is not None
