@@ -129,10 +129,15 @@ class SubmissionModel(Base):
 
     id = Column(String, primary_key=True)
     alpha_id = Column(String, ForeignKey("alphas.id"))
-    status = Column(String)  # submitted/rejected/error
+    status = Column(String)  # submitted/rejected/error/properties_set
     self_correlation = Column(Float)
     detail = Column(Text)
     submitted_at = Column(DateTime, default=_utcnow)
+    # Sub-project C: audit lần set properties/tags (PATCH /alphas/{id}) — nullable vì
+    # không phải mọi submission đều set properties.
+    tags = Column(Text)  # JSON-encoded list[str]
+    regular_desc = Column(Text)
+    properties_set_at = Column(DateTime)
 
 
 class ExpressionModel(Base):

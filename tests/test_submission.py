@@ -132,3 +132,23 @@ def test_run_daily_dry_run_khong_ghi_submission():
         assert session.query(SubmissionModel).count() == 0  # dry-run không nộp
     finally:
         session.close()
+
+
+def test_submission_model_co_cot_properties():
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    session = sf()
+    try:
+        session.add(
+            SubmissionModel(
+                id="sub1", alpha_id="WQ1", status="properties_set",
+                tags='["PowerPoolSelected"]', regular_desc="Idea: ...",
+            )
+        )
+        session.commit()
+        row = session.query(SubmissionModel).filter_by(id="sub1").one()
+        assert row.tags == '["PowerPoolSelected"]'
+        assert row.regular_desc == "Idea: ..."
+        assert row.properties_set_at is None
+    finally:
+        session.close()
