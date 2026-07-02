@@ -11,9 +11,10 @@ from typing import Any
 from src.gp.engine import GPEngine
 from src.lang.parser import parse
 from src.lang.visitors import CanonicalHasher
-from src.pipeline.closed_loop import IdeaOutcome
+from src.pipeline.closed_loop import IdeaOutcome, QuotaExhausted
 from src.pipeline.runner import generate_many
 from src.pipeline.shortlist import ShortlistCandidate
+from src.simulation.simulator import AuthExpiredError
 
 
 class RefinementLoopRefiner:
@@ -23,8 +24,13 @@ class RefinementLoopRefiner:
         self.loop = loop
 
     def refine_and_sim(self, candidate: ShortlistCandidate) -> IdeaOutcome:
-        # result là Any: loop: object, run_from_seed dùng type: ignore[attr-defined]
-        result: Any = self.loop.run_from_seed(candidate.expr)  # type: ignore[attr-defined]
+        try:
+            # result là Any: loop: object, run_from_seed dùng type: ignore[attr-defined]
+            result: Any = self.loop.run_from_seed(candidate.expr)  # type: ignore[attr-defined]
+        except AuthExpiredError as exc:
+            # Best-effort: session chết / hết quota Brain → báo ClosedLoop dừng gọn.
+            # (Tinh chỉnh nhận diện quota-ngày chính xác sau lần chạy thật đầu tiên.)
+            raise QuotaExhausted(str(exc)) from exc
         best = result.best_candidate
         expr: str = best.expression if best is not None else candidate.expr
         canonical_hash = CanonicalHasher().visit(parse(expr))

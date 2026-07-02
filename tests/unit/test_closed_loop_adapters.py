@@ -96,3 +96,15 @@ def test_gp_idea_source_yields_candidates_and_advances_seed(small_panel, repo) -
         b2 = src.next_batch()
     assert seeds_seen == [42, 43]  # seed tăng dần mỗi batch
     assert isinstance(b1, list) and isinstance(b2, list)
+
+
+def test_refiner_raises_quota_exhausted_on_auth_expired() -> None:
+    from src.pipeline.closed_loop import QuotaExhausted
+    from src.simulation.simulator import AuthExpiredError
+
+    class _AuthDeadLoop:
+        def run_from_seed(self, expression: str, on_progress: object = None) -> object:
+            raise AuthExpiredError("session het han / quota")
+
+    with pytest.raises(QuotaExhausted):
+        RefinementLoopRefiner(_AuthDeadLoop()).refine_and_sim(_cand("rank(close)"))
