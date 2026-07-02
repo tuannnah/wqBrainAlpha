@@ -34,10 +34,10 @@ def _seed(session_factory):
                 )
             )
 
-        add("a1", "WQ1", 2.0, 1.5, 0.9)  # đạt
-        add("a2", "WQ2", 1.6, 1.3, 0.8)  # đạt
-        add("a3", "WQ3", 1.0, 1.3, 0.5)  # sharpe thấp -> loại
-        add("a4", "WQ4", 2.0, 1.0, 0.7)  # fitness thấp -> loại
+        add("a1", "WQ1", 2.0, 1.5, 0.9)  # WQ tự PASS toàn bộ check -> đạt
+        add("a2", "WQ2", 1.6, 1.3, 0.8)  # WQ tự PASS -> đạt
+        add("a3", "WQ3", 1.0, 1.3, 0.5, status="failed")  # WQ tự FAIL (vd LOW_SHARPE) -> loại
+        add("a4", "WQ4", 2.0, 1.0, 0.7, status="failed")  # WQ tự FAIL (vd LOW_FITNESS) -> loại
         add("a5", "WQ5", 1.9, 1.4, 0.95, status="failed")  # failed -> loại
         session.commit()
     finally:

@@ -36,8 +36,6 @@ class PropertiesResult:
 
 
 class SubmissionManager:
-    MIN_SHARPE = 1.5
-    MIN_FITNESS = 1.2
     DAILY_QUOTA = 10
 
     def __init__(
@@ -45,8 +43,6 @@ class SubmissionManager:
         client,
         session_factory,
         correlation_checker,
-        min_sharpe: float | None = None,
-        min_fitness: float | None = None,
         daily_quota: int | None = None,
         diversify: bool = False,
         max_struct_similarity: float = 0.9,
@@ -54,8 +50,6 @@ class SubmissionManager:
         self.client = client
         self.session_factory = session_factory
         self.correlation = correlation_checker
-        self.min_sharpe = min_sharpe if min_sharpe is not None else self.MIN_SHARPE
-        self.min_fitness = min_fitness if min_fitness is not None else self.MIN_FITNESS
         self.daily_quota = daily_quota if daily_quota is not None else self.DAILY_QUOTA
         # T7.1: loại alpha trùng cấu trúc (AST) với alpha đã chọn trong cùng tập nộp.
         self.diversify = diversify
@@ -63,6 +57,10 @@ class SubmissionManager:
 
     # --------------------------------------------------------------- selection
     def select_candidates(self) -> list[Candidate]:
+        """Chọn alpha đã pass sim để nộp. `status == "passed"` ĐÃ phản ánh đúng
+        Sharpe/Fitness/Turnover/Weight/IS-Ladder thật theo tier tài khoản — WQ Brain tự chấm
+        qua `is.checks` (xem `Simulator._fetch_metrics`), KHÔNG tự đoán lại ngưỡng ở đây
+        (sub-project B, xem docs/superpowers/specs/2026-07-02-submission-compliance-roadmap-design.md)."""
         session = self.session_factory()
         try:
             submitted = {
@@ -75,8 +73,6 @@ class SubmissionManager:
                 session.query(SimulationModel, AlphaModel)
                 .join(AlphaModel, SimulationModel.alpha_id == AlphaModel.id)
                 .filter(SimulationModel.status == "passed")
-                .filter(SimulationModel.sharpe >= self.min_sharpe)
-                .filter(SimulationModel.fitness >= self.min_fitness)
                 .filter(SimulationModel.wq_alpha_id.isnot(None))
                 .order_by(SimulationModel.score.desc())
                 .all()
