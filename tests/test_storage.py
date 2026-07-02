@@ -53,6 +53,26 @@ def test_save_simulation_persists_alpha_va_metrics():
         session.close()
 
 
+def test_save_simulation_luu_failed_checks():
+    engine = init_db(_engine())
+    session_factory = make_session_factory(engine)
+
+    result = SimulationResult(
+        expression="rank(close)", alpha_id="a1", status="failed",
+        sharpe=0.2, failed_checks=["LOW_SHARPE", "LOW_FITNESS"], raw={"is": {}},
+    )
+    repo = AlphaRepository(session_factory)
+    sim_id = repo.save_simulation(result, region="USA", universe="TOP3000")
+
+    session = session_factory()
+    try:
+        sim = session.get(SimulationModel, sim_id)
+        import json
+        assert json.loads(sim.failed_checks) == ["LOW_SHARPE", "LOW_FITNESS"]
+    finally:
+        session.close()
+
+
 def test_invalid_field_repo_record_va_blacklist():
     """Ghi field chết rồi đọc lại blacklist; ghi trùng không nhân đôi."""
     engine = init_db(_engine())

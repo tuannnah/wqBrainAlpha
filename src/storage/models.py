@@ -95,6 +95,7 @@ class SimulationModel(Base):
     score = Column(Float)
     status = Column(String)  # passed/failed/error
     raw_result = Column(Text)  # full JSON
+    failed_checks = Column(Text)  # JSON-encoded list[str] tên check WQ tự FAIL (sub-project B)
     sim_at = Column(DateTime, default=_utcnow)
 
 

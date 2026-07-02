@@ -99,6 +99,48 @@ def test_simulate_error_giu_message_giai_thich():
     assert "ERROR" in result.raw["error"]
 
 
+def test_simulate_luu_ten_check_bi_fail():
+    client = FakeClient()
+    client.queue_post(FakeResponse(201, headers={"Location": "/simulations/sim-3"}))
+    client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": "alpha-y"}))
+    client.queue_get(
+        FakeResponse(
+            200,
+            json_data={
+                "is": {
+                    "sharpe": 0.2,
+                    "checks": [
+                        {"name": "LOW_SHARPE", "result": "FAIL"},
+                        {"name": "LOW_FITNESS", "result": "FAIL"},
+                        {"name": "LOW_TURNOVER", "result": "PASS"},
+                    ],
+                }
+            },
+        )
+    )
+
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0
+    )
+    result = sim.simulate("rank(close)")
+    assert result.failed_checks == ["LOW_SHARPE", "LOW_FITNESS"]
+
+
+def test_simulate_failed_checks_rong_khi_toan_bo_pass():
+    client = FakeClient()
+    client.queue_post(FakeResponse(201, headers={"Location": "/simulations/sim-4"}))
+    client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": "alpha-z"}))
+    client.queue_get(
+        FakeResponse(200, json_data={"is": {"sharpe": 1.8, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}})
+    )
+
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0
+    )
+    result = sim.simulate("rank(close)")
+    assert result.failed_checks == []
+
+
 def test_extract_invalid_field():
     """Trích đúng field id từ thông điệp lỗi WQ; trả None với lỗi khác."""
     msg = (

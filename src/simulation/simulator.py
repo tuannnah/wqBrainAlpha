@@ -137,6 +137,7 @@ class SimulationResult:
     margin: float | None = None
     os_sharpe: float | None = None
     os_fitness: float | None = None
+    failed_checks: list[str] = field(default_factory=list)
     raw: dict = field(default_factory=dict)
 
     def metrics(self) -> dict[str, float | None]:
@@ -311,11 +312,16 @@ class Simulator:
         checks = is_block.get("checks") or []
         failed = any((c.get("result") == "FAIL") for c in checks if isinstance(c, dict))
         status = "failed" if failed else "passed"
+        failed_check_names = [
+            c.get("name") for c in checks
+            if isinstance(c, dict) and c.get("result") == "FAIL" and c.get("name")
+        ]
 
         return SimulationResult(
             expression=expression,
             alpha_id=alpha_id,
             status=status,
+            failed_checks=failed_check_names,
             raw=payload,
             **metrics,
             **os_metrics,

@@ -128,6 +128,7 @@ class AlphaRepository:
                     score=score,
                     status=result.status,
                     raw_result=json.dumps(result.raw, ensure_ascii=False),
+                    failed_checks=json.dumps(result.failed_checks, ensure_ascii=False),
                 )
             )
             session.commit()
