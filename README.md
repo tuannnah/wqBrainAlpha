@@ -43,6 +43,10 @@ Script tự tạo venv, cài dependencies, tạo `.env` lần đầu, rồi mở
    thật mục 5.
 5. **Auto SIM** — vòng kín AI+MiniBrain thật (GP → refine → SIM Brain →
    feedback), chạy đến khi hết quota Brain hoặc Ctrl+C để dừng tay.
+6. **Xem & nộp alpha đã tìm được** — liệt kê alpha `status='passed'` (từ mục 5
+   hoặc CLI `research`/`marathon`) đủ điều kiện nộp (dry-run trước), hỏi xác
+   nhận rõ ràng trước khi nộp THẬT (tốn quota nộp ngày). Alpha đạt điều kiện
+   Power Pool tự được gắn tag `PowerPoolSelected`.
 
 DB tách theo email đăng nhập (mỗi tài khoản một file `wq_alpha_<email>.db`).
 

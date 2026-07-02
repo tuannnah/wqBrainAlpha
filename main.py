@@ -1642,6 +1642,52 @@ def _menu_auto_sim(state: _MenuState) -> None:
     )
 
 
+def _menu_view_submit(state: _MenuState) -> None:
+    """Mục 6: xem alpha đã mô phỏng đạt (status='passed', từ mục 5/CLI research/marathon) và
+    tự chọn nộp THẬT hay chỉ xem trước — dry-run mặc định, hỏi xác nhận rõ ràng trước khi tốn
+    quota nộp ngày thật. Alpha đạt điều kiện Power Pool sẽ tự được gắn tag (sub-project A/C,
+    đã tích hợp sẵn trong SubmissionManager.submit())."""
+    from src.submission.correlation import CorrelationChecker
+    from src.submission.manager import SubmissionManager
+
+    manager = SubmissionManager(state.client, state.session_factory, CorrelationChecker(state.client))
+    preview = manager.run_daily(dry_run=True)
+    if not preview:
+        console.print(
+            "[yellow]Chưa có alpha nào đạt điều kiện nộp (status='passed', chưa nộp, qua được "
+            "lọc self-correlation/trùng cấu trúc).[/yellow]"
+        )
+        return
+
+    table = Table(title=f"Sẽ nộp (dry-run) — {len(preview)} alpha, quota/ngày={manager.daily_quota}")
+    table.add_column("#")
+    table.add_column("WQ Alpha")
+    table.add_column("Expression", overflow="fold")
+    table.add_column("Sharpe", justify="right")
+    table.add_column("Score", justify="right")
+    for i, c in enumerate(preview, 1):
+        table.add_row(
+            str(i), c.wq_alpha_id, c.expression,
+            f"{c.sharpe:.3f}" if c.sharpe is not None else "—",
+            f"{c.score:.3f}" if c.score is not None else "—",
+        )
+    console.print(table)
+
+    answer = input(
+        f"\nNộp THẬT {len(preview)} alpha này lên WQ Brain (tốn quota nộp ngày thật)? "
+        "Gõ 'yes' để xác nhận, Enter để bỏ qua: "
+    ).strip().lower()
+    if answer != "yes":
+        console.print("[dim]Đã bỏ qua — chưa nộp gì, có thể chọn lại mục này sau.[/dim]")
+        return
+
+    submitted = manager.run_daily(dry_run=False)
+    console.print(
+        f"[green]Đã nộp {len(submitted)} alpha.[/green] Alpha đạt điều kiện Power Pool "
+        "(Sharpe≥1.0, operator/field trong giới hạn, có mô tả) sẽ tự được gắn tag PowerPoolSelected."
+    )
+
+
 def _print_menu(state: _MenuState) -> None:
     if state.logged_in:
         n_fields, n_ops = _menu_counts(state)
@@ -1658,6 +1704,7 @@ def _print_menu(state: _MenuState) -> None:
     console.print(" 3) Tải lại operators (ghi đè cache)")
     console.print(" 4) Test engine (không cần đăng nhập — kiểm tra luồng cục bộ)")
     console.print(" 5) Auto SIM (vòng kín AI+MiniBrain, cần đăng nhập)")
+    console.print(" 6) Xem & nộp alpha đã tìm được (dry-run trước, hỏi xác nhận)")
     console.print(" 0) Thoát")
 
 
@@ -1678,7 +1725,7 @@ def start() -> None:
                 _menu_login(state)
             elif choice == "4":
                 _menu_test_engine(state)
-            elif choice in {"2", "3", "5"} and not state.logged_in:
+            elif choice in {"2", "3", "5", "6"} and not state.logged_in:
                 console.print("[yellow]Hãy đăng nhập (1) trước.[/yellow]")
             elif choice == "2":
                 _menu_fields(state)
@@ -1686,6 +1733,8 @@ def start() -> None:
                 _menu_operators(state)
             elif choice == "5":
                 _menu_auto_sim(state)
+            elif choice == "6":
+                _menu_view_submit(state)
             else:
                 console.print("[red]Lựa chọn không hợp lệ.[/red]")
         except AuthError as exc:
