@@ -3,7 +3,13 @@ Power Pool Correlation/Theme (xem docstring plan/module)."""
 
 from __future__ import annotations
 
-from src.scoring.power_pool import check_power_pool_eligibility, count_operators_fields
+from src.llm.hypothesis import Hypothesis
+from src.scoring.power_pool import (
+    build_power_pool_description,
+    check_power_pool_eligibility,
+    count_operators_fields,
+    is_valid_power_pool_description,
+)
 
 
 def test_dem_operator_field_co_ban():
@@ -60,3 +66,22 @@ def test_khong_du_vi_qua_nhieu_field():
     result = check_power_pool_eligibility("add(add(add(f1, f2), f3), f4)", sharpe=1.5)
     assert result.eligible is False
     assert any("field" in r for r in result.reasons)
+
+
+def test_build_description_ghep_dung_mau_wq():
+    h = Hypothesis(
+        observation="Gia co phieu co xu huong dao chieu sau chuoi giam manh trong ngan han.",
+        background="Ly thuyet mean-reversion tren thi truong von ngan han.",
+        economic_rationale="Nha dau tu phan ung thai qua roi dieu chinh lai theo thoi gian.",
+        implementation_spec="Dung field close, cua so 5 ngay, chuan hoa bang rank.",
+    )
+    desc = build_power_pool_description(h)
+    assert "Idea:" in desc
+    assert "Rationale for data used:" in desc
+    assert "Rationale for operators used:" in desc
+    assert is_valid_power_pool_description(desc) is True
+
+
+def test_is_valid_description_do_dai():
+    assert is_valid_power_pool_description("a" * 99) is False
+    assert is_valid_power_pool_description("a" * 100) is True

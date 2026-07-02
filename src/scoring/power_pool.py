@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from src.lang.parser import parse_expression
 from src.lang.visitors import FieldCollector, OperatorCollector
+from src.llm.hypothesis import Hypothesis
 
 MIN_SHARPE = 1.0
 MAX_UNIQUE_OPERATORS = 8
@@ -59,3 +60,21 @@ def check_power_pool_eligibility(expr: str, sharpe: float | None) -> PowerPoolEl
     return PowerPoolEligibility(
         eligible=not reasons, reasons=reasons, n_operators=n_operators, n_fields=n_fields
     )
+
+
+def build_power_pool_description(hypothesis: Hypothesis) -> str:
+    """Ghép Idea/Rationale theo mẫu WQ Brain (Idea / Rationale for data used / Rationale for
+    operators used, >=100 ký tự) từ Hypothesis 4 phần đã sinh sẵn (GĐ2, HypothesisGenerator).
+    KHÔNG gọi LLM thêm — ghép trực tiếp nội dung đã có, ánh xạ gần đúng (implementation_spec
+    thường nêu cả field lẫn tham số -> dùng cho phần 'data used'; economic_rationale ánh xạ
+    sang 'operators used' vì đây là phần diễn giải cách vận hành tín hiệu)."""
+    parts = [
+        f"Idea: {hypothesis.observation} {hypothesis.background}".strip(),
+        f"Rationale for data used: {hypothesis.implementation_spec}".strip(),
+        f"Rationale for operators used: {hypothesis.economic_rationale}".strip(),
+    ]
+    return "\n".join(p for p in parts if p)
+
+
+def is_valid_power_pool_description(text: str) -> bool:
+    return len(text) >= MIN_DESCRIPTION_LEN
