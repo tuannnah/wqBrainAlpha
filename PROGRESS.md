@@ -11,12 +11,21 @@
   ensure fields/operators) / tải lại fields / tải lại operators / test engine cục bộ (không
   cần đăng nhập) / Auto SIM (vòng kín thật). Dọn code chết `_auto_prepare`/`AutoPipeline`/
   `login.bat`; gộp trùng lặp CLI `closed-loop` + menu qua `_run_closed_loop_session`.
-- **In progress:** Không có việc dở dang — vừa merge + push xong.
+- **In progress:** Không có việc dở dang. Vừa đối chiếu mục 5 (Auto SIM) với toàn bộ tài liệu
+  thiết kế vòng kín (`docs/superpowers/specs/2026-06-26-ai-minibrain-closed-loop-design.md` +
+  6 plan phase) + vá gap phát hiện quota (`QuotaExceededError`, xem entry bên dưới) — sẵn sàng
+  bắt đầu kiểm thử thật.
 - **Next step:** Chạy thật mục 5 (Auto SIM) với đăng nhập thật để xác nhận end-to-end với
-  WQ Brain SIM/quota thật (mục 4 test engine cục bộ đã xác nhận wiring sạch, nhưng chưa thử
-  SIM Brain thật qua đường menu mới).
+  WQ Brain SIM/quota thật — ĐÂY SẼ LÀ LẦN CHẠY THẬT ĐẦU TIÊN của toàn luồng SIM Brain qua
+  ClosedLoop (mục 4 chỉ test local, không đụng WQ). Theo dõi sát: (1) `QuotaExceededError`
+  mới vá có bắt đúng phản hồi thật của WQ khi gần/hết quota không (chưa verify với response
+  thật, chỉ verify logic qua fake response); (2) `RefinementLoop.repo.save_alpha/
+  save_simulation` có ghi đúng để `top`/`submit` thấy alpha tìm được không.
 - **Blockers / open risks:** Không có blocker biết tới ở thời điểm này. LLM_BACKEND hiện là
-  `deepseek` (đã xác nhận API còn hoạt động khi chạy mục 4 thật trong phiên này).
+  `deepseek` (đã xác nhận API còn hoạt động khi chạy mục 4 thật trong phiên này). Feedback (d)
+  "AI học từ SIM" (`AlphaTranslator.avoid_subtrees`/zoo) chỉ refresh giữa các phiên, không
+  refresh động trong lúc 1 phiên Auto SIM dài đang chạy — chấp nhận được cho v1, ghi nhận để
+  cải thiện sau nếu cần.
 - **MVP (Phases 1–3) reached:** yes (từ lâu).
 - **Calibration ρ (Spearman, Sharpe):** không đo trong phiên này — xem lệnh `calibrate`.
 
@@ -75,3 +84,31 @@
   không liên quan, đã xanh từ trước phiên này). `ruff check --select F401,F811,F821` sạch
   trên các file sửa. Đã merge `closed-loop-integration` → `main` (merge commit) và
   `git push origin main` thành công (`fbe4b2b..70e3e54`).
+
+### [2026-07-02] Session 02 — Đối chiếu mục 5 (Auto SIM) với tài liệu thiết kế + vá gap quota
+- **Phase:** Sau Phase 8 — kiểm tra hoàn thiện `ClosedLoop` (mục 5) trước khi bắt đầu kiểm thử
+  thật với WQ Brain.
+- **Done:** Đọc lại toàn bộ `docs/superpowers/specs/2026-06-26-ai-minibrain-closed-loop-design.md`
+  + 6 plan phase (1/2/3/4A/4B/4C) và đối chiếu từng phần với code hiện tại (`ClosedLoop`,
+  `RefinementLoopRefiner`, `GPIdeaSource`, `CalibrationTracker`, `pool_corr_fn`,
+  `RefinementLoop.repo.save_alpha/save_simulation`). Xác nhận: data flow chính, 3/4 feedback
+  (avoid-list, calibrate ρ, pool self-corr Brain tầng-2 qua `/correlations/self`) đã wiring
+  đầy đủ; kết quả SIM ghi đúng vào cả `BrainSimLinkModel` lẫn `AlphaModel`/`SimulationModel`
+  (nên `top`/`submit` thấy được alpha do Auto SIM tìm ra).
+- **Decisions:** Vá phòng ngừa gap "phát hiện hết quota ngày không chính xác" (tự tài liệu
+  Phase 4C ghi "best-effort, chốt sau lần chạy thật đầu tiên" — nhưng chưa có lần chạy thật
+  nào). Thêm `QuotaExceededError` (`src/simulation/simulator.py`, song song `AuthExpiredError`)
+  nhận diện 429 dai dẳng hoặc header `X-Ratelimit-Remaining<=0` trên response
+  `POST /simulations`, wire vào `RefinementLoopRefiner.refine_and_sim`
+  (`src/app/closed_loop_adapters.py`) — cả hai loại lỗi đều ánh xạ sang `QuotaExhausted` để
+  `ClosedLoop` dừng gọn. Chọn vá TRƯỚC khi test thật (theo yêu cầu người dùng) thay vì chờ
+  quan sát hành vi thật rồi mới sửa — vì logic chỉ verify qua fake response, CHƯA verify với
+  response thật của WQ khi hết quota (ghi rõ ở Next step để theo dõi khi chạy thật).
+- **In progress:** Không.
+- **Blockers / open risks:** Feedback (d) "AI học từ SIM" chỉ refresh avoid-subtree/zoo giữa
+  các phiên, không động trong 1 phiên dài — chấp nhận cho v1. `QuotaExceededError` logic mới
+  chưa verify với response thật của WQ Brain.
+- **Next step:** Chạy thật mục 5 (Auto SIM) — xem `Current state` phía trên.
+- **Tests:** `pytest -q`: 883 passed (879 + 4 mới: 3 `test_simulator.py` + 1
+  `test_closed_loop_adapters.py`), 1 fail có sẵn không liên quan (psycopg). `ruff --select
+  F401,F811,F821` sạch. Commit `265f2e8`, đã push `main` (`0ebc68d..265f2e8`).
