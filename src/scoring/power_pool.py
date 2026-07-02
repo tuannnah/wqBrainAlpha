@@ -32,3 +32,30 @@ def count_operators_fields(expr: str) -> tuple[int, int]:
     operators = OperatorCollector().visit(node) - _EXEMPT_OPERATORS
     fields = FieldCollector().visit(node) - _GROUPING_FIELDS
     return len(operators), len(fields)
+
+
+@dataclass(frozen=True)
+class PowerPoolEligibility:
+    eligible: bool
+    reasons: list[str] = field(default_factory=list)  # rỗng nếu eligible
+    n_operators: int = 0
+    n_fields: int = 0
+
+
+def check_power_pool_eligibility(expr: str, sharpe: float | None) -> PowerPoolEligibility:
+    """Kiểm tra 3 tiêu chí Power Pool tính được LOCAL: Sharpe>=1.0, operator unique<=8, field
+    unique<=3. KHÔNG gồm Power Pool Correlation/Theme/Turnover-SubUniverse-RobustUniverse test
+    (xem docstring module)."""
+    reasons: list[str] = []
+    n_operators, n_fields = count_operators_fields(expr)
+
+    if sharpe is None or sharpe < MIN_SHARPE:
+        reasons.append(f"Sharpe {sharpe} < {MIN_SHARPE}")
+    if n_operators > MAX_UNIQUE_OPERATORS:
+        reasons.append(f"{n_operators} operator unique > {MAX_UNIQUE_OPERATORS}")
+    if n_fields > MAX_UNIQUE_FIELDS:
+        reasons.append(f"{n_fields} field unique > {MAX_UNIQUE_FIELDS}")
+
+    return PowerPoolEligibility(
+        eligible=not reasons, reasons=reasons, n_operators=n_operators, n_fields=n_fields
+    )

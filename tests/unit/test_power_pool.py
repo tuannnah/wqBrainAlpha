@@ -3,7 +3,7 @@ Power Pool Correlation/Theme (xem docstring plan/module)."""
 
 from __future__ import annotations
 
-from src.scoring.power_pool import count_operators_fields
+from src.scoring.power_pool import check_power_pool_eligibility, count_operators_fields
 
 
 def test_dem_operator_field_co_ban():
@@ -26,3 +26,37 @@ def test_operator_field_unique_khong_dem_lap():
     n_op, n_field = count_operators_fields("add(rank(close), rank(close))")
     assert n_op == 2  # add, rank (không đếm rank 2 lần)
     assert n_field == 1  # close (không đếm 2 lần)
+
+
+def test_du_dieu_kien_power_pool():
+    result = check_power_pool_eligibility("rank(add(close, open))", sharpe=1.2)
+    assert result.eligible is True
+    assert result.reasons == []
+    assert result.n_operators == 2
+    assert result.n_fields == 2
+
+
+def test_khong_du_vi_sharpe_thap():
+    result = check_power_pool_eligibility("rank(close)", sharpe=0.5)
+    assert result.eligible is False
+    assert any("Sharpe" in r for r in result.reasons)
+
+
+def test_khong_du_vi_sharpe_none():
+    result = check_power_pool_eligibility("rank(close)", sharpe=None)
+    assert result.eligible is False
+
+
+def test_khong_du_vi_qua_nhieu_operator():
+    expr = "close"
+    for i in range(9):
+        expr = f"op{i}({expr})"
+    result = check_power_pool_eligibility(expr, sharpe=1.5)
+    assert result.eligible is False
+    assert any("operator" in r for r in result.reasons)
+
+
+def test_khong_du_vi_qua_nhieu_field():
+    result = check_power_pool_eligibility("add(add(add(f1, f2), f3), f4)", sharpe=1.5)
+    assert result.eligible is False
+    assert any("field" in r for r in result.reasons)
