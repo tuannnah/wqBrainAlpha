@@ -6,7 +6,10 @@ src.gp/src.llm/src.pipeline/src.lang (khác src/pipeline vốn cấm src.llm/src
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from src.pipeline.closed_loop import ClosedLoop
 
 from src.gp.engine import GPEngine
 from src.lang.parser import parse
@@ -82,3 +85,28 @@ class GPIdeaSource:
             gp_engine=engine_any, cfg=self._config, data=self._data,
             top_k=self.top_k, max_corr=self.max_corr, pool=pool,
         )
+
+
+def build_closed_loop(
+    *, data: object, repo: object, config: object, registry: object, loop: object,
+    region: str = "USA", universe: str = "TOP3000",
+    pop_size: int = 30, n_generations: int = 3, base_seed: int = 42,
+    top_k: int = 10, max_corr: float = 0.70,
+    calibrate_every: int = 10, rho_bar: float = 0.5, max_ideas: int | None = None,
+) -> "ClosedLoop":
+    """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + RefinementLoopRefiner (AI refine+sim qua
+    `loop`) + CalibrationTracker (ρ) + ClosedLoop. `loop` là RefinementLoop đã dựng (đăng nhập
+    + Simulator thật) do composition root (main.py) truyền vào."""
+    from src.pipeline.closed_loop import CalibrationTracker, ClosedLoop
+
+    idea_source = GPIdeaSource(
+        data, repo, config, registry, pop_size=pop_size, n_generations=n_generations,
+        base_seed=base_seed, top_k=top_k, max_corr=max_corr,
+    )
+    refiner = RefinementLoopRefiner(loop)
+    tracker = CalibrationTracker(repo, every=calibrate_every, rho_bar=rho_bar)  # type: ignore[arg-type]
+    return ClosedLoop(
+        idea_source=idea_source, refiner=refiner, repo=repo,  # type: ignore[arg-type]
+        region=region, universe=universe, max_ideas=max_ideas,
+        calibration_tracker=tracker,
+    )

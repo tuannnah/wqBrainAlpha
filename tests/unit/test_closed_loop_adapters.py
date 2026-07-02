@@ -108,3 +108,29 @@ def test_refiner_raises_quota_exhausted_on_auth_expired() -> None:
 
     with pytest.raises(QuotaExhausted):
         RefinementLoopRefiner(_AuthDeadLoop()).refine_and_sim(_cand("rank(close)"))
+
+
+def test_build_closed_loop_wires_components(small_panel, repo) -> None:  # noqa: ANN001
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.lang.registry import default_registry
+    from src.pipeline.closed_loop import ClosedLoop
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            # trả LoopResult-like tối thiểu: không pass, không sim
+            return type("R", (), {"best_candidate": None, "best_passed": False,
+                                  "best_alpha_id": None, "best_metrics": {},
+                                  "best_self_corr": None, "sims_used": 0,
+                                  "stop_reason": "no_seed"})()
+
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2)
+    assert isinstance(loop, ClosedLoop)
+    report = loop.run()  # chạy với GP thật (pop nhỏ) + _NoopLoop refiner -> không crash
+    assert report.ideas_tried >= 0
+    assert report.stop_reason in {"no_more_ideas", "quota"}
