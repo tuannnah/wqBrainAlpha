@@ -75,7 +75,8 @@ class SimConfig:
 
     @classmethod
     def default(cls, region: str = "USA", universe: str = "TOP3000", delay: int = DEFAULT_DELAY) -> "SimConfig":
-        return cls(region=region, universe=universe, delay=delay)
+        max_trade = "ON" if region.upper() in REQUIRE_MAX_TRADE_REGIONS else "OFF"
+        return cls(region=region, universe=universe, delay=delay, max_trade=max_trade)
 
     def with_overrides(self, **changes) -> "SimConfig":
         """Trả bản sao với một số chiều bị ghi đè (bản gốc không đổi)."""

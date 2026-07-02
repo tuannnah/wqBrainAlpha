@@ -64,11 +64,17 @@ def test_simulate_command_truyen_day_du_sim_config(monkeypatch):
         "neutralization": "INDUSTRY",
         "decay": 6,
         "truncation": 0.12,
+        "testPeriod": "P0Y0M",
+        "maxTrade": "OFF",
+        "maxPosition": "OFF",
     }
     assert captured["saved"] == {
         "region": "EUR",
         "universe": "TOP1200",
-        "config_key": "EUR|TOP1200|delay=0|INDUSTRY|decay=6|truncation=0.12",
+        "config_key": (
+            "EUR|TOP1200|delay=0|INDUSTRY|decay=6|truncation=0.12|"
+            "test_period=P0Y0M|max_trade=OFF|max_position=OFF"
+        ),
     }
 
 

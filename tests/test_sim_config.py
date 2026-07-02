@@ -111,3 +111,15 @@ def test_key_phan_biet_theo_max_trade():
     a = SimConfig.default()
     b = SimConfig.default().with_overrides(max_trade="ON")
     assert a.key() != b.key()
+
+
+@pytest.mark.parametrize("region", ["ASI", "JPN", "HKG", "KOR", "TWN", "asi"])
+def test_default_tu_bat_max_trade_cho_region_bat_buoc(region):
+    c = SimConfig.default(region=region)
+    assert c.max_trade == "ON"
+
+
+@pytest.mark.parametrize("region", ["USA", "EUR", "GLB", "CHN", "AMR"])
+def test_default_khong_bat_max_trade_cho_region_khac(region):
+    c = SimConfig.default(region=region)
+    assert c.max_trade == "OFF"
