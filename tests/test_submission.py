@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import create_engine
 
 from src.storage.db import init_db, make_session_factory
@@ -245,3 +247,81 @@ def test_set_properties_loi_http_khong_crash():
         assert row.properties_set_at is None  # lỗi -> không đánh dấu đã set thành công
     finally:
         session.close()
+
+
+# ------------------------------------------------------- power pool auto-tag
+def test_submit_tu_gan_tag_power_pool_khi_du_dieu_kien():
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    session = sf()
+    hyp = {
+        "observation": "Gia co phieu dao chieu sau chuoi giam manh trong ngan han lien tuc.",
+        "background": "Ly thuyet mean-reversion tren thi truong von ngan han duoc ung ho rong rai.",
+        "economic_rationale": "Nha dau tu phan ung thai qua roi dieu chinh lai theo thoi gian giao dich.",
+        "implementation_spec": "Dung field close, cua so 5 ngay, chuan hoa bang toan tu rank toan thi truong.",
+    }
+    session.add(AlphaModel(
+        id="a1", expression="rank(add(close, open))", source="ga", hypothesis=json.dumps(hyp),
+    ))
+    session.add(SimulationModel(
+        id="s1", alpha_id="a1", wq_alpha_id="WQ1", region="USA", universe="TOP3000",
+        sharpe=1.5, status="passed",
+    ))
+    session.commit()
+    session.close()
+
+    client = FakeClient()
+    client.queue_post(FakeResponse(201))
+    client.queue_patch(FakeResponse(200, json_data={"id": "WQ1"}))
+    mgr = SubmissionManager(client, sf, FakeCorr(value=0.1))
+
+    result = mgr.submit("WQ1")
+    assert result.status == "submitted"
+
+    patch_calls = [c for c in client.calls if c[0] == "PATCH"]
+    assert len(patch_calls) == 1
+    payload = patch_calls[0][2]["json"]
+    assert payload["tags"] == ["PowerPoolSelected"]
+    assert "Idea:" in payload["regular"]["description"]
+
+
+def test_submit_khong_gan_tag_khi_khong_du_dieu_kien_power_pool():
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    session = sf()
+    session.add(AlphaModel(id="a1", expression="rank(close)", source="ga"))
+    session.add(SimulationModel(
+        id="s1", alpha_id="a1", wq_alpha_id="WQ1", region="USA", universe="TOP3000",
+        sharpe=0.5, status="passed",  # Sharpe < 1.0 -> không đạt Power Pool
+    ))
+    session.commit()
+    session.close()
+
+    client = FakeClient()
+    client.queue_post(FakeResponse(201))
+    mgr = SubmissionManager(client, sf, FakeCorr(value=0.1))
+
+    result = mgr.submit("WQ1")
+    assert result.status == "submitted"
+    assert not any(c[0] == "PATCH" for c in client.calls)
+
+
+def test_submit_khong_gan_tag_khi_thieu_hypothesis():
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    session = sf()
+    session.add(AlphaModel(id="a1", expression="rank(close)", source="ga"))  # không có hypothesis
+    session.add(SimulationModel(
+        id="s1", alpha_id="a1", wq_alpha_id="WQ1", region="USA", universe="TOP3000",
+        sharpe=1.5, status="passed",
+    ))
+    session.commit()
+    session.close()
+
+    client = FakeClient()
+    client.queue_post(FakeResponse(201))
+    mgr = SubmissionManager(client, sf, FakeCorr(value=0.1))
+
+    result = mgr.submit("WQ1")
+    assert result.status == "submitted"
+    assert not any(c[0] == "PATCH" for c in client.calls)

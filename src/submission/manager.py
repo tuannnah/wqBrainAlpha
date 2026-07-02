@@ -113,7 +113,68 @@ class SubmissionManager:
         else:
             result = SubmissionResult(wq_alpha_id, "error", f"HTTP {resp.status_code}", corr)
         self._record(result)
+        if result.status == "submitted":
+            self._tag_if_power_pool_eligible(wq_alpha_id)
         return result
+
+    def _tag_if_power_pool_eligible(self, wq_alpha_id: str) -> None:
+        """Sau khi nộp REGULAR thành công, nếu alpha cũng đạt điều kiện Power Pool (Sharpe>=1.0,
+        operator/field unique trong giới hạn) thì tự gắn tag PowerPoolSelected + mô tả
+        Idea/Rationale — đây là [Power Pool + Regular] (đã pass regular nên KHÔNG cần Power Pool
+        Theme — Theme chỉ bắt buộc cho "pure Power Pool" alpha không pass regular, loại đó KHÔNG
+        tự động nộp ở đây, xem docs/superpowers/plans/2026-07-02-power-pool-alphas.md). Lỗi ở
+        bước này KHÔNG được làm hỏng kết quả submit chính (đã nộp thành công rồi)."""
+        import json as _json
+
+        from src.llm.hypothesis import Hypothesis
+        from src.scoring.power_pool import (
+            build_power_pool_description,
+            check_power_pool_eligibility,
+            is_valid_power_pool_description,
+        )
+
+        session = self.session_factory()
+        try:
+            row = (
+                session.query(SimulationModel, AlphaModel)
+                .join(AlphaModel, SimulationModel.alpha_id == AlphaModel.id)
+                .filter(SimulationModel.wq_alpha_id == wq_alpha_id)
+                .order_by(SimulationModel.sim_at.desc())
+                .first()
+            )
+        finally:
+            session.close()
+        if row is None:
+            return
+        sim, alpha = row
+
+        try:
+            verdict = check_power_pool_eligibility(alpha.expression, sim.sharpe)
+        except Exception as exc:  # noqa: BLE001 - biểu thức lạ không được chặn kết quả submit
+            logger.warning("Không kiểm được điều kiện Power Pool cho {}: {}", wq_alpha_id, exc)
+            return
+        if not verdict.eligible:
+            return
+
+        description = None
+        if alpha.hypothesis:
+            try:
+                hyp = Hypothesis.from_dict(_json.loads(alpha.hypothesis))
+                description = build_power_pool_description(hyp)
+            except (ValueError, TypeError) as exc:
+                logger.warning("Không đọc được hypothesis của {}: {}", wq_alpha_id, exc)
+
+        if not description or not is_valid_power_pool_description(description):
+            logger.info(
+                "Alpha {} đạt điều kiện Power Pool nhưng thiếu mô tả >=100 ký tự -> bỏ qua gắn tag",
+                wq_alpha_id,
+            )
+            return
+
+        try:
+            self.set_properties(wq_alpha_id, tags=["PowerPoolSelected"], regular_desc=description)
+        except Exception as exc:  # noqa: BLE001 - không để hỏng kết quả submit chính
+            logger.warning("Không gắn được tag Power Pool cho {}: {}", wq_alpha_id, exc)
 
     # ---------------------------------------------------------- set_properties
     def set_properties(
