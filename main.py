@@ -600,6 +600,80 @@ def score_one_cmd(
     console.print(table)
 
 
+@app.command("closed-loop")
+def closed_loop_cmd(
+    market_data_dir: str = typer.Option(..., help="Thư mục parquet MarketData (gate local)"),
+    region: str = typer.Option("USA"),
+    universe: str = typer.Option("TOP3000"),
+    delay: int = typer.Option(1),
+    patience: int = typer.Option(5, help="Bỏ ý tưởng sau N lần refine không cải thiện"),
+    pop_size: int = typer.Option(30, help="Kích thước quần thể GP mỗi batch ý tưởng"),
+    n_generations: int = typer.Option(3),
+    top_k: int = typer.Option(10, help="Số ý tưởng/batch sau decorrelate"),
+    max_corr: float = typer.Option(0.70),
+    max_ideas: int = typer.Option(0, help="0 = không trần (chạy đến hết quota)"),
+    neutralization: str = typer.Option("NONE"),
+    decay: int = typer.Option(0),
+    truncation: float = typer.Option(0.10),
+) -> None:
+    """Vòng kín AI + MiniBrain: GP sinh ý tưởng → AI refine ≤patience + gate local → SIM Brain
+    → lưu DB + feedback → lặp đến khi hết quota (Ctrl+C để dừng tay). Cần đăng nhập + .env AI."""
+    _setup_logging()
+
+    import src.operators_local  # noqa: F401
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.data.adapters.parquet_source import ParquetSource
+    from src.lang.registry import default_registry
+    from src.pipeline.closed_loop import QuotaExhausted
+    from src.storage.repository import MiniBrainRepository
+
+    if not Path(market_data_dir).is_dir():
+        console.print(f"[red]Không thấy thư mục MarketData: {market_data_dir}[/red]")
+        raise typer.Exit(code=1)
+
+    client = _make_client()
+    client.authenticate()
+
+    engine_db = init_db(make_engine())
+    session_factory = make_session_factory(engine_db)
+    repo = MiniBrainRepository(session_factory)
+
+    try:
+        data = ParquetSource(market_data_dir).load("1900-01-01", "2999-12-31", universe)
+    except (FileNotFoundError, AssertionError, OSError) as exc:
+        console.print(f"[red]Không load được MarketData: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    cfg = _portfolio_config_from_opts(neutralization, decay, truncation, delay)
+    loop, _deepseek = _make_research_loop(
+        session_factory, client, region, universe, delay,
+        max_sims=10**9, patience=patience, marathon=True,
+    )
+    loop.market_data = data          # bật local gate trước sim
+    loop.local_gate_cfg = cfg
+    loop.max_simulations = 10**9     # không trần local; dừng theo quota Brain (QuotaExhausted)
+
+    cl = build_closed_loop(
+        data=data, repo=repo, config=cfg, registry=default_registry(), loop=loop,
+        region=region, universe=universe, pop_size=pop_size, n_generations=n_generations,
+        top_k=top_k, max_corr=max_corr, max_ideas=(max_ideas or None),
+    )
+    console.print("[cyan]Bắt đầu vòng kín (Ctrl+C để dừng)…[/cyan]")
+    try:
+        report = cl.run()
+    except QuotaExhausted:
+        console.print("[yellow]Hết quota Brain — vòng kín dừng tự động. Kết quả đã lưu DB.[/yellow]")
+        return
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Đã dừng tay (Ctrl+C). Kết quả đã lưu DB.[/yellow]")
+        return
+    console.print(
+        f"[green]Vòng kín xong[/green] ({report.stop_reason}): ý tưởng={report.ideas_tried} "
+        f"sim={report.sims_used} pass={report.n_passed} bỏ={report.n_abandoned} "
+        f"ρ={report.rho_sharpe}"
+    )
+
+
 def _make_deepseek(model: str | None = None):
     if settings.llm_backend == "agent":
         from src.llm.agent_bridge import AgentBridgeClient
@@ -1444,6 +1518,62 @@ def _menu_marathon(state: _MenuState) -> None:
     )
 
 
+def _menu_closed_loop(state: _MenuState) -> None:
+    """Vòng kín AI+MiniBrain từ menu: hỏi thư mục panel rồi gọi build_closed_loop."""
+
+    import src.operators_local  # noqa: F401
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.data.adapters.parquet_source import ParquetSource
+    from src.lang.registry import default_registry
+    from src.pipeline.closed_loop import QuotaExhausted
+    from src.storage.repository import MiniBrainRepository
+
+    n_fields, _ = _menu_counts(state)
+    if n_fields == 0:
+        console.print("[red]Chưa có data fields — chọn 2 để tải trước.[/red]")
+        return
+
+    market_data_dir = input("\nThư mục parquet MarketData: ").strip()
+    if not market_data_dir or not Path(market_data_dir).is_dir():
+        console.print(f"[red]Không thấy thư mục MarketData: {market_data_dir}[/red]")
+        return
+
+    repo = MiniBrainRepository(state.session_factory)
+    try:
+        data = ParquetSource(market_data_dir).load("1900-01-01", "2999-12-31", state.universe)
+    except (FileNotFoundError, AssertionError, OSError) as exc:
+        console.print(f"[red]Không load được MarketData: {exc}[/red]")
+        return
+
+    cfg = _portfolio_config_from_opts("NONE", 0, 0.10, state.delay)
+    loop, _deepseek = _make_research_loop(
+        state.session_factory, state.client, state.region, state.universe, state.delay,
+        max_sims=10**9, patience=5, marathon=True,
+    )
+    loop.market_data = data
+    loop.local_gate_cfg = cfg
+    loop.max_simulations = 10**9
+
+    cl = build_closed_loop(
+        data=data, repo=repo, config=cfg, registry=default_registry(), loop=loop,
+        region=state.region, universe=state.universe,
+    )
+    console.print("[cyan]Bắt đầu vòng kín (Ctrl+C để dừng)…[/cyan]")
+    try:
+        report = cl.run()
+    except QuotaExhausted:
+        console.print("[yellow]Hết quota Brain — vòng kín dừng. Kết quả đã lưu DB.[/yellow]")
+        return
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Đã dừng tay (Ctrl+C). Kết quả đã lưu DB.[/yellow]")
+        return
+    console.print(
+        f"[green]Vòng kín xong[/green] ({report.stop_reason}): ý tưởng={report.ideas_tried} "
+        f"sim={report.sims_used} pass={report.n_passed} bỏ={report.n_abandoned} "
+        f"ρ={report.rho_sharpe}"
+    )
+
+
 def _print_menu(state: _MenuState) -> None:
     if state.logged_in:
         n_fields, n_ops = _menu_counts(state)
@@ -1461,6 +1591,7 @@ def _print_menu(state: _MenuState) -> None:
     console.print(" 4) Chạy engine sinh alpha")
     console.print(" 5) Chạy thử (ngắn)")
     console.print(" 6) Marathon (chạy đến khi hết quota)")
+    console.print(" 7) Vòng kín AI+MiniBrain (GP→refine→SIM→feedback)")
     console.print(" 0) Thoát")
 
 
@@ -1482,7 +1613,7 @@ def start(
                 break
             elif choice == "1":
                 _menu_login(state)
-            elif choice in {"2", "3", "4", "5", "6"} and not state.logged_in:
+            elif choice in {"2", "3", "4", "5", "6", "7"} and not state.logged_in:
                 console.print("[yellow]Hãy đăng nhập (1) trước.[/yellow]")
             elif choice == "2":
                 _menu_fields(state)
@@ -1494,6 +1625,8 @@ def start(
                 _menu_research(state, max_sims=5, no_improve=2)
             elif choice == "6":
                 _menu_marathon(state)
+            elif choice == "7":
+                _menu_closed_loop(state)
             else:
                 console.print("[red]Lựa chọn không hợp lệ.[/red]")
         except AuthError as exc:
