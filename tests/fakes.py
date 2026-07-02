@@ -25,12 +25,16 @@ class FakeClient:
         self.calls = []
         self._get_queue = []
         self._post_queue = []
+        self._patch_queue = []
 
     def queue_get(self, response):
         self._get_queue.append(response)
 
     def queue_post(self, response):
         self._post_queue.append(response)
+
+    def queue_patch(self, response):
+        self._patch_queue.append(response)
 
     def authenticate(self):
         self._authenticated = True
@@ -42,6 +46,10 @@ class FakeClient:
     def post(self, path, **kwargs):
         self.calls.append(("POST", path, kwargs))
         return self._post_queue.pop(0)
+
+    def patch(self, path, **kwargs):
+        self.calls.append(("PATCH", path, kwargs))
+        return self._patch_queue.pop(0)
 
 
 class FakeDeepSeek:
