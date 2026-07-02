@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 
 from loguru import logger
 
-from src.storage.models import AlphaModel, SimulationModel, SubmissionModel
+from src.storage.models import AlphaModel, SimulationModel, SubmissionModel, _utcnow
 
 
 @dataclass
@@ -25,6 +26,13 @@ class SubmissionResult:
     status: str  # submitted/rejected/error
     detail: str = ""
     self_correlation: float | None = None
+
+
+@dataclass
+class PropertiesResult:
+    wq_alpha_id: str
+    status: str  # ok/unchanged/error
+    detail: str = ""
 
 
 class SubmissionManager:
@@ -110,6 +118,92 @@ class SubmissionManager:
             result = SubmissionResult(wq_alpha_id, "error", f"HTTP {resp.status_code}", corr)
         self._record(result)
         return result
+
+    # ---------------------------------------------------------- set_properties
+    def set_properties(
+        self,
+        wq_alpha_id: str,
+        *,
+        name: str | None = None,
+        tags: list[str] | None = None,
+        regular_desc: str | None = None,
+        combo_desc: str | None = None,
+        selection_desc: str | None = None,
+        color: str | None = None,
+    ) -> PropertiesResult:
+        """Set name/color/tags/mô tả cho alpha qua PATCH /alphas/{id} (T-C.4). Idempotent:
+        bỏ qua gọi API nếu tags+regular_desc giống hệt lần set gần nhất đã lưu."""
+        payload: dict = {}
+        if name:
+            payload["name"] = name
+        if color:
+            payload["color"] = color
+        if tags:
+            payload["tags"] = tags
+        if selection_desc:
+            payload["selectionDesc"] = selection_desc
+        if combo_desc:
+            payload["comboDesc"] = combo_desc
+        if regular_desc:
+            payload["regular"] = {"description": regular_desc}
+
+        tags_json = json.dumps(tags) if tags else None
+        session = self.session_factory()
+        try:
+            row = (
+                session.query(SubmissionModel)
+                .filter(SubmissionModel.alpha_id == wq_alpha_id)
+                .order_by(SubmissionModel.submitted_at.desc())
+                .first()
+            )
+            if row is not None and row.tags == tags_json and row.regular_desc == regular_desc:
+                return PropertiesResult(wq_alpha_id, "unchanged", "giống lần set trước")
+        finally:
+            session.close()
+
+        try:
+            resp = self.client.patch(f"/alphas/{wq_alpha_id}", json=payload)
+        except Exception as exc:  # noqa: BLE001 - không để pipeline crash
+            self._record_properties(wq_alpha_id, tags_json, regular_desc, ok=False)
+            return PropertiesResult(wq_alpha_id, "error", str(exc))
+
+        if resp.status_code not in (200, 201):
+            self._record_properties(wq_alpha_id, tags_json, regular_desc, ok=False)
+            return PropertiesResult(wq_alpha_id, "error", f"HTTP {resp.status_code}")
+
+        self._record_properties(wq_alpha_id, tags_json, regular_desc, ok=True)
+        return PropertiesResult(wq_alpha_id, "ok", "da set properties")
+
+    def _record_properties(
+        self, wq_alpha_id: str, tags_json: str | None, regular_desc: str | None, *, ok: bool
+    ) -> None:
+        session = self.session_factory()
+        try:
+            row = (
+                session.query(SubmissionModel)
+                .filter(SubmissionModel.alpha_id == wq_alpha_id)
+                .order_by(SubmissionModel.submitted_at.desc())
+                .first()
+            )
+            set_at = _utcnow() if ok else None
+            if row is not None:
+                row.tags = tags_json
+                row.regular_desc = regular_desc
+                row.properties_set_at = set_at
+            else:
+                session.add(
+                    SubmissionModel(
+                        id=uuid.uuid4().hex,
+                        alpha_id=wq_alpha_id,
+                        status="properties_set",
+                        tags=tags_json,
+                        regular_desc=regular_desc,
+                        properties_set_at=set_at,
+                    )
+                )
+            session.commit()
+        finally:
+            session.close()
 
     def run_daily(self, dry_run: bool = True) -> list[Candidate]:
         """Chọn ≤ quota alpha tốt nhất, không trùng correlation. Nộp nếu không dry-run."""

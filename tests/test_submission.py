@@ -152,3 +152,96 @@ def test_submission_model_co_cot_properties():
         assert row.properties_set_at is None
     finally:
         session.close()
+
+
+# --------------------------------------------------------------- set_properties
+def test_set_properties_insert_row_moi_khi_chua_tung_submit():
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    _seed(sf)
+
+    client = FakeClient()
+    client.queue_patch(FakeResponse(200, json_data={"id": "WQ1"}))
+    mgr = SubmissionManager(client, sf, FakeCorr())
+
+    result = mgr.set_properties("WQ1", tags=["PowerPoolSelected"], regular_desc="Idea: " + "x" * 100)
+    assert result.status == "ok"
+
+    method, path, kwargs = client.calls[-1]
+    assert method == "PATCH"
+    assert path == "/alphas/WQ1"
+    payload = kwargs["json"]
+    assert payload["tags"] == ["PowerPoolSelected"]
+    assert payload["regular"] == {"description": "Idea: " + "x" * 100}
+    assert "name" not in payload  # None -> không đưa vào payload
+
+    session = sf()
+    try:
+        row = session.query(SubmissionModel).filter_by(alpha_id="WQ1").one()
+        assert row.status == "properties_set"
+        assert row.tags == '["PowerPoolSelected"]'
+        assert row.properties_set_at is not None
+    finally:
+        session.close()
+
+
+def test_set_properties_update_row_da_submit():
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    _seed(sf)
+
+    client = FakeClient()
+    client.queue_post(FakeResponse(201))
+    mgr = SubmissionManager(client, sf, FakeCorr(value=0.1))
+    mgr.submit("WQ1")  # tạo sẵn 1 row status=submitted
+
+    client.queue_patch(FakeResponse(200, json_data={"id": "WQ1"}))
+    mgr.set_properties("WQ1", tags=["t1"])
+
+    session = sf()
+    try:
+        rows = session.query(SubmissionModel).filter_by(alpha_id="WQ1").all()
+        assert len(rows) == 1  # KHÔNG insert thêm row mới
+        assert rows[0].status == "submitted"  # giữ nguyên status gốc
+        assert rows[0].tags == '["t1"]'
+    finally:
+        session.close()
+
+
+def test_set_properties_goi_lai_cung_payload_thi_bo_qua():
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    _seed(sf)
+
+    client = FakeClient()
+    client.queue_patch(FakeResponse(200, json_data={"id": "WQ1"}))
+    mgr = SubmissionManager(client, sf, FakeCorr())
+
+    r1 = mgr.set_properties("WQ1", tags=["a"], regular_desc="mo ta")
+    assert r1.status == "ok"
+    n_calls_before = len(client.calls)
+
+    r2 = mgr.set_properties("WQ1", tags=["a"], regular_desc="mo ta")
+    assert r2.status == "unchanged"
+    assert len(client.calls) == n_calls_before  # không gọi PATCH thêm
+
+
+def test_set_properties_loi_http_khong_crash():
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    _seed(sf)
+
+    client = FakeClient()
+    client.queue_patch(FakeResponse(500, text="server error"))
+    mgr = SubmissionManager(client, sf, FakeCorr())
+
+    result = mgr.set_properties("WQ1", tags=["a"])
+    assert result.status == "error"
+
+    session = sf()
+    try:
+        row = session.query(SubmissionModel).filter_by(alpha_id="WQ1").one()
+        assert row.status == "properties_set"
+        assert row.properties_set_at is None  # lỗi -> không đánh dấu đã set thành công
+    finally:
+        session.close()
