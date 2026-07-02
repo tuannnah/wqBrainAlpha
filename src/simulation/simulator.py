@@ -74,8 +74,30 @@ class AuthExpiredError(RuntimeError):
     quota (thay vì mô phỏng hỏng hàng loạt như sự cố session chết kéo dài)."""
 
 
+class QuotaExceededError(RuntimeError):
+    """WQ Brain báo hết quota simulation ngày — KHÁC AuthExpiredError (không phải lỗi xác
+    thực). Dừng sớm thay vì coi mỗi lần POST /simulations là "sim lỗi" rồi cứ thử ý tưởng
+    khác (vòng kín sẽ không bao giờ dừng gọn nếu không phân biệt hai trường hợp này)."""
+
+
 def _is_auth_error(status_code: int, text: str) -> bool:
     return status_code in (401, 403) or "authentication credentials" in (text or "").lower()
+
+
+def _is_quota_exhausted(resp) -> bool:
+    """Hết quota SIM ngày: POST /simulations vẫn 429 (WQBrainClient đã tự retry theo
+    Retry-After ở tầng dưới nhưng vẫn bị chặn -> chặn dai dẳng, không phải rate-limit tạm
+    thời), hoặc header X-Ratelimit-Remaining báo 0 (tài liệu WQ: 'Remaining simulations for
+    the day'). Không tự tin đọc header thiếu -> mặc định KHÔNG coi là hết quota."""
+    if resp.status_code == 429:
+        return True
+    remaining = resp.headers.get("X-Ratelimit-Remaining")
+    if remaining is None:
+        return False
+    try:
+        return int(remaining) <= 0
+    except ValueError:
+        return False
 
 
 SIM_DEFAULTS: dict[str, Any] = {
@@ -202,6 +224,11 @@ class Simulator:
 
         if resp.status_code not in (200, 201):
             logger.error("POST /simulations lỗi {}: {}", resp.status_code, resp.text)
+            if _is_quota_exhausted(resp):
+                raise QuotaExceededError(
+                    f"WQ Brain hết quota simulation ngày (HTTP {resp.status_code}, "
+                    f"X-Ratelimit-Remaining={resp.headers.get('X-Ratelimit-Remaining')})."
+                )
             if _is_auth_error(resp.status_code, resp.text):
                 self._consecutive_auth_failures += 1
                 if self._consecutive_auth_failures >= self.MAX_CONSECUTIVE_AUTH_FAILURES:

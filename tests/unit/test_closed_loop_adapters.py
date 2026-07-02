@@ -110,6 +110,20 @@ def test_refiner_raises_quota_exhausted_on_auth_expired() -> None:
         RefinementLoopRefiner(_AuthDeadLoop()).refine_and_sim(_cand("rank(close)"))
 
 
+def test_refiner_raises_quota_exhausted_on_quota_exceeded() -> None:
+    """QuotaExceededError (hết quota ngày thật, KHÁC lỗi auth) cũng phải ánh xạ sang
+    QuotaExhausted để ClosedLoop dừng gọn — không chỉ AuthExpiredError."""
+    from src.pipeline.closed_loop import QuotaExhausted
+    from src.simulation.simulator import QuotaExceededError
+
+    class _QuotaDeadLoop:
+        def run_from_seed(self, expression: str, on_progress: object = None) -> object:
+            raise QuotaExceededError("het quota simulation ngay")
+
+    with pytest.raises(QuotaExhausted):
+        RefinementLoopRefiner(_QuotaDeadLoop()).refine_and_sim(_cand("rank(close)"))
+
+
 def test_build_closed_loop_wires_components(small_panel, repo) -> None:  # noqa: ANN001
     from src.app.closed_loop_adapters import build_closed_loop
     from src.backtest.config import Neutralization, PortfolioConfig

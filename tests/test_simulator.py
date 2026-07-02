@@ -7,6 +7,7 @@ import pytest
 from src.simulation.rate_limiter import RateLimiter
 from src.simulation.simulator import (
     AuthExpiredError,
+    QuotaExceededError,
     Simulator,
     extract_event_fields,
     extract_invalid_field,
@@ -213,6 +214,45 @@ def test_simulate_raise_khi_auth_loi_lien_tiep():
     assert sim.simulate("rank(close)").status == "error"  # lần 2
     with pytest.raises(AuthExpiredError):
         sim.simulate("rank(close)")  # lần 3 -> dừng
+
+
+def test_simulate_raise_quota_exceeded_khi_429_dai_dang():
+    """POST /simulations vẫn 429 (WQBrainClient đã tự retry theo Retry-After nội bộ nhưng vẫn
+    bị chặn) -> hết quota ngày, KHÔNG phải lỗi auth -> raise QuotaExceededError riêng để
+    ClosedLoop dừng gọn thay vì cứ coi là sim lỗi rồi thử ý tưởng khác."""
+    client = FakeClient()
+    client.queue_post(FakeResponse(429, text="Too Many Requests", headers={"Retry-After": "5"}))
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0
+    )
+    with pytest.raises(QuotaExceededError):
+        sim.simulate("rank(close)")
+
+
+def test_simulate_raise_quota_exceeded_khi_ratelimit_remaining_ve_0():
+    """Header X-Ratelimit-Remaining=0 trên response lỗi -> hết quota simulation ngày (theo tài
+    liệu WQ: 'X-Ratelimit-Remaining: Remaining simulations for the day')."""
+    client = FakeClient()
+    client.queue_post(
+        FakeResponse(400, text="bad request", headers={"X-Ratelimit-Remaining": "0"})
+    )
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0
+    )
+    with pytest.raises(QuotaExceededError):
+        sim.simulate("rank(close)")
+
+
+def test_simulate_khong_raise_quota_khi_con_remaining():
+    """X-Ratelimit-Remaining > 0 -> KHÔNG phải hết quota, xử lý như lỗi thường (không raise)."""
+    client = FakeClient()
+    client.queue_post(
+        FakeResponse(400, text="bad request", headers={"X-Ratelimit-Remaining": "42"})
+    )
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0
+    )
+    assert sim.simulate("rank(close)").status == "error"
 
 
 def test_auth_counter_reset_khi_loi_khac():

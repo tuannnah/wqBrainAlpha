@@ -17,7 +17,7 @@ from src.lang.visitors import CanonicalHasher
 from src.pipeline.closed_loop import IdeaOutcome, QuotaExhausted
 from src.pipeline.runner import generate_many
 from src.pipeline.shortlist import ShortlistCandidate
-from src.simulation.simulator import AuthExpiredError
+from src.simulation.simulator import AuthExpiredError, QuotaExceededError
 
 
 class RefinementLoopRefiner:
@@ -30,9 +30,11 @@ class RefinementLoopRefiner:
         try:
             # result là Any: loop: object, run_from_seed dùng type: ignore[attr-defined]
             result: Any = self.loop.run_from_seed(candidate.expr)  # type: ignore[attr-defined]
-        except AuthExpiredError as exc:
-            # Best-effort: session chết / hết quota Brain → báo ClosedLoop dừng gọn.
-            # (Tinh chỉnh nhận diện quota-ngày chính xác sau lần chạy thật đầu tiên.)
+        except (AuthExpiredError, QuotaExceededError) as exc:
+            # AuthExpiredError: session chết (401/403 lặp). QuotaExceededError: hết quota
+            # simulation NGÀY thật (429 dai dẳng / X-Ratelimit-Remaining=0) — KHÁC lỗi auth,
+            # phân biệt rõ ở Simulator để không bị coi nhầm là "sim lỗi" rồi cứ thử tiếp.
+            # Cả hai đều báo ClosedLoop dừng gọn (không refine/sim thêm được nữa).
             raise QuotaExhausted(str(exc)) from exc
         best = result.best_candidate
         expr: str = best.expression if best is not None else candidate.expr
