@@ -1,0 +1,551 @@
+{
+  "count": 11,
+  "next": "https://api.worldquantbrain.com/tutorials?limit=10&offset=10",
+  "previous": null,
+  "results": [
+    {
+      "id": "discover-brain",
+      "category": "Getting Started",
+      "pages": [
+        {
+          "title": "*Read this First * - Starter Pack",
+          "duration": "PT19M",
+          "id": "read-first-starter-pack",
+          "lastModified": "2026-06-15T08:57:22.601732-04:00"
+        },
+        {
+          "title": "Introduction to Alphas",
+          "duration": "PT6M",
+          "id": "about-brain-platform",
+          "lastModified": "2025-09-12T03:33:37.870415-04:00"
+        },
+        {
+          "title": "Introduction to BRAIN Expression Language",
+          "duration": "PT3M",
+          "id": "introduction-brain-expression-language",
+          "lastModified": "2025-03-12T05:14:01.490538-04:00"
+        },
+        {
+          "title": "Intermediate Pack - Understand Results [1/2]",
+          "duration": "PT5M",
+          "id": "intermediate-pack-part-1",
+          "lastModified": "2025-09-08T05:22:10.878298-04:00"
+        },
+        {
+          "title": "Intermediate Pack - Improve your Alpha [2/2]",
+          "duration": "PT5M",
+          "id": "intermediate-pack-part-2",
+          "lastModified": "2025-03-12T05:10:08.846145-04:00"
+        },
+        {
+          "title": "Getting Started with High Turnover Alphas",
+          "duration": "PT6M",
+          "id": "getting-started-high-turnover-alphas",
+          "lastModified": "2026-03-27T10:11:01.638647-04:00"
+        },
+        {
+          "title": "10 Steps to Start on BRAIN",
+          "duration": "PT1M",
+          "id": "10-steps-start-brain-platform",
+          "lastModified": "2025-03-12T05:07:54.001684-04:00"
+        },
+        {
+          "title": "WorldQuant Challenge",
+          "duration": "PT3M",
+          "id": "challenge-help",
+          "lastModified": "2025-03-12T05:07:12.194953-04:00"
+        },
+        {
+          "title": "Getting Started with vector_neut Operator",
+          "duration": "PT2M",
+          "id": "getting-started-vector_neut-operator",
+          "lastModified": "2025-06-03T00:04:25.167537-04:00"
+        }
+      ],
+      "duration": "PT50M",
+      "title": "Discover BRAIN",
+      "sequence": 0,
+      "lastModified": "2023-03-30T10:03:04.259135-04:00"
+    },
+    {
+      "id": "create-alphas",
+      "category": "Getting Started",
+      "pages": [
+        {
+          "title": "Simulate your first Alpha",
+          "duration": "PT3M",
+          "id": "running-your-first-alpha",
+          "lastModified": "2026-03-09T06:50:21.997260-04:00"
+        },
+        {
+          "title": "How to choose the Simulation Settings",
+          "duration": "PT6M",
+          "id": "simulation-settings",
+          "lastModified": "2025-11-05T03:49:33.672757-05:00"
+        },
+        {
+          "title": "⭐ How BRAIN works",
+          "duration": "PT12M",
+          "id": "how-brain-platform-works",
+          "lastModified": "2025-09-08T05:31:37.418082-04:00"
+        }
+      ],
+      "duration": "PT21M",
+      "title": "Create Alphas",
+      "sequence": 2,
+      "lastModified": "2023-03-30T10:03:40.153233-04:00"
+    },
+    {
+      "id": "examples",
+      "category": "Getting Started",
+      "pages": [
+        {
+          "title": "⭐ Alpha Examples for Beginners",
+          "duration": "PT4M",
+          "id": "19-alpha-examples",
+          "lastModified": "2026-03-11T06:37:41.550288-04:00"
+        },
+        {
+          "title": "⭐ Alpha Examples for Bronze Users 🥉",
+          "duration": "PT2M",
+          "id": "sample-alpha-concepts",
+          "lastModified": "2026-03-11T07:08:03.328919-04:00"
+        },
+        {
+          "title": "⭐ Alpha Examples for Silver Users🥈",
+          "duration": "PT3M",
+          "id": "example-expression-alphas",
+          "lastModified": "2026-03-11T07:30:51.867324-04:00"
+        }
+      ],
+      "duration": "PT9M",
+      "title": "Examples",
+      "sequence": 3,
+      "lastModified": "2026-01-07T00:59:41.390915-05:00"
+    },
+    {
+      "id": "interpret-results",
+      "category": "Interpreting Results",
+      "pages": [
+        {
+          "title": "Clear these tests before submitting an Alpha",
+          "duration": "PT11M",
+          "id": "alpha-submission",
+          "lastModified": "2025-12-01T06:25:03.090749-05:00"
+        },
+        {
+          "title": "Understanding PnL Realization Horizon",
+          "duration": "PT3M",
+          "id": "understanding-pnl-realization-horizon",
+          "lastModified": "2026-04-08T05:13:55.474954-04:00"
+        },
+        {
+          "title": "Parameters in the Simulation results",
+          "duration": "PT6M",
+          "id": "parameters-simulation-results",
+          "lastModified": "2025-04-04T04:35:07.278227-04:00"
+        }
+      ],
+      "duration": "PT20M",
+      "title": "Interpret Results",
+      "sequence": 4,
+      "lastModified": "2026-01-07T00:58:45.866729-05:00"
+    },
+    {
+      "id": "understanding-data",
+      "category": "Data",
+      "pages": [
+        {
+          "title": "Understanding Data in BRAIN: Key Concepts and Tips",
+          "duration": "PT4M",
+          "id": "data",
+          "lastModified": "2025-03-12T05:55:58.677840-04:00"
+        },
+        {
+          "title": "How to use the Data Explorer",
+          "duration": "PT3M",
+          "id": "how-use-data-explorer",
+          "lastModified": "2025-03-12T05:53:18.035922-04:00"
+        },
+        {
+          "title": "Vector Data Fields 🥉",
+          "duration": "PT4M",
+          "id": "vector-datafields",
+          "lastModified": "2025-03-12T05:57:46.498103-04:00"
+        },
+        {
+          "title": "Group Data Fields 🥈",
+          "duration": "PT3M",
+          "id": "group-data-fields",
+          "lastModified": "2025-01-08T05:33:05.322350-05:00"
+        },
+        {
+          "title": "Getting Started with earnings4 dataset (Effect of Earnings Announcement Model)",
+          "duration": "PT2M",
+          "id": "getting-started-earnings4-dataset",
+          "lastModified": "2026-06-01T06:15:07.338617-04:00"
+        },
+        {
+          "title": "Getting Started with Option6 Implied volatility (IV)",
+          "duration": "PT2M",
+          "id": "getting-started-option6-implied-volatility-iv",
+          "lastModified": "2026-06-15T23:55:25.566566-04:00"
+        },
+        {
+          "title": "Getting Started with Model17 (Research Analyst Estimate Factors)",
+          "duration": "PT2M",
+          "id": "getting-started-model17-iqc2026s2",
+          "lastModified": "2026-06-16T00:03:50.890211-04:00"
+        },
+        {
+          "title": "Model77 dataset",
+          "duration": "PT2M",
+          "id": "getting-started-model77",
+          "lastModified": "2025-11-04T02:29:13.503955-05:00"
+        },
+        {
+          "title": "Getting Started with model53 dataset",
+          "duration": "PT3M",
+          "id": "getting-started-model53-dataset",
+          "lastModified": "2025-05-26T14:34:05.198644-04:00"
+        },
+        {
+          "title": "Sentiment1 dataset",
+          "duration": "PT2M",
+          "id": "getting-started-sentiment1-dataset",
+          "lastModified": "2026-04-14T02:38:12.341332-04:00"
+        },
+        {
+          "title": "Getting Started with fundamental7 dataset",
+          "duration": "PT2M",
+          "id": "getting-started-comprehensive-fundamentals-dataset-fundamental7",
+          "lastModified": "2025-06-10T06:57:33.888122-04:00"
+        }
+      ],
+      "duration": "PT29M",
+      "title": "Understanding Data",
+      "sequence": 5,
+      "lastModified": "2026-01-07T00:58:25.404498-05:00"
+    },
+    {
+      "id": "advanced-topics",
+      "category": "Getting Started",
+      "pages": [
+        {
+          "title": "Must-read posts: How to improve your Alphas🥉",
+          "duration": "PT2M",
+          "id": "list-must-read-posts-how-improve-your-alphas-are-submitted",
+          "lastModified": "2025-10-30T01:37:12.590157-04:00"
+        },
+        {
+          "title": "Neutralization 🥉",
+          "duration": "PT5M",
+          "id": "neut-cons",
+          "lastModified": "2025-10-30T01:39:54.812033-04:00"
+        },
+        {
+          "title": "Double Neutralization",
+          "duration": "PT2M",
+          "id": "neut-users",
+          "lastModified": "2025-10-30T01:42:01.001138-04:00"
+        },
+        {
+          "title": "D0",
+          "duration": "PT4M",
+          "id": "getting-started-d0",
+          "lastModified": "2025-11-04T02:30:06.401262-05:00"
+        },
+        {
+          "title": "Risk Neutralized Alphas",
+          "duration": "PT6M",
+          "id": "getting-started-risk-neutralized-alphas",
+          "lastModified": "2025-11-04T02:31:59.811219-05:00"
+        },
+        {
+          "title": "Risk Neutralization: Default setting",
+          "duration": "PT2M",
+          "id": "getting-started-risk-neutralized-metrics",
+          "lastModified": "2025-11-04T02:31:04.683695-05:00"
+        },
+        {
+          "title": "Crowding Risk-Neutralized Alphas",
+          "duration": "PT2M",
+          "id": "getting-started-crowding-risk-neutralized-alphas",
+          "lastModified": "2025-11-04T02:32:58.440036-05:00"
+        },
+        {
+          "title": "RAM Risk-Neutralized Alphas",
+          "duration": "PT2M",
+          "id": "getting-started-ram-risk-neutralized-alphas",
+          "lastModified": "2025-11-04T02:32:44.930831-05:00"
+        },
+        {
+          "title": "Statistical Risk-Neutralized Alphas",
+          "duration": "PT3M",
+          "id": "getting-started-statistical-risk-neutralized-alphas",
+          "lastModified": "2025-11-04T02:32:32.455124-05:00"
+        },
+        {
+          "title": "Investability Constrained Metrics",
+          "duration": "PT3M",
+          "id": "getting-started-investability-constrained-metrics",
+          "lastModified": "2025-11-04T02:32:14.611009-05:00"
+        },
+        {
+          "title": "Fast D1 Documentation",
+          "duration": "PT4M",
+          "id": "fast-d1-documentation",
+          "lastModified": "2026-01-15T02:26:37.732416-05:00"
+        }
+      ],
+      "duration": "PT35M",
+      "title": "Advanced Topics",
+      "sequence": 6,
+      "lastModified": "2026-01-07T00:58:08.807554-05:00"
+    },
+    {
+      "id": "regions-and-universes",
+      "category": "Regions and Universes",
+      "pages": [
+        {
+          "title": "Global Alphas [Gold]",
+          "duration": "PT3M",
+          "id": "global-region",
+          "lastModified": "2025-11-04T02:34:01.955501-05:00"
+        },
+        {
+          "title": "Getting Started with USA TOPSP500 universe [Gold]",
+          "duration": "PT1M",
+          "id": "getting-started-topsp500-universe-usa-region",
+          "lastModified": "2026-04-23T07:45:51.134868-04:00"
+        },
+        {
+          "title": "Getting Started with USA TOP2000, ASI MINVOL10M, ASI TOP500, GLB MINVOL10M Universe",
+          "duration": "PT1M",
+          "id": "usa-top2000-asi-minvol10m-asi-top500-glb-minvol10m-universe",
+          "lastModified": "2026-04-23T07:44:51.590412-04:00"
+        },
+        {
+          "title": "Getting started on Illiquid Universes [Gold]",
+          "duration": "PT1M",
+          "id": "getting-started-illiquid-universes",
+          "lastModified": "2025-01-08T07:58:11.376704-05:00"
+        },
+        {
+          "title": "Getting started on HKG/KOR/TWN [Grand Master]",
+          "duration": "PT1M",
+          "id": "getting-started-hkgkortwn",
+          "lastModified": "2026-02-13T09:57:25.680648-05:00"
+        },
+        {
+          "title": "EUR TOP2500 Universe",
+          "duration": "PT1M",
+          "id": "getting-started-eur-top2500-universe",
+          "lastModified": "2025-11-04T02:35:32.827518-05:00"
+        },
+        {
+          "title": "AMR Alphas [Master]",
+          "duration": "PT2M",
+          "id": "getting-started-amr-alphas",
+          "lastModified": "2026-02-13T09:56:25.939999-05:00"
+        },
+        {
+          "title": "Getting Started with JPN Alphas [Master]",
+          "duration": "PT3M",
+          "id": "getting-started-jpn-alphas",
+          "lastModified": "2026-02-13T09:58:23.248139-05:00"
+        },
+        {
+          "title": "Getting Started: China Research for Consultants [Gold]",
+          "duration": "PT3M",
+          "id": "china-region-consultants",
+          "lastModified": "2025-06-02T02:36:59.225739-04:00"
+        },
+        {
+          "title": "GLB TOPDIV3000 Universe",
+          "duration": "PT1M",
+          "id": "getting-started-glb-topdiv3000-universe",
+          "lastModified": "2026-01-07T00:37:09.463800-05:00"
+        },
+        {
+          "title": "Getting Started with the MEA Region",
+          "duration": "PT2M",
+          "id": "getting-started-mea-region",
+          "lastModified": "2026-04-30T12:27:46.633059-04:00"
+        },
+        {
+          "title": "Getting Started with the EUR TOPCS1600 Universe",
+          "duration": "PT2M",
+          "id": "getting-started-eur-topcs1600-universe",
+          "lastModified": "2026-02-09T06:39:06.492786-05:00"
+        },
+        {
+          "title": "India Alphas",
+          "duration": "PT1M",
+          "id": "getting-started-india-alphas",
+          "lastModified": "2025-11-04T02:31:39.331672-05:00"
+        }
+      ],
+      "duration": "PT22M",
+      "title": "Regions and Universes",
+      "sequence": 7,
+      "lastModified": "2026-01-07T00:57:41.708317-05:00"
+    },
+    {
+      "id": "consultant-information",
+      "category": "Consultant Information",
+      "pages": [
+        {
+          "title": "Starting Guide for Research Consultants",
+          "duration": "PT2M",
+          "id": "get-started",
+          "lastModified": "2025-11-04T02:38:47.552711-05:00"
+        },
+        {
+          "title": "Power Pool Alphas",
+          "duration": "PT5M",
+          "id": "getting-started-power-pool-alphas",
+          "lastModified": "2026-05-19T08:55:53.278328-04:00"
+        },
+        {
+          "title": "Finding Consultant Alphas",
+          "duration": "PT12M",
+          "id": "getting-started-finding-consultant-alphas-read-first",
+          "lastModified": "2025-11-18T10:21:25.763937-05:00"
+        },
+        {
+          "title": "Consultant Simulation Features",
+          "duration": "PT2M",
+          "id": "multi-alpha-simulation",
+          "lastModified": "2025-08-27T04:04:02.635767-04:00"
+        },
+        {
+          "title": "Consultant Features",
+          "duration": "PT10M",
+          "id": "consultant-features",
+          "lastModified": "2026-03-19T01:21:55.747360-04:00"
+        },
+        {
+          "title": "Consultant Submission Tests",
+          "duration": "PT7M",
+          "id": "consultant-submission-tests",
+          "lastModified": "2025-12-14T10:55:05.173898-05:00"
+        },
+        {
+          "title": "Visualization Tool",
+          "duration": "PT3M",
+          "id": "visualization-tool",
+          "lastModified": "2024-03-24T16:45:39.384441-04:00"
+        },
+        {
+          "title": "Consultant Dos and Don'ts",
+          "duration": "PT4M",
+          "id": "consultant-dos-and-donts",
+          "lastModified": "2024-07-02T10:01:25.914891-04:00"
+        },
+        {
+          "title": "Brain Python Alphas",
+          "duration": "PT12M",
+          "id": "getting-started-brain-python-alphas",
+          "lastModified": "2026-06-17T02:50:22.177780-04:00"
+        },
+        {
+          "title": "How to translate Fast Expression Alpha into Python Alpha",
+          "duration": "PT12M",
+          "id": "how-translate-fast-expression-alpha-python-alpha",
+          "lastModified": "2026-06-19T23:48:43.726944-04:00"
+        },
+        {
+          "title": "Research Advisory Program",
+          "duration": "PT2M",
+          "id": "brains-new-advisory-program",
+          "lastModified": "2024-10-04T15:32:18.609549-04:00"
+        },
+        {
+          "title": "Osmosis Allocation Guide for Consultants",
+          "duration": "PT5M",
+          "id": "osmosis-allocation-guide-consultants",
+          "lastModified": "2026-06-25T06:15:43.896667-04:00"
+        },
+        {
+          "title": "Your Advisor - Phi Hoang Tran",
+          "duration": "PT2M",
+          "id": "your-advisor-phi-hoang-tran",
+          "lastModified": "2026-06-26T05:16:43.995830-04:00"
+        },
+        {
+          "title": "❗ Single Dataset Alphas",
+          "duration": "PT2M",
+          "id": "single-dataset-alphas",
+          "lastModified": "2025-08-26T03:39:14.716871-04:00"
+        },
+        {
+          "title": "💡 Brain Genius",
+          "duration": "PT8M",
+          "id": "brain-genius",
+          "lastModified": "2026-05-19T08:46:16.111980-04:00"
+        }
+      ],
+      "duration": "PT1H28M",
+      "title": "Consultant Information",
+      "sequence": 9,
+      "lastModified": "2026-01-07T00:57:05.005375-05:00"
+    },
+    {
+      "id": "brain-api",
+      "category": "Consultant Information",
+      "pages": [
+        {
+          "title": "❗Understanding simulation limits",
+          "duration": "PT5M",
+          "id": "understanding-simulation-limits",
+          "lastModified": "2025-12-04T23:17:20.021695-05:00"
+        },
+        {
+          "title": "BRAIN API",
+          "duration": "PT13M",
+          "id": "brain-api",
+          "lastModified": "2026-01-11T05:08:25.939580-05:00"
+        },
+        {
+          "title": "How can you avoid duplicate simulations?",
+          "duration": "PT4M",
+          "id": "how-can-you-avoid-duplicate-simulations",
+          "lastModified": "2026-01-21T01:03:07.613232-05:00"
+        },
+        {
+          "title": "Documentation for ACE API Library [Gold]",
+          "duration": "PT1M",
+          "id": "documentation-ace-api-library-gold",
+          "lastModified": "2025-03-07T04:24:41.918309-05:00"
+        }
+      ],
+      "duration": "PT23M",
+      "title": "BRAIN API",
+      "sequence": 11,
+      "lastModified": "2026-01-26T06:51:36.743794-05:00"
+    },
+    {
+      "id": "superalpha",
+      "category": "SuperAlpha",
+      "pages": [
+        {
+          "title": "What is a SuperAlpha?",
+          "duration": "PT5M",
+          "id": "superalpha-overview",
+          "lastModified": "2025-09-08T05:39:22.905616-04:00"
+        },
+        {
+          "title": "Global SuperAlphas",
+          "duration": "PT2M",
+          "id": "getting-started-global-superalphas",
+          "lastModified": "2025-11-04T02:39:54.299570-05:00"
+        }
+      ],
+      "duration": "PT7M",
+      "title": "SuperAlpha",
+      "sequence": 22,
+      "lastModified": "2025-09-28T11:36:36.433668-04:00"
+    }
+  ]
+}

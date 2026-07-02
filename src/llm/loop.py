@@ -49,6 +49,11 @@ class LoopResult:
     # Vì sao vòng dừng: 'abandon' (referee bỏ hướng) | 'budget' (hết trần sim) |
     # 'patience' (hết kiên nhẫn) | 'no_seed' (không dịch được seed nào).
     stop_reason: str = ""
+    # Metric Brain của candidate tốt nhất — adapter map sang IdeaOutcome (Phase 4B).
+    best_passed: bool = False
+    best_alpha_id: str | None = None
+    best_metrics: dict = field(default_factory=dict)
+    best_self_corr: float | None = None
 
 
 @dataclass
@@ -414,6 +419,16 @@ class RefinementLoop:
         )
         emit("seed", best_ev.vector.total, best_cand.expression)
 
+        return self._refine_loop(best_cand, best_ev, research_direction, current_config, history, emit)
+
+    # -------------------------------------------------- lõi refine dùng chung
+    def _refine_loop(
+        self, best_cand, best_ev, research_direction: str, current_config,
+        history: list, emit,
+    ) -> LoopResult:
+        """Lõi vòng refine dùng chung bởi run() và run_from_seed: từ (best_cand, best_ev) đã
+        có, lặp refine/tune/reseed tới patience/budget/abandon rồi trả LoopResult. Tách ra để
+        seed có thể đến từ hypothesis (run) hoặc từ công thức cho sẵn (run_from_seed)."""
         patience = 0
         stuck = 0  # số vòng liên tiếp không cải thiện -> ngưỡng kích hoạt re-seed
         step = 0
@@ -523,7 +538,41 @@ class RefinementLoop:
             failures=self.repo.recent_failures(50),
             sims_used=self.sims_used,
             stop_reason=stop_reason,
+            best_passed=best_ev.passed,
+            best_alpha_id=best_ev.alpha_id,
+            best_metrics=dict(best_ev.metrics),
+            best_self_corr=best_ev.pool_corr,
         )
+
+    def run_from_seed(self, expression: str, on_progress=None) -> LoopResult:
+        """Như run() nhưng hạt giống là MỘT công thức FASTEXPR cho sẵn (vd core từ GPEngine),
+        KHÔNG qua hypothesis_gen/translator. Phục vụ vòng kín 'GP trục, AI tăng cường'."""
+        from src.llm.hypothesis import Hypothesis
+        from src.llm.translator import AlphaCandidate
+
+        self.sims_used = 0
+        self.zoo_added = 0
+        history: list = []
+
+        def emit(phase, best_total, detail=""):
+            if on_progress:
+                on_progress(LoopProgress(self.sims_used, best_total, phase, detail))
+
+        current_config = self.sim_config
+        seed = AlphaCandidate(hypothesis=Hypothesis(), description=expression,
+                              expression=expression)
+        emit("seed", 0.0, expression)
+        best_ev = self._evaluate(seed, parent_id=None, config=current_config)
+        if best_ev is None:
+            return LoopResult(None, None, history, self.zoo_added,
+                              self.repo.recent_failures(50), self.sims_used,
+                              stop_reason="no_seed")
+        history.append(
+            {"step": 0, "action": "seed", "dimension": "-", "total": best_ev.vector.total,
+             "expression": expression, "accepted": True}
+        )
+        emit("seed", best_ev.vector.total, expression)
+        return self._refine_loop(seed, best_ev, expression, current_config, history, emit)
 
     # ----------------------------------------------------------- MCTS (T6.1)
     def run_mcts(self, research_direction: str, iterations: int = 20, on_progress=None) -> LoopResult:
