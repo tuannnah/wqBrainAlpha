@@ -76,3 +76,38 @@ def test_neutralization_must_be_valid():
 def test_neutralization_must_be_string(neutralization):
     with pytest.raises(ValueError, match="neutralization"):
         SimConfig(neutralization=neutralization)
+
+
+def test_test_period_max_trade_max_position_mac_dinh():
+    c = SimConfig.default()
+    assert c.test_period == "P0Y0M"
+    assert c.max_trade == "OFF"
+    assert c.max_position == "OFF"
+
+
+def test_to_settings_co_test_period_max_trade_max_position():
+    c = SimConfig.default(region="USA").with_overrides(max_position="ON")
+    s = c.to_settings()
+    assert s["testPeriod"] == "P0Y0M"
+    assert s["maxTrade"] == "OFF"
+    assert s["maxPosition"] == "ON"
+
+
+def test_max_trade_normalize_hoa_thuong():
+    assert SimConfig(max_trade="on").max_trade == "ON"
+
+
+def test_max_trade_gia_tri_khong_hop_le_raise():
+    with pytest.raises(ValueError, match="max_trade"):
+        SimConfig(max_trade="MAYBE")
+
+
+def test_max_position_gia_tri_khong_hop_le_raise():
+    with pytest.raises(ValueError, match="max_position"):
+        SimConfig(max_position="MAYBE")
+
+
+def test_key_phan_biet_theo_max_trade():
+    a = SimConfig.default()
+    b = SimConfig.default().with_overrides(max_trade="ON")
+    assert a.key() != b.key()
