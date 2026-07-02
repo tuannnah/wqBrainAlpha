@@ -329,5 +329,8 @@ class WQBrainClient:
     def post(self, path: str, **kwargs) -> httpx.Response:
         return self._request("POST", path, **kwargs)
 
+    def patch(self, path: str, **kwargs) -> httpx.Response:
+        return self._request("PATCH", path, **kwargs)
+
     def close(self) -> None:
         self.client.close()

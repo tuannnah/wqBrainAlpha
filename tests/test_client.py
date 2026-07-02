@@ -323,3 +323,22 @@ def test_get_tu_reauth_khi_session_het_han():
     resp = client.get("/data-fields")
     assert resp.status_code == 200
     assert state["auth_count"] == 2  # auth ban đầu + re-auth
+
+
+def test_patch_goi_dung_method_va_path():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authentication":
+            return httpx.Response(200, json={"user": {"id": "u1"}})
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["body"] = request.read()
+        return httpx.Response(200, json={"id": "WQ1"})
+
+    client = _client_with(handler)
+    resp = client.patch("/alphas/WQ1", json={"tags": ["a"]})
+    assert resp.status_code == 200
+    assert seen["method"] == "PATCH"
+    assert seen["path"] == "/alphas/WQ1"
+    assert b'"tags"' in seen["body"]
