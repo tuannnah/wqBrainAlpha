@@ -1380,6 +1380,44 @@ def submit(
     console.print(table)
 
 
+@app.command("genius-report")
+def genius_report_cmd() -> None:
+    """Báo cáo tie-break BRAIN Genius tính được LOCAL (avg/total distinct operators/fields của
+    alpha đã nộp) — CHỈ để tham khảo, KHÔNG phải gate (sub-project G)."""
+    _setup_logging()
+    from src.scoring.genius_report import (
+        average_distinct_fields_per_alpha,
+        average_distinct_operators_per_alpha,
+        total_distinct_fields,
+        total_distinct_operators,
+    )
+
+    engine = init_db(make_engine())
+    session_factory = make_session_factory(engine)
+
+    avg_ops = average_distinct_operators_per_alpha(session_factory)
+    avg_fields = average_distinct_fields_per_alpha(session_factory)
+    total_ops = total_distinct_operators(session_factory)
+    total_fields = total_distinct_fields(session_factory)
+
+    table = Table(title="BRAIN Genius — tie-break metrics (chỉ tham khảo, không phải gate)")
+    table.add_column("Chỉ số")
+    table.add_column("Giá trị", justify="right")
+    table.add_row(
+        "Avg distinct Operators/Alpha (thấp hơn tốt hơn)",
+        "—" if avg_ops is None else f"{avg_ops:.2f}",
+    )
+    table.add_row(
+        "Avg distinct Fields/Alpha (thấp hơn tốt hơn)",
+        "—" if avg_fields is None else f"{avg_fields:.2f}",
+    )
+    table.add_row("Total distinct Operators (cao hơn tốt hơn)", str(total_ops))
+    table.add_row("Total distinct Fields (cao hơn tốt hơn)", str(total_fields))
+    console.print(table)
+    if avg_ops is None:
+        console.print("[dim]Chưa có alpha nào status='submitted' trong DB để tính.[/dim]")
+
+
 # ============================ Menu tương tác (start) ============================
 # Khôi phục wizard cũ: đăng nhập 1 lần, giữ phiên + DB trong cùng tiến trình, hiện
 # số fields/operators ngay sau đăng nhập để người dùng tự quyết có tải lại không.
