@@ -30,7 +30,6 @@ from src.storage.db import init_db, make_engine, make_session_factory
 from src.storage.migrate import migrate_all, _same_database
 from src.storage.repository import AlphaRepository, InvalidFieldRepository
 from src.llm.marathon import MarathonReport, run_marathon
-from src.pipeline.auto import PrepareInfo
 
 app = typer.Typer(help="WorldQuant Brain Auto-Alpha Tool")
 console = Console()
@@ -1358,25 +1357,6 @@ def submit(
             f"{c.score:.3f}" if c.score is not None else "—",
         )
     console.print(table)
-
-
-def _auto_prepare(client_box: dict, session_factory, region, universe, delay,
-                  existing_client=None) -> PrepareInfo:
-    """Đăng nhập + ensure fields/operators (cache nếu có). Trả PrepareInfo.
-
-    existing_client: tái dùng phiên đã đăng nhập (vd từ menu) thay vì login lại.
-    """
-    client = existing_client or _make_client()
-    client.authenticate()
-    client_box["client"] = client
-
-    field_repo = FieldRepository(client, session_factory)
-    fields, _ = field_repo.ensure(region, universe, delay)
-
-    op_repo = OperatorRepository(client, session_factory)
-    operators, _ = op_repo.ensure()
-
-    return PrepareInfo(fields=len(fields), operators=len(operators))
 
 
 # ============================ Menu tương tác (start) ============================
