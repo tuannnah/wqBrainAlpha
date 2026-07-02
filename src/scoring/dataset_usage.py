@@ -40,3 +40,23 @@ def dataset_of_alpha(expr: str, field_dataset: dict[str, str]) -> str | None:
 
 def is_single_dataset_alpha(expr: str, field_dataset: dict[str, str]) -> bool:
     return dataset_of_alpha(expr, field_dataset) is not None
+
+
+def datasets_used(expr: str, field_dataset: dict[str, str]) -> set[str]:
+    """Tập TẤT CẢ dataset_id dùng trong `expr` (bỏ qua grouping field và field không rõ
+    dataset) — khác `dataset_of_alpha` (chỉ trả kết quả khi DUY NHẤT 1 dataset). Dùng để kiểm
+    khớp Power Pool Theme (loại trừ dataset cụ thể, không yêu cầu single-dataset)."""
+    node = parse_expression(expr)
+    fields = FieldCollector().visit(node)
+    operators = OperatorCollector().visit(node)
+
+    datasets: set[str] = set()
+    for field_id in fields:
+        if field_id in _GROUPING_FIELDS:
+            continue
+        dataset_id = field_dataset.get(field_id)
+        if dataset_id is not None:
+            datasets.add(dataset_id)
+    if operators & _PV1_OPERATORS:
+        datasets.add("pv1")
+    return datasets

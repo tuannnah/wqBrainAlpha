@@ -35,3 +35,26 @@ def test_inst_pnl_operator_them_pv1_lam_thanh_2_dataset():
 def test_inst_pnl_khop_pv1_van_la_single_dataset():
     fd = {"close": "pv1"}
     assert dataset_of_alpha("inst_pnl(close, 5)", fd) == "pv1"
+
+
+from src.scoring.dataset_usage import datasets_used
+
+
+def test_datasets_used_tra_tat_ca_dataset_khong_gioi_han_single():
+    fd = {"close": "pv1", "eps": "fundamental6"}
+    assert datasets_used("rank(add(close, eps))", fd) == {"pv1", "fundamental6"}
+
+
+def test_datasets_used_bo_qua_grouping_field():
+    fd = {"close": "pv1"}
+    assert datasets_used("group_rank(close, sector)", fd) == {"pv1"}
+
+
+def test_datasets_used_field_khong_ro_dataset_bi_bo_qua_khong_loi():
+    fd = {"close": "pv1"}
+    assert datasets_used("rank(add(close, unknown_field))", fd) == {"pv1"}
+
+
+def test_datasets_used_inst_pnl_them_pv1():
+    fd = {"eps": "fundamental6"}
+    assert datasets_used("inst_pnl(eps, 5)", fd) == {"fundamental6", "pv1"}
