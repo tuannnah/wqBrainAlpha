@@ -33,13 +33,16 @@ Script tự tạo venv, cài dependencies, tạo `.env` lần đầu, rồi mở
 (`python main.py start` — một phiên duy nhất giữ đăng nhập):
 
 1. **Đăng nhập** — nhập email/mật khẩu ngay trong console (mật khẩu ẩn); tự
-   mở trình duyệt nếu cần quét QR. **Đăng nhập xong hiện ngay số data fields +
-   operators** đang có trong DB để bạn quyết định có cần tải lại không.
+   mở trình duyệt nếu cần quét QR. **Tự đảm bảo có data fields + operators**
+   (dùng cache nếu có, tự tải nếu thiếu) — không cần bấm 2/3 tay lần đầu.
 2. **Tải lại data fields** — gọi API ghi đè cache (chọn khi muốn làm mới).
 3. **Tải lại operators** — tương tự.
-4. **Chạy engine sinh alpha** — vòng nghiên cứu (`research`); hỏi hướng nghiên
-   cứu, **để trống là LLM tự đề xuất**.
-5. **Chạy thử (ngắn)** — như mục 4 nhưng trần sim nhỏ để kiểm tra luồng.
+4. **Test engine** — KHÔNG cần đăng nhập. Đọc tài khoản active + DB tương ứng,
+   chạy 1 lượt hoàn toàn cục bộ (GP sinh → LLM refine thật → chấm lại local),
+   không đụng WQ Brain API/quota — dùng để tự bắt lỗi wiring trước khi chạy
+   thật mục 5.
+5. **Auto SIM** — vòng kín AI+MiniBrain thật (GP → refine → SIM Brain →
+   feedback), chạy đến khi hết quota Brain hoặc Ctrl+C để dừng tay.
 
 DB tách theo email đăng nhập (mỗi tài khoản một file `wq_alpha_<email>.db`).
 
