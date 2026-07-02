@@ -49,6 +49,27 @@ class FieldCollector(NodeVisitor["set[str]"]):
         return result
 
 
+class OperatorCollector(NodeVisitor["set[str]"]):
+    """Tập tên operator (Call.op) dùng trong cây — phục vụ đếm operator unique cho
+    Power Pool eligibility (sub-project A) và phát hiện single-dataset alpha
+    (sub-project D, operator inst_pnl/convert tính là dùng dataset pv1)."""
+
+    def visit(self, node: Node) -> set[str]:
+        return node.accept(self)
+
+    def visit_constant(self, node: Constant) -> set[str]:
+        return set()
+
+    def visit_field(self, node: Field) -> set[str]:
+        return set()
+
+    def visit_call(self, node: Call) -> set[str]:
+        result: set[str] = {node.op}
+        for c in node.children():
+            result |= c.accept(self)
+        return result
+
+
 class Serializer(NodeVisitor[str]):
     """AST -> chuỗi FASTEXPR canonical. Round-trip với parser:
     parse(Serializer().visit(node)) == node. Toán tử nhị phân luôn render dạng hàm
