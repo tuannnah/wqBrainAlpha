@@ -1418,29 +1418,35 @@ def _menu_counts(state: _MenuState) -> tuple[int, int]:
 
 
 def _menu_login(state: _MenuState) -> None:
+    """Đăng nhập rồi TỰ ĐẢM BẢO có data fields + operators (dùng cache nếu có, tự tải
+    nếu thiếu) — để mục 4/5 chạy được ngay mà không bắt người dùng tự bấm 2/3 lần đầu."""
     from src.storage.db import active_database_url, write_active_account
 
     client = _make_client()
     client.authenticate()
     state.client = client
     state.email = client.email or ""
-    # Biết email rồi mới mở DB (DB tách theo email), rồi hiện số liệu để quyết định.
+    # Biết email rồi mới mở DB (DB tách theo email).
     if state.email:
         write_active_account(state.email)
     engine = init_db(make_engine())
     state.session_factory = make_session_factory(engine)
 
-    n_fields, n_ops = _menu_counts(state)
     console.print(f"[green]✓ Đăng nhập xong[/green] ({state.email})")
     console.print(f"[dim]DB: {active_database_url()}[/dim]")
+
+    field_repo = FieldRepository(state.client, state.session_factory)
+    fields, fields_fetched = field_repo.ensure(state.region, state.universe, state.delay)
+    op_repo = OperatorRepository(state.client, state.session_factory)
+    operators, ops_fetched = op_repo.ensure()
+
+    tai_moi = [n for n, done in (("data fields", fields_fetched), ("operators", ops_fetched)) if done]
+    if tai_moi:
+        console.print(f"[cyan]Đã tự tải mới: {', '.join(tai_moi)}[/cyan]")
     console.print(
-        f"[bold]Data fields:[/bold] {n_fields}   [bold]Operators:[/bold] {n_ops}   "
+        f"[bold]Data fields:[/bold] {len(fields)}   [bold]Operators:[/bold] {len(operators)}   "
         f"[dim]({state.region}/{state.universe}/delay={state.delay})[/dim]"
     )
-    if n_fields == 0 or n_ops == 0:
-        console.print("[yellow]Thiếu dữ liệu — chọn 2/3 để tải về.[/yellow]")
-    else:
-        console.print("[dim]Đủ dữ liệu. Bấm 4 để chạy engine, hoặc 2/3 để tải lại.[/dim]")
 
 
 def _menu_fields(state: _MenuState) -> None:
@@ -1472,37 +1478,112 @@ def _menu_operators(state: _MenuState) -> None:
     console.print(f"[green]Đã tải mới {len(operators)} operators[/green]")
 
 
-def _menu_research(state: _MenuState, max_sims: int, no_improve: int) -> None:
-    """Chạy engine sinh alpha (RefinementLoop). Hỏi hướng — Enter = LLM tự đề xuất."""
-    from src.simulation.config import SimConfig
-    from src.simulation.pre_filter import PreFilter
+def _find_market_data_dir() -> str | None:
+    """Ưu tiên `settings.market_data_dir`; nếu thiếu, quét `data/*/returns.parquet` (bắt
+    các panel đã có sẵn như `data/market_yf`) và dùng thư mục đầu tiên tìm được."""
+    default = Path(settings.market_data_dir)
+    if (default / "returns.parquet").is_file():
+        return str(default)
+    for candidate in sorted(Path("data").glob("*/returns.parquet")):
+        return str(candidate.parent)
+    return None
 
-    n_fields, _ = _menu_counts(state)
-    if n_fields == 0:
-        console.print("[red]Chưa có data fields — chọn 2 để tải trước.[/red]")
+
+def _menu_test_engine(state: _MenuState) -> None:
+    """Mục 4: test 1 lượt engine HOÀN TOÀN LOCAL (GP sinh nhanh → LLM refine THẬT →
+    re-score local) — KHÔNG cần đăng nhập, không đụng WQ Brain API/quota. Mục đích: tự bắt
+    lỗi wiring (DB/GP/LLM/gate) trước khi chạy thật mục 5 (tốn sim quota Brain)."""
+    from src.app.local_engine_test import run_local_engine_test
+    from src.data.adapters.parquet_source import ParquetSource
+    from src.lang.registry import default_registry
+    from src.simulation.pre_filter import PreFilter
+    from src.storage.db import active_database_url, read_active_account
+    from src.storage.repository import MiniBrainRepository
+
+    email = read_active_account()
+    if not email:
+        console.print(
+            "[red]Chưa từng đăng nhập lần nào — chạy mục 1 ít nhất 1 lần trước (sau đó có "
+            "thể dùng mục 4 mà không cần đăng nhập lại).[/red]"
+        )
         return
 
-    direction = input("\nHướng nghiên cứu [Enter = để LLM tự đề xuất]: ").strip()
+    engine = init_db(make_engine())
+    sf = make_session_factory(engine)
+    console.print(f"[dim]Tài khoản: {email} | DB: {active_database_url()}[/dim]")
 
-    def _auto_direction():
-        f, o, ft, mo, oa = _cached_symbols(state.session_factory)
-        pf = PreFilter(
-            known_operators=o or None, known_fields=set(f) or None,
-            field_types=ft, matrix_only_ops=mo, operator_arity=oa,
+    field_repo = FieldRepository(None, sf)
+    op_repo = OperatorRepository(None, sf)
+    if field_repo.cached_count(state.region, state.universe, state.delay) == 0 or op_repo.cached_count() == 0:
+        console.print(
+            "[red]Chưa có data fields/operators trong DB — đăng nhập (mục 1) ít nhất 1 lần "
+            "trước.[/red]"
         )
-        return _make_llm_generator(state.session_factory, pf).generate_ideas(1)
+        return
 
-    direction, auto = resolve_direction(direction, _auto_direction)
-    if auto:
-        console.print(f"[cyan]Hướng nghiên cứu (LLM tự đề xuất):[/cyan] {direction}")
+    market_data_dir = _find_market_data_dir()
+    if market_data_dir is None:
+        console.print(
+            f"[red]Không tìm thấy thư mục MarketData nào (đã thử {settings.market_data_dir} "
+            "và quét data/*/returns.parquet).[/red]"
+        )
+        return
+    console.print(f"[dim]MarketData: {market_data_dir}[/dim]")
 
-    sim_config = SimConfig(region=state.region, universe=state.universe, delay=state.delay)
-    loop, deepseek = _make_research_loop(
-        state.session_factory, state.client, state.region, state.universe, state.delay,
-        max_sims, no_improve, sim_config=sim_config,
+    try:
+        data = ParquetSource(market_data_dir).load("1900-01-01", "2999-12-31", state.universe)
+    except (FileNotFoundError, AssertionError, OSError) as exc:
+        console.print(f"[red]Không load được MarketData: {exc}[/red]")
+        return
+
+    try:
+        deepseek = _make_router()
+    except typer.Exit:
+        console.print("[red]Chưa cấu hình LLM backend hợp lệ trong .env (LLM_BACKEND).[/red]")
+        return
+
+    import src.operators_local  # noqa: F401  (nạp 27 operator vào registry)
+
+    f, o, ft, mo, oa = _cached_symbols(sf)
+    prefilter = PreFilter(
+        known_operators=o or None, known_fields=set(f) or None,
+        field_types=ft, matrix_only_ops=mo, operator_arity=oa,
     )
-    result = _run_research_with_progress(loop, direction, max_sims)
-    _render_research_result(result, deepseek)
+    cfg = _portfolio_config_from_opts("NONE", 0, 0.10, state.delay)
+
+    console.print("[cyan]Đang chạy 1 lượt test engine cục bộ (GP → LLM refine → re-score)…[/cyan]")
+    result = run_local_engine_test(
+        data=data, repo=MiniBrainRepository(sf), config=cfg, registry=default_registry(),
+        deepseek=deepseek, field_repo=field_repo, operator_repo=op_repo, prefilter=prefilter,
+    )
+
+    if not result.ok:
+        console.print(f"[red]Test engine LỖI:[/red] {result.error}")
+        return
+
+    table = Table(title="Kết quả test engine (local, không tốn sim Brain)")
+    table.add_column("")
+    table.add_column("Trước refine", justify="right")
+    table.add_column("Sau refine", justify="right")
+    table.add_row("expression", result.idea_expr or "—", result.refined_expr or "—")
+    table.add_row(
+        "sharpe",
+        "—" if result.sharpe_before is None else f"{result.sharpe_before:.3f}",
+        "—" if result.sharpe_after is None else f"{result.sharpe_after:.3f}",
+    )
+    table.add_row(
+        "fitness",
+        "—" if result.fitness_before is None else f"{result.fitness_before:.3f}",
+        "—" if result.fitness_after is None else f"{result.fitness_after:.3f}",
+    )
+    console.print(table)
+    console.print(f"[bold]passed cục bộ:[/bold] {result.passed}")
+    if result.hard_failures:
+        console.print(f"[yellow]hard_failures:[/yellow] {'; '.join(result.hard_failures)}")
+    console.print(
+        "[green]✓ Pipeline chạy sạch[/green] (DB/GP/LLM/gate cục bộ wiring đúng) — mục 5 "
+        "(Auto SIM) nhiều khả năng chạy được, rủi ro còn lại chỉ là mạng/quota WQ thật."
+    )
 
 
 def _menu_auto_sim(state: _MenuState) -> None:
@@ -1534,22 +1615,17 @@ def _print_menu(state: _MenuState) -> None:
     console.print("\n[bold cyan]=== WQ Auto-Alpha ===[/bold cyan]")
     console.print(f"Scope: [cyan]{state.region}/{state.universe}/delay={state.delay}[/cyan] | {status}")
     console.print(data)
-    console.print(" 1) Đăng nhập")
+    console.print(" 1) Đăng nhập (tự tải data fields + operators)")
     console.print(" 2) Tải lại data fields (ghi đè cache)")
     console.print(" 3) Tải lại operators (ghi đè cache)")
-    console.print(" 4) Chạy engine sinh alpha")
-    console.print(" 5) Chạy thử (ngắn)")
-    console.print(" 6) Marathon (chạy đến khi hết quota)")
-    console.print(" 7) Vòng kín AI+MiniBrain (GP→refine→SIM→feedback)")
+    console.print(" 4) Test engine (không cần đăng nhập — kiểm tra luồng cục bộ)")
+    console.print(" 5) Auto SIM (vòng kín AI+MiniBrain, cần đăng nhập)")
     console.print(" 0) Thoát")
 
 
 @app.command()
-def start(
-    max_sims: int = typer.Option(20, "--max-sims", help="Trần số simulation mỗi lần chạy engine (mục 4)"),
-    no_improve: int = typer.Option(3, "--no-improve", help="Dừng sau N vòng không cải thiện"),
-) -> None:
-    """Menu tương tác: đăng nhập → xem/tải fields-operators → chạy engine sinh alpha."""
+def start() -> None:
+    """Menu tương tác: đăng nhập → tải/kiểm tra fields-operators → test engine → Auto SIM."""
     _setup_logging()
     from src.data.client import AuthError
 
@@ -1562,20 +1638,16 @@ def start(
                 break
             elif choice == "1":
                 _menu_login(state)
-            elif choice in {"2", "3", "4", "5", "6", "7"} and not state.logged_in:
+            elif choice == "4":
+                _menu_test_engine(state)
+            elif choice in {"2", "3", "5"} and not state.logged_in:
                 console.print("[yellow]Hãy đăng nhập (1) trước.[/yellow]")
             elif choice == "2":
                 _menu_fields(state)
             elif choice == "3":
                 _menu_operators(state)
-            elif choice == "4":
-                _menu_research(state, max_sims, no_improve)
             elif choice == "5":
-                _menu_research(state, max_sims=5, no_improve=2)
-            elif choice == "6":
-                _menu_marathon(state)
-            elif choice == "7":
-                _menu_closed_loop(state)
+                _menu_auto_sim(state)
             else:
                 console.print("[red]Lựa chọn không hợp lệ.[/red]")
         except AuthError as exc:
