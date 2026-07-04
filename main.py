@@ -1625,16 +1625,21 @@ def _menu_test_engine(state: _MenuState) -> None:
 
 
 def _menu_auto_sim(state: _MenuState) -> None:
-    """Mục 5: vòng kín AI+MiniBrain thật — hỏi thư mục panel rồi chạy đến khi hết quota."""
+    """Mục 5: vòng kín AI+MiniBrain thật — tự tìm thư mục MarketData (như mục 4, không hỏi
+    gì thêm ngoài LLM đã cấu hình sẵn trong .env) rồi chạy đến khi hết quota."""
     n_fields, _ = _menu_counts(state)
     if n_fields == 0:
         console.print("[red]Chưa có data fields — chọn 1 để đăng nhập (tự tải) trước.[/red]")
         return
 
-    market_data_dir = input("\nThư mục parquet MarketData: ").strip()
-    if not market_data_dir or not Path(market_data_dir).is_dir():
-        console.print(f"[red]Không thấy thư mục MarketData: {market_data_dir}[/red]")
+    market_data_dir = _find_market_data_dir()
+    if market_data_dir is None:
+        console.print(
+            f"[red]Không tìm thấy thư mục MarketData nào (đã thử {settings.market_data_dir} "
+            "và quét data/*/returns.parquet). Chạy scripts/fetch_yfinance_panel.py trước.[/red]"
+        )
         return
+    console.print(f"[dim]MarketData: {market_data_dir}[/dim]")
 
     _run_closed_loop_session(
         state.session_factory, state.client, state.region, state.universe, state.delay,

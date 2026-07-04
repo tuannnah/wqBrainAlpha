@@ -79,6 +79,58 @@ def test_menu_view_submit_nguoi_dung_tu_choi_thi_khong_nop(monkeypatch):
     assert not any(c[0] == "POST" for c in state.client.calls)
 
 
+# ------------------------------------------------------- mục 5: Auto SIM tự tìm MarketData
+def _seed_one_field(sf):
+    s = sf()
+    s.add(DataFieldModel(id="close", region="USA", universe="TOP3000", delay=1, type="MATRIX"))
+    s.commit()
+    s.close()
+
+
+def test_menu_auto_sim_tu_dong_tim_market_data_khong_hoi_input(monkeypatch):
+    """Mục 5 không được hỏi gì cả (chỉ cần LLM cấu hình sẵn) — tự tìm MarketData như mục 4."""
+    sf = make_session_factory(init_db(make_engine("sqlite:///:memory:")))
+    _seed_one_field(sf)
+    state = main._MenuState()
+    state.session_factory = sf
+
+    def _boom(*_a, **_k):
+        raise AssertionError("mục 5 không được gọi input()")
+
+    monkeypatch.setattr("builtins.input", _boom)
+    monkeypatch.setattr(main, "_find_market_data_dir", lambda: "data/market_yf")
+    called = {}
+    monkeypatch.setattr(
+        main, "_run_closed_loop_session",
+        lambda session_factory, client, region, universe, delay, market_data_dir:
+            called.setdefault("market_data_dir", market_data_dir),
+    )
+
+    main._menu_auto_sim(state)
+
+    assert called["market_data_dir"] == "data/market_yf"
+
+
+def test_menu_auto_sim_khong_thay_market_data_thi_bao_loi_khong_chay(monkeypatch):
+    sf = make_session_factory(init_db(make_engine("sqlite:///:memory:")))
+    _seed_one_field(sf)
+    state = main._MenuState()
+    state.session_factory = sf
+
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: (_ for _ in ()).throw(
+        AssertionError("mục 5 không được gọi input()")))
+    monkeypatch.setattr(main, "_find_market_data_dir", lambda: None)
+    called = {"ran": False}
+    monkeypatch.setattr(
+        main, "_run_closed_loop_session",
+        lambda *a, **k: called.__setitem__("ran", True),
+    )
+
+    main._menu_auto_sim(state)
+
+    assert called["ran"] is False
+
+
 def test_menu_view_submit_xac_nhan_yes_thi_nop_that(monkeypatch):
     from tests.fakes import FakeClient, FakeResponse
 
