@@ -88,6 +88,7 @@ class GPEngine:
         crossover_rate: float = 0.6,
         mutation_rate: float = 0.3,
         seed: int = 42,
+        seed_offset: int = 0,
         data_window: str = "default",
         with_llm_seeds: bool = False,
         n_jobs: int = 1,
@@ -102,6 +103,7 @@ class GPEngine:
         self.crossover_rate = crossover_rate
         self.mutation_rate = mutation_rate
         self.seed = seed
+        self.seed_offset = seed_offset
         self.data_window = data_window
         self.with_llm_seeds = with_llm_seeds
         self.n_jobs = n_jobs
@@ -300,6 +302,7 @@ class GPEngine:
             seed_cores=seed_cores,
             fields=fields,
             max_depth=self.max_depth,
+            seed_offset=self.seed_offset,
         )
 
         total_eval = 0

@@ -230,3 +230,38 @@ def test_engine_repeat_run_does_not_double_count_evaluations(  # noqa: ANN001
     finally:
         session.close()
     assert n_after <= n_before * 2
+
+
+def test_engine_passes_seed_offset_to_init_population(small_panel, repo, cfg, monkeypatch) -> None:  # noqa: ANN001
+    """seed_offset (round-robin seed family qua batch, xem GPIdeaSource) phải truyền
+    nguyên vẹn xuống init_population() — spy bằng monkeypatch thay vì dựng seed_cores
+    thật để test nhanh, không phụ thuộc nội dung families.py."""
+    captured: dict = {}
+
+    def _fake_init_population(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("src.gp.engine.init_population", _fake_init_population)
+    eng = GPEngine(
+        data=small_panel, repo=repo, config=cfg, registry=default_registry(),
+        pop_size=4, n_generations=0, seed=42, seed_offset=8,
+    )
+    eng.run()
+    assert captured["seed_offset"] == 8
+
+
+def test_engine_seed_offset_mac_dinh_0(small_panel, repo, cfg, monkeypatch) -> None:  # noqa: ANN001
+    captured: dict = {}
+
+    def _fake_init_population(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("src.gp.engine.init_population", _fake_init_population)
+    eng = GPEngine(
+        data=small_panel, repo=repo, config=cfg, registry=default_registry(),
+        pop_size=4, n_generations=0, seed=42,
+    )
+    eng.run()
+    assert captured["seed_offset"] == 0
