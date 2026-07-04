@@ -66,6 +66,17 @@ def visit_call(self, node: Call) -> Panel:
 `node.args`, chỉ đệ quy (`.accept(self)`) vào con có `ArgKind.PANEL`; bỏ qua hoàn toàn con ở vị
 trí WINDOW/SCALAR/GROUP (không gọi `visit_field`/`visit_constant` cho chúng nữa).
 
+**Đính chính (2026-07-04, phát hiện lúc triển khai Task 1):** `registry.get(node.op)` không
+điều kiện sẽ `KeyError` cho operator không có trong registry local (~30 operator implement cho
+backtest cục bộ) — nhưng `src/scoring/power_pool.py`/`dataset_usage.py`/`genius_report.py` cần
+phân tích alpha THẬT đã nộp, dùng operator bất kỳ trên nền tảng (có thể ngoài 30 operator local,
+vd `group_rank`, `inst_pnl`). Đã bổ sung `try/except KeyError` quanh `registry.get()`: operator
+không có trong registry → fallback về hành vi CŨ (duyệt hết `node.children()`, có thể lẫn
+group-key như trước fix, nhưng không tệ hơn — 3 module trên đã tự lọc riêng qua
+`_GROUPING_FIELDS`); operator có đăng ký (bao gồm đúng `group_neutralize` — bug đang sửa) vẫn
+được lọc chính xác theo `ArgKind.PANEL`. Xem `docs/superpowers/plans/2026-07-04-fieldcollector-group-arg-fix.md`
+và `.superpowers/sdd/task-1-report.md` cho chi tiết phát hiện + quyết định.
+
 ## Thành phần thay đổi
 
 1. **`src/lang/visitors.py`** — `FieldCollector.__init__(self, registry: OperatorRegistry)` bắt
