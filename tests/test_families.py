@@ -7,8 +7,13 @@ parse được, và các họ mong đợi đều có mặt.
 
 from __future__ import annotations
 
+import pytest
+
 from src.generation.families import EXPECTED_FAMILIES, generate_candidates
 from src.lang.parser import parse_expression
+
+import src.operators_local  # noqa: F401  (side-effect: nạp operator thật vào REGISTRY)
+from src.lang.parser import ParseError, parse
 
 
 def test_sinh_so_luong_lon():
@@ -30,6 +35,20 @@ def test_moi_bieu_thuc_parse_duoc():
     """Biểu thức sinh ra phải parse được (cú pháp FASTEXPR hợp lệ)."""
     for c in generate_candidates():
         parse_expression(c.expression)  # ném ValueError nếu sai cú pháp
+
+
+def test_moi_bieu_thuc_dung_operator_that_su_ton_tai():
+    """Biểu thức sinh ra phải dùng operator THẬT SỰ tồn tại trong registry (validate=True),
+    không chỉ đúng cú pháp suông. Bắt các trường hợp dùng operator không tồn tại trên
+    WQ Brain thật (vd ts_min/ts_max gọi trực tiếp -- không có trong bảng operator thật)."""
+    for c in generate_candidates():
+        try:
+            parse(c.expression)
+        except ParseError as exc:
+            pytest.fail(
+                f"biểu thức dùng operator không tồn tại: family={c.family} "
+                f"expr={c.expression!r} ({exc})"
+            )
 
 
 def test_du_cac_ho_kinh_dien():

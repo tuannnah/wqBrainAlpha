@@ -128,9 +128,7 @@ def _reversal() -> list[Candidate]:
     # Vị trí giá trong biên độ gần đây (gần đỉnh -> kỳ vọng quay đầu).
     for w in (5, 10, 20):
         for g in ("market", "sector"):
-            expr = _wrap_neutralize(
-                f"-rank((close - ts_min(low, {w})) / (ts_max(high, {w}) - ts_min(low, {w})))", g
-            )
+            expr = _wrap_neutralize(f"-rank(ts_zscore(close, {w}))", g)
             out.append(Candidate("reversal", expr, hyp, rat))
     # Làm mượt tín hiệu đảo chiều bằng decay tuyến tính (giảm nhiễu).
     for w in (3, 5):
@@ -185,7 +183,7 @@ def _momentum() -> list[Candidate]:
     # Vị trí giá so đỉnh 52 tuần (gần đỉnh -> quán tính mạnh).
     for w in (120, 250):
         for g in ("market", "sector"):
-            expr = _wrap_neutralize(f"rank(close / ts_max(high, {w}))", g)
+            expr = _wrap_neutralize(f"rank(ts_zscore(close, {w}))", g)
             out.append(
                 Candidate(
                     "momentum",
