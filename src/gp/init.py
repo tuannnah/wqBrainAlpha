@@ -105,6 +105,20 @@ def ramped_half_and_half(
     return trees
 
 
+def _rotating_slice(items: list[Node], offset: int, count: int) -> list[Node]:
+    """Lát cắt xoay vòng bắt đầu tại offset % len(items), nối vòng lại đầu danh sách nếu
+    tràn cuối. Dùng để mỗi batch GP (xem GPIdeaSource) dùng một lô seed khác nhau thay vì
+    luôn cố định items[:count] — qua nhiều batch, toàn bộ seed lần lượt được dùng."""
+    n = len(items)
+    if n == 0:
+        return []
+    start = offset % n
+    end = start + count
+    if end <= n:
+        return items[start:end]
+    return items[start:] + items[: end - n]
+
+
 def init_population(
     registry: OperatorRegistry,
     rng: np.random.Generator,
@@ -112,16 +126,22 @@ def init_population(
     seed_cores: list[Node],
     fields: tuple[str, ...],
     max_depth: int,
+    seed_offset: int = 0,
 ) -> list[Individual]:
     """Quần thể ban đầu: ưu tiên seed kinh nghiệm, lấp đầy phần còn lại bằng ramped
-    half-and-half. Seed/cây vượt max_depth bị loại + log warning (không crash)."""
+    half-and-half. Seed/cây vượt max_depth bị loại + log warning (không crash).
+
+    ``seed_offset`` chọn lô seed nào được dùng khi số seed hợp lệ nhiều hơn
+    ``population_size`` (xoay vòng qua ``_rotating_slice`` thay vì luôn cố định
+    seed_cores[:population_size]) — caller (GPEngine/GPIdeaSource) tăng dần offset mỗi
+    batch để qua nhiều lần gọi, toàn bộ seed hợp lệ đều được dùng."""
     valid_seeds = [t for t in seed_cores if DepthVisitor().visit(t) <= max_depth]
     dropped = len(seed_cores) - len(valid_seeds)
     if dropped:
         logger.warning("init_population: bỏ qua %d seed vượt max_depth=%d", dropped, max_depth)
 
     if len(valid_seeds) >= population_size:
-        chosen = valid_seeds[:population_size]
+        chosen = _rotating_slice(valid_seeds, seed_offset, population_size)
         return [Individual(expr=t) for t in chosen]
 
     remaining = population_size - len(valid_seeds)

@@ -84,3 +84,54 @@ def test_init_population_all_individuals_within_max_depth():
         registry, rng, population_size=15, seed_cores=[], fields=_FIELDS, max_depth=4,
     )
     assert all(ind.depth() <= 4 for ind in pop)
+
+
+def test_rotating_slice_offset_0_giu_nguyen_lat_cat_thuong():
+    from src.gp.init import _rotating_slice
+    items = [1, 2, 3, 4, 5]
+    assert _rotating_slice(items, offset=0, count=3) == [1, 2, 3]
+
+
+def test_rotating_slice_offset_giua_danh_sach_khong_tran():
+    from src.gp.init import _rotating_slice
+    items = [1, 2, 3, 4, 5]
+    assert _rotating_slice(items, offset=1, count=3) == [2, 3, 4]
+
+
+def test_rotating_slice_offset_gay_wrap_around():
+    from src.gp.init import _rotating_slice
+    items = [1, 2, 3, 4, 5]
+    assert _rotating_slice(items, offset=4, count=3) == [5, 1, 2]
+
+
+def test_rotating_slice_offset_boi_so_do_dai_quay_lai_offset_0():
+    from src.gp.init import _rotating_slice
+    items = [1, 2, 3, 4, 5]
+    assert _rotating_slice(items, offset=10, count=3) == [1, 2, 3]
+
+
+def test_rotating_slice_danh_sach_rong_tra_rong():
+    from src.gp.init import _rotating_slice
+    assert _rotating_slice([], offset=5, count=3) == []
+
+
+def test_init_population_seed_offset_mac_dinh_0_giu_nguyen_hanh_vi_cu():
+    seeds = [Call(op="rank", args=(Field(f),)) for f in _FIELDS]
+    rng = np.random.default_rng(5)
+    registry = default_registry()
+    pop = init_population(
+        registry, rng, population_size=2, seed_cores=seeds, fields=_FIELDS, max_depth=5,
+    )
+    assert [ind.expr for ind in pop] == seeds[:2]
+
+
+def test_init_population_seed_offset_xoay_sang_lo_ke_tiep():
+    seeds = [Call(op="rank", args=(Field(f),)) for f in _FIELDS]  # 3 seed (close/volume/returns)
+    rng = np.random.default_rng(5)
+    registry = default_registry()
+    pop = init_population(
+        registry, rng, population_size=2, seed_cores=seeds, fields=_FIELDS, max_depth=5,
+        seed_offset=2,
+    )
+    # offset=2, count=2, len=3 -> wrap: seeds[2:3] + seeds[0:1]
+    assert [ind.expr for ind in pop] == [seeds[2], seeds[0]]
