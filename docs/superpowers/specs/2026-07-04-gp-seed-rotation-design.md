@@ -7,6 +7,13 @@
 > `src/generation/families.py` + `src/generation/novel_ideas.py` (150 seed sau khi sửa
 > `ts_min/ts_max/ts_sum/ts_std_dev`, commit `12f78d8`/`0e1c0a3`) chỉ có **30/150 (đúng
 > `pop_size`) từng được dùng, mãi mãi, bất kể chạy bao nhiêu batch**.
+>
+> **Đính chính (2026-07-04, lúc review cuối triển khai):** con số "150" ở trên là ước lượng lúc
+> brainstorm; đếm lại thật bằng `all_seed_cores(with_llm=False)` sau khi code đã merge cho ra
+> **160 seed** (families + novel_ideas). Không ảnh hưởng thiết kế — `_rotating_slice` không phụ
+> thuộc số lượng cụ thể (`offset % len(items)`), đã xác minh round-robin phủ đúng 160/160 qua 7
+> batch. Các con số "150"/ví dụ "batch 4" bên dưới giữ nguyên như lúc brainstorm để khỏi viết lại
+> toàn bộ ví dụ; hiểu ngầm định là ước lượng, không phải giá trị cứng.
 
 ## Vấn đề
 
