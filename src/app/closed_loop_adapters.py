@@ -74,10 +74,12 @@ class GPIdeaSource:
 
     def next_batch(self) -> list[ShortlistCandidate]:
         seed = self.base_seed + self._batch
+        seed_offset = self._batch * self.pop_size
         self._batch += 1
         engine = GPEngine(
             data=self._data, repo=self._repo, config=self._config, registry=self._registry,
             pop_size=self.pop_size, n_generations=self.n_generations, seed=seed,
+            seed_offset=seed_offset,
         )
         pool: Any = self._repo.load_pool() or None
         # GPEngine.run() -> GPRunResult; Protocol _RunsGP đòi _GPRunResultLike với

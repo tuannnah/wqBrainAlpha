@@ -98,6 +98,31 @@ def test_gp_idea_source_yields_candidates_and_advances_seed(small_panel, repo) -
     assert isinstance(b1, list) and isinstance(b2, list)
 
 
+def test_gp_idea_source_seed_offset_tang_theo_pop_size(small_panel, repo) -> None:  # noqa: ANN001
+    """Moi batch phai dung 1 lo seed khac nhau (round-robin) - offset tang dung pop_size,
+    khop cach seed=base_seed+batch da co san."""
+    from unittest.mock import patch
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+    src = GPIdeaSource(small_panel, repo, cfg, default_registry(),
+                       pop_size=6, n_generations=0, base_seed=42, top_k=5, max_corr=0.99)
+    offsets_seen: list[int] = []
+
+    class _StubEngine:
+        def __init__(self, *a, seed_offset: int, **k) -> None:
+            offsets_seen.append(seed_offset)
+        def run(self):
+            from src.gp.engine import GPRunResult
+            return GPRunResult(generations_run=0, final_population=[], best_by_sharpe=None,
+                               n_evaluated=0, n_passed=0, seed=42)
+
+    with patch("src.app.closed_loop_adapters.GPEngine", _StubEngine):
+        src.next_batch()
+        src.next_batch()
+        src.next_batch()
+    assert offsets_seen == [0, 6, 12]  # tang dung pop_size (6) moi batch
+
+
 def test_refiner_raises_quota_exhausted_on_auth_expired() -> None:
     from src.pipeline.closed_loop import QuotaExhausted
     from src.simulation.simulator import AuthExpiredError
