@@ -172,20 +172,37 @@ class FieldRepository:
         instrument_type: str = "EQUITY", page_size: int | None = None,
     ) -> list[DataField]:
         limit = page_size or self.PAGE_SIZE
+        fields, declared_total = self._fetch_pages_with_filter(
+            region, universe, delay, instrument_type, limit
+        )
+        if declared_total is not None and len(fields) < declared_total:
+            logger.warning(
+                "WQ Brain chỉ trả {}/{} field cho toàn scope (giới hạn cửa sổ tìm kiếm) "
+                "— chuyển sang tải riêng từng dataset để lấy đủ",
+                len(fields), declared_total,
+            )
+            fields = self._fetch_all_pages_by_dataset(region, universe, delay, instrument_type, limit)
+        return fields
+
+    def _fetch_pages_with_filter(
+        self, region: str, universe: str, delay: int,
+        instrument_type: str, limit: int, dataset_id: str | None = None,
+    ) -> tuple[list[DataField], int | None]:
         offset = 0
         fields: list[DataField] = []
+        declared_total: int | None = None
         while True:
-            resp = self.client.get(
-                "/data-fields",
-                params={
-                    "instrumentType": instrument_type,
-                    "region": region,
-                    "delay": delay,
-                    "universe": universe,
-                    "limit": limit,
-                    "offset": offset,
-                },
-            )
+            params = {
+                "instrumentType": instrument_type,
+                "region": region,
+                "delay": delay,
+                "universe": universe,
+                "limit": limit,
+                "offset": offset,
+            }
+            if dataset_id is not None:
+                params["dataset.id"] = dataset_id
+            resp = self.client.get("/data-fields", params=params)
             if resp.status_code >= 400:
                 logger.error("GET /data-fields lỗi {}: {}", resp.status_code, resp.text[:500])
                 if resp.status_code == 429:
@@ -200,15 +217,73 @@ class FieldRepository:
                 )
             payload = resp.json()
             results = payload.get("results", [])
+            if declared_total is None:
+                declared_total = payload.get("count")
             if not results:
                 break
             for raw in results:
                 fields.append(_parse_field(raw, region, universe, delay))
             offset += limit
+            if declared_total is not None and offset >= declared_total:
+                break
+        return fields, declared_total
+
+    def _fetch_all_pages_by_dataset(
+        self, region: str, universe: str, delay: int, instrument_type: str, limit: int,
+    ) -> list[DataField]:
+        """Vượt giới hạn cửa sổ tìm kiếm của WQ Brain (~10000) bằng cách tải riêng
+        từng dataset trong scope rồi gộp lại (mỗi dataset thường ít field hơn nhiều)."""
+        datasets = self._fetch_datasets_for_scope(region, universe, delay, instrument_type)
+        by_id: dict[str, DataField] = {}
+        for ds in datasets:
+            dataset_id = ds.get("id")
+            if not dataset_id:
+                continue
+            ds_fields, ds_total = self._fetch_pages_with_filter(
+                region, universe, delay, instrument_type, limit, dataset_id=dataset_id
+            )
+            if ds_total is not None and len(ds_fields) < ds_total:
+                logger.warning(
+                    "Dataset {} vẫn vượt giới hạn cửa sổ tìm kiếm ({}/{} field) — có thể còn thiếu field",
+                    dataset_id, len(ds_fields), ds_total,
+                )
+            for f in ds_fields:
+                by_id[f.id] = f
+        return list(by_id.values())
+
+    def _fetch_datasets_for_scope(
+        self, region: str, universe: str, delay: int, instrument_type: str,
+    ) -> list[dict]:
+        limit = self.PAGE_SIZE
+        offset = 0
+        datasets: list[dict] = []
+        while True:
+            resp = self.client.get(
+                "/data-sets",
+                params={
+                    "instrumentType": instrument_type,
+                    "region": region,
+                    "delay": delay,
+                    "universe": universe,
+                    "limit": limit,
+                    "offset": offset,
+                },
+            )
+            if resp.status_code >= 400:
+                raise FieldFetchError(
+                    f"Không tải được /data-sets (HTTP {resp.status_code}) khi lấy danh sách dataset để lách giới hạn field.",
+                    status_code=resp.status_code,
+                )
+            payload = resp.json()
+            results = payload.get("results", [])
+            if not results:
+                break
+            datasets.extend(results)
+            offset += limit
             total = payload.get("count")
             if total is not None and offset >= total:
                 break
-        return fields
+        return datasets
 
     def _replace_in_db(self, fields: list[DataField], region: str, universe: str, delay: int) -> None:
         """Xóa cache cũ của đúng tổ hợp rồi ghi mới (replace, không append)."""

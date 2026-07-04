@@ -42,6 +42,89 @@ def test_fetch_all_phan_trang_va_cache():
     assert len(repo.load_cached()) == 2
 
 
+def test_fetch_vuot_cua_so_10000_chuyen_sang_tung_dataset():
+    """API báo count=15000 nhưng chỉ trả về được ít field rồi results rỗng
+    (giới hạn cửa sổ tìm kiếm của WQ Brain) -> phải tự tải riêng từng dataset."""
+    engine = init_db(_engine())
+    session_factory = make_session_factory(engine)
+    client = FakeClient()
+
+    # Fetch chung (không lọc dataset): trang 1 có 1 field, trang 2 rỗng dù count=15000.
+    client.queue_get(
+        FakeResponse(200, json_data={"count": 15000, "results": [{"id": "a", "dataset": {"id": "pv1"}}]})
+    )
+    client.queue_get(FakeResponse(200, json_data={"count": 15000, "results": []}))
+
+    # Danh sách dataset đúng scope.
+    client.queue_get(
+        FakeResponse(200, json_data={"count": 2, "results": [{"id": "pv1"}, {"id": "fnd6"}]})
+    )
+
+    # Tải riêng từng dataset.
+    client.queue_get(
+        FakeResponse(200, json_data={"count": 1, "results": [{"id": "a", "dataset": {"id": "pv1"}}]})
+    )
+    client.queue_get(
+        FakeResponse(200, json_data={"count": 1, "results": [{"id": "b", "dataset": {"id": "fnd6"}}]})
+    )
+
+    repo = FieldRepository(client, session_factory)
+    fields = repo.fetch_all("USA", "TOP3000", 1, page_size=1)
+
+    assert {f.id for f in fields} == {"a", "b"}
+    assert repo.cached_count() == 2
+
+    # Có gọi /data-sets với đúng scope để lấy danh sách dataset.
+    dataset_call = next(c for c in client.calls if c[1] == "/data-sets")
+    assert dataset_call[2]["params"]["region"] == "USA"
+    assert dataset_call[2]["params"]["universe"] == "TOP3000"
+    assert dataset_call[2]["params"]["delay"] == 1
+
+    # Các call fetch theo dataset phải mang đúng dataset.id.
+    field_calls = [c for c in client.calls if c[1] == "/data-fields"]
+    dataset_ids_used = {c[2]["params"].get("dataset.id") for c in field_calls if c[2]["params"].get("dataset.id")}
+    assert dataset_ids_used == {"pv1", "fnd6"}
+
+
+def test_fetch_khong_vuot_cua_so_thi_khong_goi_data_sets():
+    """Trường hợp bình thường (không bị cắt) thì không cần fallback -> không gọi /data-sets."""
+    engine = init_db(_engine())
+    session_factory = make_session_factory(engine)
+    client = FakeClient()
+    client.queue_get(
+        FakeResponse(200, json_data={"count": 2, "results": [{"id": "close"}, {"id": "open"}]})
+    )
+    client.queue_get(FakeResponse(200, json_data={"count": 2, "results": []}))
+
+    repo = FieldRepository(client, session_factory)
+    fields = repo.fetch_all("USA", "TOP3000", 1, page_size=2)
+
+    assert {f.id for f in fields} == {"close", "open"}
+    assert all(c[1] != "/data-sets" for c in client.calls)
+
+
+def test_fetch_dataset_van_vuot_cua_so_khong_crash():
+    """Một dataset đơn lẻ vẫn bị cắt (hiếm) -> không crash, trả về phần đã lấy được."""
+    engine = init_db(_engine())
+    session_factory = make_session_factory(engine)
+    client = FakeClient()
+    client.queue_get(
+        FakeResponse(200, json_data={"count": 20000, "results": [{"id": "a", "dataset": {"id": "huge"}}]})
+    )
+    client.queue_get(FakeResponse(200, json_data={"count": 20000, "results": []}))
+    client.queue_get(FakeResponse(200, json_data={"count": 1, "results": [{"id": "huge"}]}))
+    # Fetch theo dataset "huge" cũng bị cắt tương tự.
+    client.queue_get(
+        FakeResponse(200, json_data={"count": 20000, "results": [{"id": "a", "dataset": {"id": "huge"}}]})
+    )
+    client.queue_get(FakeResponse(200, json_data={"count": 20000, "results": []}))
+
+    repo = FieldRepository(client, session_factory)
+    fields = repo.fetch_all("USA", "TOP3000", 1, page_size=1)
+
+    assert {f.id for f in fields} == {"a"}
+
+
 def test_fetch_all_gui_instrument_type():
     engine = init_db(_engine())
     session_factory = make_session_factory(engine)
