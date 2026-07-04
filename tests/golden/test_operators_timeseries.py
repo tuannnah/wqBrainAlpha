@@ -17,7 +17,9 @@ def _eval(panel: MarketData, node) -> np.ndarray:
     return Evaluator(EvalContext(data=panel, registry=default_registry())).evaluate(node)
 
 
-@pytest.mark.parametrize("op", ["ts_mean", "ts_std", "ts_zscore", "ts_decay_linear"])
+@pytest.mark.parametrize(
+    "op", ["ts_mean", "ts_std", "ts_sum", "ts_std_dev", "ts_zscore", "ts_decay_linear"]
+)
 def test_thieu_lich_su_la_nan(small_panel, op) -> None:
     out = _eval(small_panel, Call(op, (Field("close"), Constant(20))))
     assert np.all(np.isnan(out[:19]))  # < d-1=19 quan sát -> NaN
@@ -44,6 +46,26 @@ def test_ts_mean_dung_gia_tri(small_panel) -> None:
     row = 50
     in_uni = small_panel.universe[row]  # row 50 < 60 -> 3 mã cuối ngoài universe (mask)
     expected = np.nanmean(close[row - 9 : row + 1], axis=0)
+    expected[~in_uni] = np.nan
+    np.testing.assert_allclose(out[row], expected, equal_nan=True)
+
+
+def test_ts_sum_dung_gia_tri(small_panel) -> None:
+    out = _eval(small_panel, Call("ts_sum", (Field("close"), Constant(10))))
+    close = small_panel.field("close")
+    row = 50
+    in_uni = small_panel.universe[row]  # row 50 < 60 -> 3 mã cuối ngoài universe (mask)
+    expected = np.nansum(close[row - 9 : row + 1], axis=0)
+    expected[~in_uni] = np.nan
+    np.testing.assert_allclose(out[row], expected, equal_nan=True)
+
+
+def test_ts_std_dev_dung_gia_tri(small_panel) -> None:
+    out = _eval(small_panel, Call("ts_std_dev", (Field("close"), Constant(10))))
+    close = small_panel.field("close")
+    row = 50
+    in_uni = small_panel.universe[row]  # row 50 < 60 -> 3 mã cuối ngoài universe (mask)
+    expected = np.nanstd(close[row - 9 : row + 1], axis=0)
     expected[~in_uni] = np.nan
     np.testing.assert_allclose(out[row], expected, equal_nan=True)
 

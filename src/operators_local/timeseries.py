@@ -45,6 +45,40 @@ def ts_std(ctx: EvalContext, x: Panel, d: int) -> Panel:
     return out
 
 
+@register(name="ts_sum", category=OpCategory.TIME_SERIES,
+          signature=(ArgKind.PANEL, ArgKind.WINDOW), bounded=False, commutative=False)
+def ts_sum(ctx: EvalContext, x: Panel, d: int) -> Panel:
+    """Tổng x trong d ngày gần nhất (trailing [t-d+1, t]) — khớp mô tả thật WQ Brain
+    "Sum values of x for the past d days."."""
+    out = np.full_like(x, np.nan, dtype=np.float64)
+    d = int(d)
+    for t in range(x.shape[0]):
+        win = _window_slice(t, d)
+        if win is None:
+            continue
+        with np.errstate(invalid="ignore"):
+            out[t] = np.nansum(x[win], axis=0)
+    return out
+
+
+@register(name="ts_std_dev", category=OpCategory.TIME_SERIES,
+          signature=(ArgKind.PANEL, ArgKind.WINDOW), bounded=False, commutative=False)
+def ts_std_dev(ctx: EvalContext, x: Panel, d: int) -> Panel:
+    """Độ lệch chuẩn của x trong d ngày gần nhất — khớp mô tả thật WQ Brain "Calculates
+    the standard deviation of a data series x over the past d days, measuring how much
+    the values deviate from their mean during that period." (cùng cách tính với ts_std,
+    đăng ký tên riêng để khớp đúng tên operator thật trên platform)."""
+    out = np.full_like(x, np.nan, dtype=np.float64)
+    d = int(d)
+    for t in range(x.shape[0]):
+        win = _window_slice(t, d)
+        if win is None:
+            continue
+        with np.errstate(invalid="ignore"):
+            out[t] = np.nanstd(x[win], axis=0)
+    return out
+
+
 @register(name="ts_delay", category=OpCategory.TIME_SERIES,
           signature=(ArgKind.PANEL, ArgKind.WINDOW), bounded=False, commutative=False,
           gp_usable=False)
