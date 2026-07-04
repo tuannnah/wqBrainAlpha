@@ -57,6 +57,11 @@ def _parse_field(raw: dict, region: str, universe: str, delay: int) -> DataField
 
 class FieldRepository:
     PAGE_SIZE = 50
+    # Giới hạn cửa sổ tìm kiếm (ES) của WQ Brain cho /data-fields: khi số field thật của
+    # 1 scope vượt ngưỡng này, API không chỉ cắt kết quả trả về mà CẢ trường "count" cũng
+    # bị báo đúng bằng ngưỡng này (không phải tổng thật) -- nên không thể tin "count" để
+    # phát hiện bị cắt. Phải tự nghi ngờ khi số field NHẬN ĐƯỢC chạm đúng ngưỡng.
+    SEARCH_WINDOW_CAP = 10000
 
     def __init__(self, client: WQBrainClient, session_factory):
         self.client = client
@@ -175,10 +180,15 @@ class FieldRepository:
         fields, declared_total = self._fetch_pages_with_filter(
             region, universe, delay, instrument_type, limit
         )
-        if declared_total is not None and len(fields) < declared_total:
+        # "count" của WQ Brain có thể NÓI DỐI (cũng bị cắt ở SEARCH_WINDOW_CAP như kết quả),
+        # nên không chỉ tin declared_total: chạm đúng ngưỡng cửa sổ là đủ để nghi ngờ.
+        looks_truncated = len(fields) >= self.SEARCH_WINDOW_CAP or (
+            declared_total is not None and len(fields) < declared_total
+        )
+        if looks_truncated:
             logger.warning(
-                "WQ Brain chỉ trả {}/{} field cho toàn scope (giới hạn cửa sổ tìm kiếm) "
-                "— chuyển sang tải riêng từng dataset để lấy đủ",
+                "WQ Brain có thể đã cắt kết quả cho toàn scope ({} field nhận được, "
+                "API báo count={}) — chuyển sang tải riêng từng dataset để lấy đủ",
                 len(fields), declared_total,
             )
             fields = self._fetch_all_pages_by_dataset(region, universe, delay, instrument_type, limit)

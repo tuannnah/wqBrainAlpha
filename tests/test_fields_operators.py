@@ -86,6 +86,46 @@ def test_fetch_vuot_cua_so_10000_chuyen_sang_tung_dataset():
     assert dataset_ids_used == {"pv1", "fnd6"}
 
 
+def test_fetch_dung_nguong_cua_so_van_nghi_bi_cat_du_count_noi_doi():
+    """Gặp thật trên WQ Brain: count cũng bị chặn = đúng SEARCH_WINDOW_CAP (không phải tổng
+    thật) -> so sánh len(fields) < declared_total sẽ KHÔNG bắt được (bằng nhau). Phải tự
+    nghi ngờ khi số field nhận được chạm đúng ngưỡng, bất kể count nói gì."""
+    engine = init_db(_engine())
+    session_factory = make_session_factory(engine)
+    client = FakeClient()
+
+    # Broad query: đúng 3 field, count CŨNG báo 3 (nói dối giống hệt số nhận được).
+    client.queue_get(
+        FakeResponse(200, json_data={
+            "count": 3,
+            "results": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
+        })
+    )
+    client.queue_get(
+        FakeResponse(200, json_data={"count": 2, "results": [{"id": "pv1"}, {"id": "fnd6"}]})
+    )
+    client.queue_get(
+        FakeResponse(200, json_data={"count": 1, "results": [{"id": "a", "dataset": {"id": "pv1"}}]})
+    )
+    client.queue_get(
+        FakeResponse(200, json_data={
+            "count": 3,
+            "results": [
+                {"id": "b", "dataset": {"id": "fnd6"}},
+                {"id": "c", "dataset": {"id": "fnd6"}},
+                {"id": "d", "dataset": {"id": "fnd6"}},
+            ],
+        })
+    )
+
+    repo = FieldRepository(client, session_factory)
+    repo.SEARCH_WINDOW_CAP = 3  # hạ ngưỡng để test không cần giả lập thật 10000 dòng
+    fields = repo.fetch_all("USA", "TOP3000", 1, page_size=3)
+
+    assert {f.id for f in fields} == {"a", "b", "c", "d"}
+    assert any(c[1] == "/data-sets" for c in client.calls)
+
+
 def test_fetch_khong_vuot_cua_so_thi_khong_goi_data_sets():
     """Trường hợp bình thường (không bị cắt) thì không cần fallback -> không gọi /data-sets."""
     engine = init_db(_engine())
