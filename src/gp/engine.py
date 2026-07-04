@@ -146,7 +146,7 @@ class GPEngine:
             return None, "error", [f"metrics: {type(exc).__name__}: {exc}"], None
 
         depth = ind.expr.accept(DepthVisitor())
-        fields = ind.expr.accept(FieldCollector())
+        fields = ind.expr.accept(FieldCollector(self.registry))
         fields_ok = bool(fields) and fields.issubset(self.data.field_names())
 
         verdict = GateEvaluator().evaluate_with_pool(
@@ -196,7 +196,7 @@ class GPEngine:
         canonical_hash = ind.expr.accept(CanonicalHasher())
         depth = ind.expr.accept(DepthVisitor())
         complexity = ind.expr.accept(ComplexityVisitor())
-        fields = ind.expr.accept(FieldCollector())
+        fields = ind.expr.accept(FieldCollector(self.registry))
 
         expr_id = self.repo.upsert_expression(
             expr_string, canonical_hash, depth, complexity, fields,

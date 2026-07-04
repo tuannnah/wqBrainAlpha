@@ -8,7 +8,7 @@ import hashlib
 from collections.abc import Iterator
 
 from src.lang.ast import Call, Constant, Field, Node, NodeVisitor
-from src.lang.registry import OperatorRegistry, default_registry
+from src.lang.registry import ArgKind, OperatorRegistry, default_registry
 
 
 class DepthVisitor(NodeVisitor[int]):
@@ -31,7 +31,18 @@ class DepthVisitor(NodeVisitor[int]):
 
 class FieldCollector(NodeVisitor["set[str]"]):
     """Tập tên field được tham chiếu trong cây — phục vụ validate field tồn tại và
-    dead-field blacklist (Phase 0.7/Phase 5)."""
+    dead-field blacklist (Phase 0.7/Phase 5). Chỉ thu thập field ở đúng vị trí ArgKind.PANEL
+    của mỗi operator (tín hiệu thật) -- bỏ qua WINDOW/SCALAR/GROUP (literal, không phải field
+    tham chiếu, vd tên group "sector" trong group_neutralize(x, sector)). Khớp semantics
+    Evaluator.visit_call (src/engine/evaluator.py) -- registry bắt buộc để tra signature.
+    Nếu operator không có trong registry local (vd phân tích alpha THẬT đã nộp trên WQ Brain,
+    dùng operator chưa implement local -- xem power_pool.py/dataset_usage.py/genius_report.py),
+    fallback về hành vi cũ: duyệt hết mọi con, không phân biệt ArgKind (các module gọi ở ngữ
+    cảnh này đã tự lọc riêng qua _GROUPING_FIELDS/_EXEMPT_OPERATORS cho đúng mục đích nghiệp vụ
+    của họ, nên fallback bảo thủ này không sai lệch kết quả nghiệp vụ)."""
+
+    def __init__(self, registry: OperatorRegistry) -> None:
+        self.registry = registry
 
     def visit(self, node: Node) -> set[str]:
         return node.accept(self)
@@ -43,9 +54,22 @@ class FieldCollector(NodeVisitor["set[str]"]):
         return {node.name}
 
     def visit_call(self, node: Call) -> set[str]:
+        try:
+            spec = self.registry.get(node.op)
+        except KeyError:
+            # Operator không có trong registry local (vd phân tích alpha thật dùng operator
+            # WQ Brain chưa implement local, xem power_pool.py/dataset_usage.py) -- không biết
+            # signature nên fallback: duyệt hết con như hành vi cũ (các module gọi ở ngữ cảnh
+            # này đã tự lọc riêng qua _GROUPING_FIELDS/_EXEMPT_OPERATORS cho đúng mục đích
+            # nghiệp vụ của họ).
+            result: set[str] = set()
+            for c in node.children():
+                result |= c.accept(self)
+            return result
         result: set[str] = set()
-        for c in node.children():
-            result |= c.accept(self)
+        for arg, kind in zip(node.args, spec.signature, strict=True):
+            if kind is ArgKind.PANEL:
+                result |= arg.accept(self)
         return result
 
 

@@ -7,6 +7,7 @@ sub-project B trong docs/superpowers/specs/2026-07-02-submission-compliance-road
 from __future__ import annotations
 
 from src.lang.parser import parse_expression
+from src.lang.registry import default_registry
 from src.lang.visitors import FieldCollector, OperatorCollector
 
 # 6 grouping field được miễn trừ khi tính dataset (theo single-dataset-alphas.md — khác danh
@@ -20,7 +21,7 @@ def dataset_of_alpha(expr: str, field_dataset: dict[str, str]) -> str | None:
     """Trả dataset_id DUY NHẤT nếu `expr` là single-dataset; `None` nếu dùng >1 dataset hoặc
     có field không xác định được dataset trong `field_dataset`."""
     node = parse_expression(expr)
-    fields = FieldCollector().visit(node)
+    fields = FieldCollector(default_registry()).visit(node)
     operators = OperatorCollector().visit(node)
 
     datasets: set[str] = set()
@@ -47,7 +48,7 @@ def datasets_used(expr: str, field_dataset: dict[str, str]) -> set[str]:
     dataset) — khác `dataset_of_alpha` (chỉ trả kết quả khi DUY NHẤT 1 dataset). Dùng để kiểm
     khớp Power Pool Theme (loại trừ dataset cụ thể, không yêu cầu single-dataset)."""
     node = parse_expression(expr)
-    fields = FieldCollector().visit(node)
+    fields = FieldCollector(default_registry()).visit(node)
     operators = OperatorCollector().visit(node)
 
     datasets: set[str] = set()

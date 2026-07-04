@@ -61,7 +61,7 @@ def _score_one_full(
             empty_pnl, data.dates,
         )
 
-    fields = FieldCollector().visit(node)
+    fields = FieldCollector(default_registry()).visit(node)
     fields_ok = bool(fields) and fields.issubset(data.field_names())
     depth = DepthVisitor().visit(node)
 

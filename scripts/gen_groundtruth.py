@@ -23,7 +23,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from config.thresholds import MAX_DEPTH  # noqa: E402
+import src.operators_local  # noqa: E402,F401  side-effect: đăng ký operator thật vào registry
 from src.lang.parser import parse_expression  # noqa: E402
+from src.lang.registry import default_registry  # noqa: E402
 from src.lang.visitors import DepthVisitor, FieldCollector  # noqa: E402
 
 SEED = 20260624
@@ -136,7 +138,7 @@ def main() -> None:
     rejected: list[dict] = []
     seen: set[str] = set()
     depth_visitor = DepthVisitor()
-    field_collector = FieldCollector()
+    field_collector = FieldCollector(default_registry())
 
     for family, expr in raw:
         if expr in seen:

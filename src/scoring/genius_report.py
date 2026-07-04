@@ -7,6 +7,7 @@ docs/superpowers/plans/2026-07-02-genius-tracking-report.md."""
 from __future__ import annotations
 
 from src.lang.parser import parse_expression
+from src.lang.registry import default_registry
 from src.lang.visitors import FieldCollector, OperatorCollector
 from src.storage.models import AlphaModel, SimulationModel, SubmissionModel
 
@@ -52,7 +53,7 @@ def average_distinct_fields_per_alpha(session_factory) -> float | None:
     exprs = _submitted_expressions(session_factory)
     if not exprs:
         return None
-    counts = [len(FieldCollector().visit(parse_expression(e))) for e in exprs]
+    counts = [len(FieldCollector(default_registry()).visit(parse_expression(e))) for e in exprs]
     return sum(counts) / len(counts)
 
 
@@ -68,5 +69,5 @@ def total_distinct_fields(session_factory) -> int:
     exprs = _submitted_expressions(session_factory)
     all_fields: set[str] = set()
     for e in exprs:
-        all_fields |= FieldCollector().visit(parse_expression(e))
+        all_fields |= FieldCollector(default_registry()).visit(parse_expression(e))
     return len(all_fields)

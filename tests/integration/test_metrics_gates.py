@@ -36,7 +36,7 @@ def test_handwritten_alpha_end_to_end_metrics_and_gate(small_panel: MarketData) 
     node = parse(expr)
 
     depth = DepthVisitor().visit(node)
-    fields = FieldCollector().visit(node)
+    fields = FieldCollector(default_registry()).visit(node)
     fields_ok = fields.issubset(set(small_panel.fields.keys()))
 
     ctx = EvalContext(data=small_panel, registry=default_registry(), cache=None)

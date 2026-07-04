@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from src.backtest.metrics_local import AlphaMetrics
 from src.cache.result_cache import ResultCache
 from src.lang.parser import parse
+from src.lang.registry import default_registry
 from src.lang.visitors import CanonicalHasher, ComplexityVisitor, DepthVisitor, FieldCollector
 from src.storage.db import init_db
 from src.storage.repository import MiniBrainRepository
@@ -28,7 +29,7 @@ def test_parse_visit_upsert_cache_roundtrip_with_real_ast() -> None:
     expr_string = "ts_mean(close, 5)"
     node = parse(expr_string)
     depth = node.accept(DepthVisitor())
-    fields = node.accept(FieldCollector())
+    fields = node.accept(FieldCollector(default_registry()))
     canonical_hash = node.accept(CanonicalHasher())
     complexity = node.accept(ComplexityVisitor())
 
@@ -57,7 +58,7 @@ def test_failed_expression_recorded_with_reasons_not_cached() -> None:
     expr_string = "ts_mean(volume, 999)"  # window lớn -> giả định pass parse, fail gate
     node = parse(expr_string)
     depth = node.accept(DepthVisitor())
-    fields = node.accept(FieldCollector())
+    fields = node.accept(FieldCollector(default_registry()))
     canonical_hash = node.accept(CanonicalHasher())
     complexity = node.accept(ComplexityVisitor())
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from src.lang.parser import parse_expression
+from src.lang.registry import default_registry
 from src.lang.visitors import FieldCollector, OperatorCollector
 from src.llm.hypothesis import Hypothesis
 
@@ -31,7 +32,7 @@ def count_operators_fields(expr: str) -> tuple[int, int]:
     quyết định giới hạn Power Pool (<=8 operator, <=3 field)."""
     node = parse_expression(expr)
     operators = OperatorCollector().visit(node) - _EXEMPT_OPERATORS
-    fields = FieldCollector().visit(node) - _GROUPING_FIELDS
+    fields = FieldCollector(default_registry()).visit(node) - _GROUPING_FIELDS
     return len(operators), len(fields)
 
 
