@@ -371,3 +371,28 @@ def test_simulate_thieu_location_tra_error():
     )
     result = sim.simulate("rank(close)")
     assert result.status == "error"
+
+
+def test_simulate_tra_error_khi_poll_qua_deadline():
+    """Poll mãi RUNNING và thời gian vượt TIMEOUT_SECONDS -> _poll raise 'timeout khi
+    poll', simulate nuốt lỗi và trả status='error' (không treo vô hạn)."""
+    client = FakeClient()
+    client.queue_post(FakeResponse(201, headers={"Location": "/simulations/sim-x"}))
+    client.queue_get(
+        FakeResponse(200, json_data={"status": "RUNNING"}, headers={"Retry-After": "0"})
+    )
+    # time_func: lần đầu (tính deadline) = 0; lần sau vượt -> chạm deadline ngay.
+    times = iter([0.0] + [10.0**9] * 8)
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None,
+        time_func=lambda: next(times),
+    )
+    result = sim.simulate("rank(close)")
+    assert result.status == "error"
+    assert "timeout" in str(result.raw).lower()
+
+
+def test_timeout_seconds_du_dai_cho_wq_cham():
+    """TIMEOUT_SECONDS phải >= 600s: WQ Brain đôi lúc xử lý sim > 5 phút, deadline 300s
+    cũ khiến mọi sim bị bỏ oan trước khi COMPLETE."""
+    assert Simulator.TIMEOUT_SECONDS >= 600.0
