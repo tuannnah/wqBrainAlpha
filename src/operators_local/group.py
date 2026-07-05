@@ -20,9 +20,10 @@ def group_neutralize(ctx: EvalContext, x: Panel, group_name: str) -> Panel:
         valid = ~np.isnan(row)
         if not np.any(valid):
             continue
-        for g in np.unique(grp_row[valid]):
-            mask = valid & (grp_row == g)
-            if not np.any(mask):
-                continue
-            out[t][mask] = row[mask] - float(np.mean(row[mask]))
+        # Trừ mean theo group trong 1 lượt (bincount thay vòng qua từng group).
+        _, inv = np.unique(grp_row[valid], return_inverse=True)
+        sums = np.bincount(inv, weights=row[valid])
+        counts = np.bincount(inv)
+        means = sums / counts
+        out[t][valid] = row[valid] - means[inv]
     return out

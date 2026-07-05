@@ -32,14 +32,16 @@ def trade_when(ctx: EvalContext, trigger: Panel, alpha: Panel, exit_cond: Panel)
 @register(name="hump", category=OpCategory.CONDITIONAL,
           signature=(ArgKind.PANEL, ArgKind.SCALAR), bounded=False, commutative=False)
 def hump(ctx: EvalContext, x: Panel, thr: float) -> Panel:
+    # Bỏ vòng col (giữ vòng t vì carry-forward tuần tự): mỗi bước t cập nhật `last` cho
+    # cả hàng cổ phiếu cùng lúc. Ô hiện tại NaN -> giữ NaN, last không đổi; ô có giá trị
+    # -> cập nhật last khi vượt ngưỡng thr rồi ghi last.
     out = x.copy()
-    for col in range(x.shape[1]):
-        last = np.nan
+    last = np.full(x.shape[1], np.nan, dtype=np.float64)
+    with np.errstate(invalid="ignore"):
         for t in range(x.shape[0]):
-            cur = x[t, col]
-            if np.isnan(cur):
-                continue
-            if np.isnan(last) or abs(cur - last) >= thr:
-                last = cur
-            out[t, col] = last
+            cur = x[t]
+            valid = ~np.isnan(cur)
+            trigger = valid & (np.isnan(last) | (np.abs(cur - last) >= thr))
+            last = np.where(trigger, cur, last)
+            out[t] = np.where(valid, last, out[t])
     return out

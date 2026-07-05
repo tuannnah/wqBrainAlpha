@@ -15,21 +15,23 @@ from src.local_types import Panel
           gp_usable=False)
 def regression_neut(ctx: EvalContext, y: Panel, x: Panel) -> Panel:
     """Residual cross-sectional per-row của y hồi quy OLS (với intercept) theo x."""
-    out = np.full_like(y, np.nan, dtype=np.float64)
-    for t in range(y.shape[0]):
-        yr, xr = y[t], x[t]
-        valid = ~np.isnan(yr) & ~np.isnan(xr)
-        n_valid = int(valid.sum())
-        if n_valid < 2:
-            continue
-        xv, yv = xr[valid], yr[valid]
-        if np.std(xv) == 0.0:
-            out[t][valid] = yv - float(np.mean(yv))
-            continue
-        design = np.column_stack([np.ones(n_valid), xv])
-        coef, *_ = np.linalg.lstsq(design, yv, rcond=None)
-        out[t][valid] = yv - design @ coef
-    return out
+    # Vectorize per-row (bỏ vòng t + lstsq): OLS 1 biến + intercept có nghiệm đóng
+    # b=Σ(dx·dy)/Σ(dx²), residual=(y-ȳ)-b·(x-x̄). std(x)=0 -> b=0 -> residual=y-ȳ (khớp
+    # nhánh gốc). <2 quan sát in-universe -> NaN.
+    valid = ~np.isnan(y) & ~np.isnan(x)
+    n = valid.sum(axis=1, keepdims=True)
+    n_safe = np.where(n > 0, n, 1)
+    xv = np.where(valid, x, 0.0)
+    yv = np.where(valid, y, 0.0)
+    mx = xv.sum(axis=1, keepdims=True) / n_safe
+    my = yv.sum(axis=1, keepdims=True) / n_safe
+    dx = np.where(valid, x - mx, 0.0)
+    dy = np.where(valid, y - my, 0.0)
+    sxx = (dx * dx).sum(axis=1, keepdims=True)
+    sxy = (dx * dy).sum(axis=1, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        b = np.where(sxx > 0.0, sxy / sxx, 0.0)
+    return np.where(valid & (n >= 2), dy - b * dx, np.nan)
 
 
 @register(name="vector_neut", category=OpCategory.NEUTRALIZATION,
@@ -37,17 +39,13 @@ def regression_neut(ctx: EvalContext, y: Panel, x: Panel) -> Panel:
           gp_usable=False)
 def vector_neut(ctx: EvalContext, x: Panel, y: Panel) -> Panel:
     """Trừ phần chiếu của x lên y mỗi hàng: x - (x.y / y.y) * y, chỉ trên in-universe."""
-    out = np.full_like(x, np.nan, dtype=np.float64)
-    for t in range(x.shape[0]):
-        xr, yr = x[t], y[t]
-        valid = ~np.isnan(xr) & ~np.isnan(yr)
-        if not np.any(valid):
-            continue
-        xv, yv = xr[valid], yr[valid]
-        denom = float(np.dot(yv, yv))
-        if denom == 0.0:
-            out[t][valid] = xv
-            continue
-        proj_coef = float(np.dot(xv, yv)) / denom
-        out[t][valid] = xv - proj_coef * yv
-    return out
+    # Vectorize per-row (bỏ vòng t): proj_coef = Σ(x·y)/Σ(y·y) trên in-universe mỗi hàng;
+    # denom=0 -> giữ nguyên x; ô ngoài in-universe -> NaN.
+    valid = ~np.isnan(x) & ~np.isnan(y)
+    xv = np.where(valid, x, 0.0)
+    yv = np.where(valid, y, 0.0)
+    denom = (yv * yv).sum(axis=1, keepdims=True)
+    num = (xv * yv).sum(axis=1, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        proj = np.where(denom > 0.0, num / denom, 0.0)  # denom=0 -> proj=0 -> out=x
+    return np.where(valid, x - proj * y, np.nan)
