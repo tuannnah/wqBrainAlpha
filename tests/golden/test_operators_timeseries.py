@@ -208,3 +208,43 @@ def test_ts_rank_vectorized_khop_reference() -> None:
         got = ts_rank(None, x, d)
         exp = _ref_ts_rank(x, d)
         np.testing.assert_allclose(got, exp, equal_nan=True, rtol=1e-12, atol=1e-12)
+
+
+def _ref_ts_decay_linear(x: np.ndarray, d: int) -> np.ndarray:
+    """Bản tham chiếu vòng lặp của ts_decay_linear: trung bình có trọng số tuyến tính
+    (xa=1..gần=d) trên các quan sát hợp lệ trong cửa sổ; cửa sổ không có giá trị hợp lệ
+    hoặc thiếu lịch sử -> NaN."""
+    out = np.full_like(x, np.nan, dtype=np.float64)
+    d = int(d)
+    weights = np.arange(1, d + 1, dtype=np.float64)
+    for t in range(x.shape[0]):
+        start = t - d + 1
+        if start < 0:
+            continue
+        window = x[start : t + 1]
+        for col in range(x.shape[1]):
+            series = window[:, col]
+            valid = ~np.isnan(series)
+            if not np.any(valid):
+                continue
+            w = weights[valid]
+            out[t, col] = float(np.sum(series[valid] * w) / np.sum(w))
+    return out
+
+
+def test_ts_decay_linear_vectorized_khop_reference() -> None:
+    """ts_decay_linear vectorize phải khớp bản tham chiếu vòng lặp trên dữ liệu có NaN
+    rải rác, đoạn NaN dài, cột toàn NaN, qua nhiều window."""
+    from src.operators_local.timeseries import ts_decay_linear
+
+    rng = np.random.default_rng(20260705)
+    x = rng.standard_normal((90, 7))
+    x[5, 1] = np.nan
+    x[20:28, 3] = np.nan
+    x[0:15, 4] = np.nan
+    x[:, 6] = np.nan
+
+    for d in (5, 15, 30):
+        got = ts_decay_linear(None, x, d)
+        exp = _ref_ts_decay_linear(x, d)
+        np.testing.assert_allclose(got, exp, equal_nan=True, rtol=1e-12, atol=1e-12)

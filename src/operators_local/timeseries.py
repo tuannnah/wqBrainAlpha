@@ -17,17 +17,32 @@ def _window_slice(t: int, d: int) -> slice | None:
     return slice(start, t + 1)
 
 
+def _rolling_nan_stats(x: Panel, d: int):
+    """Thống kê rolling trên cửa sổ trailing [t-d+1, t], BỎ NaN, cho mọi t một lượt bằng
+    cumsum (thay vòng Python theo t). Trả (cnt, sx, sx2) shape hàng ứng t=d-1..T-1; caller
+    tự để NaN cho t<d-1 (thiếu lịch sử). cnt=số quan sát hợp lệ, sx=Σx, sx2=Σx²."""
+    valid = (~np.isnan(x)).astype(np.float64)
+    xv = np.where(valid > 0, x, 0.0)
+    zero = np.zeros((1, x.shape[1]), dtype=np.float64)
+
+    def _roll(a: Panel) -> Panel:
+        cs = np.concatenate([zero, np.cumsum(a, axis=0)], axis=0)
+        return cs[d:] - cs[:-d]  # tổng trên đúng d hàng gần nhất
+
+    return _roll(valid), _roll(xv), _roll(xv * xv)
+
+
 @register(name="ts_mean", category=OpCategory.TIME_SERIES,
           signature=(ArgKind.PANEL, ArgKind.WINDOW), bounded=False, commutative=False)
 def ts_mean(ctx: EvalContext, x: Panel, d: int) -> Panel:
     out = np.full_like(x, np.nan, dtype=np.float64)
     d = int(d)
-    for t in range(x.shape[0]):
-        win = _window_slice(t, d)
-        if win is None:
-            continue
-        with np.errstate(invalid="ignore"):
-            out[t] = np.nanmean(x[win], axis=0)
+    if d > x.shape[0]:
+        return out
+    cnt, sx, _ = _rolling_nan_stats(x, d)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        vals = np.where(cnt > 0, sx / cnt, np.nan)  # nanmean: cửa sổ toàn NaN -> NaN
+    out[d - 1 :] = vals
     return out
 
 
@@ -36,12 +51,18 @@ def ts_mean(ctx: EvalContext, x: Panel, d: int) -> Panel:
 def ts_std(ctx: EvalContext, x: Panel, d: int) -> Panel:
     out = np.full_like(x, np.nan, dtype=np.float64)
     d = int(d)
-    for t in range(x.shape[0]):
-        win = _window_slice(t, d)
-        if win is None:
-            continue
-        with np.errstate(invalid="ignore"):
-            out[t] = np.nanstd(x[win], axis=0)
+    if d > x.shape[0]:
+        return out
+    # Std bất biến với phép trừ hằng số -> dịch mỗi cột về quanh 0 trước khi tính
+    # Σx² one-pass, tránh cancellation khi giá trị lớn (vd giá cổ phiếu ~hàng trăm).
+    with np.errstate(invalid="ignore"):
+        shift = np.nan_to_num(np.nanmean(x, axis=0), nan=0.0)
+    cnt, sx, sx2 = _rolling_nan_stats(x - shift, d)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = sx / cnt
+        var = sx2 / cnt - mean * mean  # nanstd ddof=0 (population)
+        vals = np.where(cnt > 0, np.sqrt(np.maximum(var, 0.0)), np.nan)
+    out[d - 1 :] = vals
     return out
 
 
@@ -52,12 +73,10 @@ def ts_sum(ctx: EvalContext, x: Panel, d: int) -> Panel:
     "Sum values of x for the past d days."."""
     out = np.full_like(x, np.nan, dtype=np.float64)
     d = int(d)
-    for t in range(x.shape[0]):
-        win = _window_slice(t, d)
-        if win is None:
-            continue
-        with np.errstate(invalid="ignore"):
-            out[t] = np.nansum(x[win], axis=0)
+    if d > x.shape[0]:
+        return out
+    _, sx, _ = _rolling_nan_stats(x, d)
+    out[d - 1 :] = sx  # nansum: cửa sổ toàn NaN -> 0.0 (sx=0), khớp np.nansum
     return out
 
 
@@ -68,15 +87,7 @@ def ts_std_dev(ctx: EvalContext, x: Panel, d: int) -> Panel:
     the standard deviation of a data series x over the past d days, measuring how much
     the values deviate from their mean during that period." (cùng cách tính với ts_std,
     đăng ký tên riêng để khớp đúng tên operator thật trên platform)."""
-    out = np.full_like(x, np.nan, dtype=np.float64)
-    d = int(d)
-    for t in range(x.shape[0]):
-        win = _window_slice(t, d)
-        if win is None:
-            continue
-        with np.errstate(invalid="ignore"):
-            out[t] = np.nanstd(x[win], axis=0)
-    return out
+    return ts_std(ctx, x, d)  # cùng công thức, tái dùng bản đã vectorize
 
 
 @register(name="ts_delay", category=OpCategory.TIME_SERIES,
@@ -171,21 +182,21 @@ def ts_corr(ctx: EvalContext, x: Panel, y: Panel, d: int) -> Panel:
           signature=(ArgKind.PANEL, ArgKind.WINDOW), bounded=False, commutative=False,
           gp_usable=False)
 def ts_decay_linear(ctx: EvalContext, x: Panel, d: int) -> Panel:
+    # Vectorize theo cột (thay vòng lồng Python T*assets). Trung bình trọng số tuyến tính
+    # chỉ trên quan sát hợp lệ: num=Σ(w*x) trên valid, den=Σw trên valid; cửa sổ rỗng -> NaN.
     out = np.full_like(x, np.nan, dtype=np.float64)
     d = int(d)
-    weights = np.arange(1, d + 1, dtype=np.float64)  # xa nhất=1 ... gần nhất(t)=d
-    for t in range(x.shape[0]):
-        win = _window_slice(t, d)
-        if win is None:
-            continue
-        window = x[win]
-        for col in range(x.shape[1]):
-            series = window[:, col]
-            valid = ~np.isnan(series)
-            if not np.any(valid):
+    weights = np.arange(1, d + 1, dtype=np.float64)[:, None]  # (d,1) xa=1..gần=d
+    with np.errstate(invalid="ignore", divide="ignore"):
+        for t in range(x.shape[0]):
+            win = _window_slice(t, d)
+            if win is None:
                 continue
-            w = weights[valid]
-            out[t, col] = float(np.sum(series[valid] * w) / np.sum(w))
+            window = x[win]
+            valid = ~np.isnan(window)
+            num = np.where(valid, window * weights, 0.0).sum(axis=0)
+            den = np.where(valid, weights, 0.0).sum(axis=0)
+            out[t] = np.where(den > 0, num / den, np.nan)
     return out
 
 
