@@ -609,16 +609,33 @@ def _resolve_base_seed(base_seed: int | None) -> int:
     return random.randrange(1, 2**31 - 1)
 
 
+def _local_neutralization(neutralization: str, available_groups) -> str:
+    """Hạ cấp neutralization cho LOCAL gate về nhóm mà panel cục bộ CÓ. Brain có đủ
+    country/sector/industry/subindustry, nhưng panel local (vd market_yf) thường chỉ có
+    'sector' — dùng SUBINDUSTRY sẽ KeyError làm local gate loại sạch ý tưởng. Thứ tự hạ:
+    nhóm yêu cầu (nếu có) -> SECTOR (nếu có) -> NONE. NONE/MARKET không cần nhóm."""
+    n = neutralization.strip().upper()
+    if n in ("NONE", "MARKET"):
+        return n
+    group_key = {"SECTOR": "sector", "INDUSTRY": "industry", "SUBINDUSTRY": "subindustry"}.get(n)
+    if group_key and group_key in available_groups:
+        return n
+    if "sector" in available_groups:
+        return "SECTOR"
+    return "NONE"
+
+
 def _closed_loop_configs(
     neutralization: str, decay: int, truncation: float, delay: int,
-    region: str, universe: str,
+    region: str, universe: str, available_groups,
 ):
-    """Dựng cặp (PortfolioConfig local gate, SimConfig Brain sim) DÙNG CHUNG một bộ
-    neutralization/decay/truncation — để bộ lọc local đánh giá alpha khớp cách WQ Brain
-    chấm điểm (tránh mismatch)."""
+    """Dựng cặp (PortfolioConfig local gate, SimConfig Brain sim). Brain sim dùng
+    neutralization ĐẦY ĐỦ (vd SUBINDUSTRY); local gate hạ cấp về nhóm panel cục bộ CÓ
+    (tránh KeyError loại sạch ý tưởng) nhưng GIỮ decay/truncation khớp Brain."""
     from src.simulation.config import SimConfig
 
-    cfg = _portfolio_config_from_opts(neutralization, decay, truncation, delay)
+    local_neut = _local_neutralization(neutralization, available_groups)
+    cfg = _portfolio_config_from_opts(local_neut, decay, truncation, delay)
     sim_config = SimConfig.default(region=region, universe=universe, delay=delay).with_overrides(
         neutralization=neutralization, decay=decay, truncation=truncation,
     )
@@ -652,6 +669,7 @@ def _run_closed_loop_session(
 
     cfg, sim_config = _closed_loop_configs(
         neutralization, decay, truncation, delay, region, universe,
+        set(data.groups.keys()),
     )
     loop, _deepseek = _make_research_loop(
         session_factory, client, region, universe, delay,

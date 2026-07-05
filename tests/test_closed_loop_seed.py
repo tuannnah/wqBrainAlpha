@@ -26,20 +26,32 @@ def test_ngau_nhien_khac_nhau_qua_nhieu_lan() -> None:
     assert len(vals) > 1
 
 
-def test_closed_loop_configs_khop_local_va_brain() -> None:
-    """cfg (local gate) và sim_config (Brain sim) phải dùng CHUNG một bộ
-    neutralization/decay/truncation — tránh mismatch làm local gate lọc sai."""
+def test_local_neutralization_ha_cap_theo_nhom_panel() -> None:
+    """Local gate hạ cấp neutralization về nhóm panel CÓ (tránh KeyError). Panel local
+    chỉ có 'sector' -> SUBINDUSTRY/INDUSTRY hạ về SECTOR; nếu không có sector -> NONE."""
+    assert main._local_neutralization("SUBINDUSTRY", {"sector"}) == "SECTOR"
+    assert main._local_neutralization("INDUSTRY", {"sector"}) == "SECTOR"
+    assert main._local_neutralization("SUBINDUSTRY", {"subindustry", "sector"}) == "SUBINDUSTRY"
+    assert main._local_neutralization("SECTOR", {"sector"}) == "SECTOR"
+    assert main._local_neutralization("SUBINDUSTRY", set()) == "NONE"
+    assert main._local_neutralization("NONE", {"sector"}) == "NONE"
+    assert main._local_neutralization("MARKET", set()) == "MARKET"
+
+
+def test_closed_loop_configs_local_ha_cap_brain_day_du() -> None:
+    """Brain sim giữ SUBINDUSTRY đầy đủ; local gate hạ về SECTOR khi panel chỉ có
+    'sector' — nhưng decay/truncation khớp nhau ở cả hai."""
     from src.backtest.config import Neutralization
 
-    cfg, sim = main._closed_loop_configs("SUBINDUSTRY", 4, 0.08, 1, "USA", "TOP3000")
-    # local gate (PortfolioConfig, neutralization là enum)
-    assert cfg.neutralization == Neutralization.SUBINDUSTRY
-    assert cfg.decay == 4
-    assert cfg.truncation == 0.08
-    # Brain sim (SimConfig, neutralization là str đã normalize)
+    cfg, sim = main._closed_loop_configs(
+        "SUBINDUSTRY", 4, 0.08, 1, "USA", "TOP3000", {"sector"},
+    )
+    # local gate hạ cấp (panel chỉ có sector)
+    assert cfg.neutralization == Neutralization.SECTOR
+    assert cfg.decay == 4 and cfg.truncation == 0.08
+    # Brain sim giữ neutralization đầy đủ
     assert sim.neutralization == "SUBINDUSTRY"
-    assert sim.decay == 4
-    assert sim.truncation == 0.08
+    assert sim.decay == 4 and sim.truncation == 0.08
     assert sim.region == "USA" and sim.universe == "TOP3000" and sim.delay == 1
 
 
