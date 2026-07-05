@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import random
 import sys
 from pathlib import Path
 
@@ -599,11 +600,21 @@ def score_one_cmd(
     console.print(table)
 
 
+def _resolve_base_seed(base_seed: int | None) -> int:
+    """Seed cho GP sinh ý tưởng của vòng kín. None hoặc 0 -> ngẫu nhiên (mỗi lần chạy một
+    quần thể khác, tránh kẹt vào cùng quần thể -> no_more_ideas khi pool đã tích lũy). Số
+    dương cụ thể -> giữ nguyên để tái lập được."""
+    if base_seed:  # khác 0 và khác None
+        return base_seed
+    return random.randrange(1, 2**31 - 1)
+
+
 def _run_closed_loop_session(
     session_factory, client, region, universe, delay, market_data_dir,
     *, pop_size: int = 30, n_generations: int = 3, top_k: int = 10, max_corr: float = 0.70,
     patience: int = 5, max_ideas: int | None = None,
     neutralization: str = "NONE", decay: int = 0, truncation: float = 0.10,
+    base_seed: int | None = None,
 ) -> bool:
     """Dựng + chạy vòng kín AI+MiniBrain thật (dùng chung cho CLI `closed-loop` và menu mục 5).
 
@@ -632,12 +643,13 @@ def _run_closed_loop_session(
     loop.local_gate_cfg = cfg
     loop.max_simulations = 10**9     # không trần local; dừng theo quota Brain (QuotaExhausted)
 
+    seed = _resolve_base_seed(base_seed)
     cl = build_closed_loop(
         data=data, repo=repo, config=cfg, registry=default_registry(), loop=loop,
         region=region, universe=universe, pop_size=pop_size, n_generations=n_generations,
-        top_k=top_k, max_corr=max_corr, max_ideas=max_ideas,
+        top_k=top_k, max_corr=max_corr, max_ideas=max_ideas, base_seed=seed,
     )
-    console.print("[cyan]Bắt đầu vòng kín (Ctrl+C để dừng)…[/cyan]")
+    console.print(f"[cyan]Bắt đầu vòng kín (base_seed={seed}, Ctrl+C để dừng)…[/cyan]")
     try:
         report = cl.run()
     except QuotaExhausted:
@@ -669,6 +681,9 @@ def closed_loop_cmd(
     neutralization: str = typer.Option("NONE"),
     decay: int = typer.Option(0),
     truncation: float = typer.Option(0.10),
+    base_seed: int = typer.Option(
+        0, help="Seed GP sinh ý tưởng; 0 = ngẫu nhiên mỗi lần (tránh no_more_ideas)"
+    ),
 ) -> None:
     """Vòng kín AI + MiniBrain: GP sinh ý tưởng → AI refine ≤patience + gate local → SIM Brain
     → lưu DB + feedback → lặp đến khi hết quota (Ctrl+C để dừng tay). Cần đăng nhập + .env AI."""
@@ -689,6 +704,7 @@ def closed_loop_cmd(
         pop_size=pop_size, n_generations=n_generations, top_k=top_k, max_corr=max_corr,
         patience=patience, max_ideas=(max_ideas or None),
         neutralization=neutralization, decay=decay, truncation=truncation,
+        base_seed=(base_seed or None),
     )
     if not ok:
         raise typer.Exit(code=1)
