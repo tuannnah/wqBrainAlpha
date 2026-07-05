@@ -122,3 +122,89 @@ def test_ts_backfill_lap_nan_tu_qua_khu(small_panel) -> None:
     out = _eval(mutated, Call("ts_backfill", (Field("close"), Constant(5))))
     assert not np.isnan(out[40, 0])
     np.testing.assert_allclose(out[40, 0], close[39, 0])
+
+
+def _ref_ts_corr(x: np.ndarray, y: np.ndarray, d: int) -> np.ndarray:
+    """Bản tham chiếu (vòng lặp thuần, chậm) — đặc tả ngữ nghĩa gốc của ts_corr để
+    khóa hành vi trước khi vectorize: window [t-d+1, t], loại NaN theo cặp, valid<2
+    hoặc một biến hằng (std=0) -> NaN, còn lại là Pearson corr."""
+    out = np.full_like(x, np.nan, dtype=np.float64)
+    d = int(d)
+    for t in range(x.shape[0]):
+        start = t - d + 1
+        if start < 0:
+            continue
+        wx, wy = x[start : t + 1], y[start : t + 1]
+        for col in range(x.shape[1]):
+            sx, sy = wx[:, col], wy[:, col]
+            valid = ~np.isnan(sx) & ~np.isnan(sy)
+            if int(valid.sum()) < 2:
+                continue
+            sxv, syv = sx[valid], sy[valid]
+            if np.std(sxv) == 0.0 or np.std(syv) == 0.0:
+                continue
+            out[t, col] = float(np.corrcoef(sxv, syv)[0, 1])
+    return out
+
+
+def test_ts_corr_vectorized_khop_reference() -> None:
+    """ts_corr đã vectorize phải cho KẾT QUẢ y hệt bản tham chiếu vòng lặp trên dữ
+    liệu có NaN rải rác, khoảng NaN dài, và cột hằng (std=0), qua nhiều window."""
+    from src.operators_local.timeseries import ts_corr
+
+    rng = np.random.default_rng(20260705)
+    x = rng.standard_normal((90, 7))
+    y = rng.standard_normal((90, 7))
+    # NaN rải rác + một đoạn dài + đầu chuỗi
+    x[5, 1] = np.nan
+    y[10, 2] = np.nan
+    x[20:28, 3] = np.nan
+    y[0:15, 4] = np.nan
+    y[:, 5] = 4.2  # cột hằng -> std=0 -> NaN theo đặc tả
+    x[:, 6] = np.nan  # cột toàn NaN -> luôn NaN
+
+    for d in (5, 15, 30):
+        got = ts_corr(None, x, y, d)
+        exp = _ref_ts_corr(x, y, d)
+        np.testing.assert_allclose(got, exp, equal_nan=True, rtol=1e-9, atol=1e-12)
+
+
+def _ref_ts_rank(x: np.ndarray, d: int) -> np.ndarray:
+    """Bản tham chiếu vòng lặp thuần của ts_rank: hạng của giá trị hiện tại trong
+    cửa sổ [t-d+1, t] chuẩn hóa [0,1]; ô hiện tại NaN hoặc cửa sổ rỗng -> NaN."""
+    out = np.full_like(x, np.nan, dtype=np.float64)
+    d = int(d)
+    for t in range(x.shape[0]):
+        start = t - d + 1
+        if start < 0:
+            continue
+        window = x[start : t + 1]
+        for col in range(x.shape[1]):
+            series = window[:, col]
+            valid = ~np.isnan(series)
+            n_valid = int(valid.sum())
+            if n_valid == 0 or np.isnan(x[t, col]):
+                continue
+            vals = series[valid]
+            denom = n_valid - 1 if n_valid > 1 else 1
+            out[t, col] = float(np.sum(vals <= x[t, col]) - 1) / denom
+    return out
+
+
+def test_ts_rank_vectorized_khop_reference() -> None:
+    """ts_rank đã vectorize phải cho kết quả y hệt bản tham chiếu vòng lặp, kể cả khi
+    có NaN rải rác, đoạn NaN dài, giá trị trùng nhau, và ô hiện tại NaN."""
+    from src.operators_local.timeseries import ts_rank
+
+    rng = np.random.default_rng(20260705)
+    x = rng.integers(0, 5, size=(90, 7)).astype(np.float64)  # nhiều giá trị trùng
+    x[5, 1] = np.nan
+    x[20:28, 3] = np.nan
+    x[0:15, 4] = np.nan
+    x[:, 6] = np.nan  # cột toàn NaN
+    x[40, 0] = np.nan  # ô hiện tại NaN tại t=40
+
+    for d in (5, 15, 30):
+        got = ts_rank(None, x, d)
+        exp = _ref_ts_rank(x, d)
+        np.testing.assert_allclose(got, exp, equal_nan=True, rtol=1e-12, atol=1e-12)

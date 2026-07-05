@@ -103,22 +103,24 @@ def ts_delta(ctx: EvalContext, x: Panel, d: int) -> Panel:
 @register(name="ts_rank", category=OpCategory.TIME_SERIES,
           signature=(ArgKind.PANEL, ArgKind.WINDOW), bounded=True, commutative=False)
 def ts_rank(ctx: EvalContext, x: Panel, d: int) -> Panel:
+    # Vectorize theo cột (thay vòng lồng Python T*assets cũ). Với mỗi t: đếm số quan
+    # sát hợp lệ trong cửa sổ <= giá trị hiện tại rồi chuẩn hóa [0,1]. NaN so sánh ra
+    # False nên tự loại; ô hiện tại NaN hoặc cửa sổ rỗng -> NaN.
     out = np.full_like(x, np.nan, dtype=np.float64)
     d = int(d)
-    for t in range(x.shape[0]):
-        win = _window_slice(t, d)
-        if win is None:
-            continue
-        window = x[win]
-        for col in range(x.shape[1]):
-            series = window[:, col]
-            valid = ~np.isnan(series)
-            n_valid = int(valid.sum())
-            if n_valid == 0 or np.isnan(x[t, col]):
+    with np.errstate(invalid="ignore"):
+        for t in range(x.shape[0]):
+            win = _window_slice(t, d)
+            if win is None:
                 continue
-            vals = series[valid]
-            denom = n_valid - 1 if n_valid > 1 else 1
-            out[t, col] = float(np.sum(vals <= x[t, col]) - 1) / denom
+            window = x[win]
+            valid = ~np.isnan(window)
+            n_valid = valid.sum(axis=0)
+            cur = x[t]  # giá trị hiện tại mỗi cột
+            count = (valid & (window <= cur)).sum(axis=0)  # gồm cả chính nó
+            denom = np.where(n_valid > 1, n_valid - 1, 1)
+            ok = (n_valid > 0) & ~np.isnan(cur)
+            out[t] = np.where(ok, (count - 1) / denom, np.nan)
     return out
 
 
@@ -137,22 +139,31 @@ def ts_zscore(ctx: EvalContext, x: Panel, d: int) -> Panel:
           signature=(ArgKind.PANEL, ArgKind.PANEL, ArgKind.WINDOW), bounded=True,
           commutative=False)
 def ts_corr(ctx: EvalContext, x: Panel, y: Panel, d: int) -> Panel:
+    # Vectorize theo cột: mỗi t xử lý cả hàng cổ phiếu cùng lúc (thay 2 vòng lồng
+    # Python cũ ~O(T*assets) call numpy nhỏ -> chậm hàng trăm lần). Pearson tính bằng
+    # công thức centered hai-lượt (mean rồi độ lệch) để khớp np.corrcoef về số học.
     out = np.full_like(x, np.nan, dtype=np.float64)
     d = int(d)
-    for t in range(x.shape[0]):
-        win = _window_slice(t, d)
-        if win is None:
-            continue
-        wx, wy = x[win], y[win]
-        for col in range(x.shape[1]):
-            sx, sy = wx[:, col], wy[:, col]
-            valid = ~np.isnan(sx) & ~np.isnan(sy)
-            if int(valid.sum()) < 2:
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for t in range(x.shape[0]):
+            win = _window_slice(t, d)
+            if win is None:
                 continue
-            sxv, syv = sx[valid], sy[valid]
-            if np.std(sxv) == 0.0 or np.std(syv) == 0.0:
-                continue
-            out[t, col] = float(np.corrcoef(sxv, syv)[0, 1])
+            wx, wy = x[win], y[win]
+            valid = ~np.isnan(wx) & ~np.isnan(wy)  # loại NaN theo CẶP
+            n = valid.sum(axis=0)
+            n_safe = np.where(n > 0, n, 1)  # tránh chia 0 khi cột rỗng
+            mx = np.where(valid, wx, 0.0).sum(axis=0) / n_safe
+            my = np.where(valid, wy, 0.0).sum(axis=0) / n_safe
+            dx = np.where(valid, wx - mx, 0.0)
+            dy = np.where(valid, wy - my, 0.0)
+            cov = (dx * dy).sum(axis=0)
+            vx = (dx * dx).sum(axis=0)
+            vy = (dy * dy).sum(axis=0)
+            corr = cov / np.sqrt(vx * vy)
+            # valid<2 hoặc một biến hằng (std=0 -> vx/vy=0) -> NaN, khớp bản gốc.
+            ok = (n >= 2) & (vx > 0.0) & (vy > 0.0)
+            out[t] = np.where(ok, corr, np.nan)
     return out
 
 
