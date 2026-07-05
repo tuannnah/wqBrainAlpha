@@ -58,7 +58,7 @@ class GPIdeaSource:
     def __init__(
         self, data: object, repo: object, config: object, registry: object, *,
         pop_size: int = 30, n_generations: int = 3, base_seed: int = 42,
-        top_k: int = 10, max_corr: float = 0.70,
+        top_k: int = 10, max_corr: float = 0.70, max_empty_retries: int = 8,
     ) -> None:
         # Lưu dưới Any để forward vào GPEngine/generate_many mà không cần cast cứng
         self._data: Any = data
@@ -70,9 +70,10 @@ class GPIdeaSource:
         self.base_seed = base_seed
         self.top_k = top_k
         self.max_corr = max_corr
+        self.max_empty_retries = max_empty_retries
         self._batch = 0
 
-    def next_batch(self) -> list[ShortlistCandidate]:
+    def _run_one_batch(self) -> list[ShortlistCandidate]:
         seed = self.base_seed + self._batch
         seed_offset = self._batch * self.pop_size
         self._batch += 1
@@ -89,6 +90,16 @@ class GPIdeaSource:
             gp_engine=engine_any, cfg=self._config, data=self._data,
             top_k=self.top_k, max_corr=self.max_corr, pool=pool,
         )
+
+    def next_batch(self) -> list[ShortlistCandidate]:
+        # Một quần thể GP (1 seed) có thể tình cờ 0 ứng viên qua gate/decorrelate — đừng
+        # vội kết luận "cạn ý tưởng" (no_more_ideas) chỉ vì 1 seed xui. Thử tới
+        # max_empty_retries lô (seed khác nhau) rồi mới trả rỗng thật sự.
+        for _ in range(max(1, self.max_empty_retries)):
+            batch = self._run_one_batch()
+            if batch:
+                return batch
+        return []
 
 
 def build_closed_loop(

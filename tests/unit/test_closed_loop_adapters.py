@@ -80,7 +80,8 @@ def test_gp_idea_source_yields_candidates_and_advances_seed(small_panel, repo) -
     cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
                           scale_book=1.0, delay=1)
     src = GPIdeaSource(small_panel, repo, cfg, default_registry(),
-                       pop_size=6, n_generations=0, base_seed=42, top_k=5, max_corr=0.99)
+                       pop_size=6, n_generations=0, base_seed=42, top_k=5, max_corr=0.99,
+                       max_empty_retries=1)
     seeds_seen: list[int] = []
 
     class _StubEngine:
@@ -105,7 +106,8 @@ def test_gp_idea_source_seed_offset_tang_theo_pop_size(small_panel, repo) -> Non
     cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
                           scale_book=1.0, delay=1)
     src = GPIdeaSource(small_panel, repo, cfg, default_registry(),
-                       pop_size=6, n_generations=0, base_seed=42, top_k=5, max_corr=0.99)
+                       pop_size=6, n_generations=0, base_seed=42, top_k=5, max_corr=0.99,
+                       max_empty_retries=1)
     offsets_seen: list[int] = []
 
     class _StubEngine:
@@ -121,6 +123,57 @@ def test_gp_idea_source_seed_offset_tang_theo_pop_size(small_panel, repo) -> Non
         src.next_batch()
         src.next_batch()
     assert offsets_seen == [0, 6, 12]  # tang dung pop_size (6) moi batch
+
+
+def test_next_batch_thu_nhieu_seed_khi_batch_rong(small_panel, repo) -> None:  # noqa: ANN001
+    """Một seed cho 0 ứng viên -> KHÔNG trả rỗng ngay, mà thử seed kế cho tới khi có ý
+    tưởng (tránh no_more_ideas oan vì 1 seed xui)."""
+    from unittest.mock import patch
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+    src = GPIdeaSource(small_panel, repo, cfg, default_registry(),
+                       pop_size=6, n_generations=0, base_seed=42, top_k=5, max_corr=0.99,
+                       max_empty_retries=5)
+    calls = {"n": 0}
+
+    def _fake_generate_many(**_kw):
+        calls["n"] += 1
+        return [] if calls["n"] < 3 else [_cand("rank(close)")]
+
+    class _StubEngine:
+        def __init__(self, *a, **k) -> None: ...
+
+    with patch("src.app.closed_loop_adapters.GPEngine", _StubEngine), \
+         patch("src.app.closed_loop_adapters.generate_many", _fake_generate_many):
+        batch = src.next_batch()
+    assert calls["n"] == 3  # thử 3 seed mới có ý tưởng
+    assert len(batch) == 1
+    assert src._batch == 3  # đã tiêu 3 lô seed
+
+
+def test_next_batch_tra_rong_khi_moi_seed_deu_can(small_panel, repo) -> None:  # noqa: ANN001
+    """Mọi seed đều rỗng (thật sự cạn) -> trả [] sau đúng max_empty_retries lần thử,
+    không lặp vô hạn."""
+    from unittest.mock import patch
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+    src = GPIdeaSource(small_panel, repo, cfg, default_registry(),
+                       pop_size=6, n_generations=0, base_seed=42, top_k=5, max_corr=0.99,
+                       max_empty_retries=4)
+    calls = {"n": 0}
+
+    def _always_empty(**_kw):
+        calls["n"] += 1
+        return []
+
+    class _StubEngine:
+        def __init__(self, *a, **k) -> None: ...
+
+    with patch("src.app.closed_loop_adapters.GPEngine", _StubEngine), \
+         patch("src.app.closed_loop_adapters.generate_many", _always_empty):
+        batch = src.next_batch()
+    assert batch == []
+    assert calls["n"] == 4  # đúng max_empty_retries, không hơn
 
 
 def test_refiner_raises_quota_exhausted_on_auth_expired() -> None:
