@@ -609,11 +609,27 @@ def _resolve_base_seed(base_seed: int | None) -> int:
     return random.randrange(1, 2**31 - 1)
 
 
+def _closed_loop_configs(
+    neutralization: str, decay: int, truncation: float, delay: int,
+    region: str, universe: str,
+):
+    """Dựng cặp (PortfolioConfig local gate, SimConfig Brain sim) DÙNG CHUNG một bộ
+    neutralization/decay/truncation — để bộ lọc local đánh giá alpha khớp cách WQ Brain
+    chấm điểm (tránh mismatch)."""
+    from src.simulation.config import SimConfig
+
+    cfg = _portfolio_config_from_opts(neutralization, decay, truncation, delay)
+    sim_config = SimConfig.default(region=region, universe=universe, delay=delay).with_overrides(
+        neutralization=neutralization, decay=decay, truncation=truncation,
+    )
+    return cfg, sim_config
+
+
 def _run_closed_loop_session(
     session_factory, client, region, universe, delay, market_data_dir,
     *, pop_size: int = 30, n_generations: int = 3, top_k: int = 10, max_corr: float = 0.70,
     patience: int = 5, max_ideas: int | None = None,
-    neutralization: str = "NONE", decay: int = 0, truncation: float = 0.10,
+    neutralization: str = "SUBINDUSTRY", decay: int = 4, truncation: float = 0.08,
     base_seed: int | None = None,
 ) -> bool:
     """Dựng + chạy vòng kín AI+MiniBrain thật (dùng chung cho CLI `closed-loop` và menu mục 5).
@@ -634,10 +650,12 @@ def _run_closed_loop_session(
         console.print(f"[red]Không load được MarketData: {exc}[/red]")
         return False
 
-    cfg = _portfolio_config_from_opts(neutralization, decay, truncation, delay)
+    cfg, sim_config = _closed_loop_configs(
+        neutralization, decay, truncation, delay, region, universe,
+    )
     loop, _deepseek = _make_research_loop(
         session_factory, client, region, universe, delay,
-        max_sims=10**9, patience=patience, marathon=True,
+        max_sims=10**9, patience=patience, marathon=True, sim_config=sim_config,
     )
     loop.market_data = data          # bật local gate trước sim
     loop.local_gate_cfg = cfg
@@ -678,9 +696,9 @@ def closed_loop_cmd(
     top_k: int = typer.Option(10, help="Số ý tưởng/batch sau decorrelate"),
     max_corr: float = typer.Option(0.70),
     max_ideas: int = typer.Option(0, help="0 = không trần (chạy đến hết quota)"),
-    neutralization: str = typer.Option("NONE"),
-    decay: int = typer.Option(0),
-    truncation: float = typer.Option(0.10),
+    neutralization: str = typer.Option("SUBINDUSTRY"),
+    decay: int = typer.Option(4),
+    truncation: float = typer.Option(0.08),
     base_seed: int = typer.Option(
         0, help="Seed GP sinh ý tưởng; 0 = ngẫu nhiên mỗi lần (tránh no_more_ideas)"
     ),
