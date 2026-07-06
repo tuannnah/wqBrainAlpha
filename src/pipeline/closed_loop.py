@@ -10,17 +10,25 @@ injected qua Protocol structural; việc dựng cụ thể nằm ở `main.py`/a
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
+from loguru import logger
 
 from src.calibration.stats import spearman
 from src.pipeline.shortlist import ShortlistCandidate
 from src.storage.repository import MiniBrainRepository
 
-logger = logging.getLogger(__name__)
+
+def _short(expr: str, n: int = 70) -> str:
+    """Rút gọn biểu thức cho log 1 dòng (bỏ khoảng trắng thừa, cắt đuôi)."""
+    s = " ".join(str(expr).split())
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _fmt(x: float | None) -> str:
+    return f"{x:.2f}" if isinstance(x, (int, float)) else "—"
 
 
 class QuotaExhausted(Exception):
@@ -85,7 +93,7 @@ class CalibrationTracker:
         self.last_rho = rho
         if not np.isnan(rho) and rho < self.rho_bar:
             logger.warning(
-                "Calibration ρ=%.3f < bar %.2f — ranking local kém tin", rho, self.rho_bar,
+                "Calibration ρ={:.3f} < bar {:.2f} — ranking local kém tin", rho, self.rho_bar,
             )
         return rho
 
@@ -139,18 +147,25 @@ class ClosedLoop:
             )
 
         while True:
+            logger.info("⏳ Sinh batch ý tưởng (GP + decorrelate)…")
             batch = self.idea_source.next_batch()
             if not batch:
+                logger.info("Cạn ý tưởng (batch rỗng) — dừng vòng kín.")
                 return _report("no_more_ideas")
+            logger.info("📦 Batch: {} ứng viên qua sàng lọc/decorrelate.", len(batch))
             for cand in batch:
                 if self.max_ideas is not None and ideas_tried >= self.max_ideas:
+                    logger.info("Đạt trần max_ideas={} — dừng.", self.max_ideas)
                     return _report("no_more_ideas")
                 if cand.expr in seen:
+                    logger.info("↩︎ Bỏ ý tưởng trùng phiên/avoid-list: {}", _short(cand.expr))
                     continue
                 seen.add(cand.expr)
+                logger.info("🔎 Ý tưởng #{}: refine+sim {}", ideas_tried + 1, _short(cand.expr))
                 try:
                     outcome = self.refiner.refine_and_sim(cand)
                 except QuotaExhausted:
+                    logger.info("Hết quota Brain — dừng vòng kín ({} sim đã dùng).", sims_used)
                     return _report("quota")
                 self.repo.record_brain_sim(
                     canonical_hash=outcome.canonical_hash, expr_string=outcome.expr,
@@ -165,5 +180,19 @@ class ClosedLoop:
                     n_passed += 1
                 else:
                     n_abandoned += 1
+                # Kết quả 1 dòng: 0 sim = bị gate local chặn trước khi đốt quota Brain.
+                if outcome.sims_used == 0:
+                    logger.info("   → ⚠ bị gate local chặn (0 sim Brain).")
+                else:
+                    logger.info(
+                        "   → {} Sharpe={} fit={} TO={} self_corr={} ({} sim)",
+                        "✅ PASSED" if outcome.passed else "✗ failed",
+                        _fmt(outcome.sharpe), _fmt(outcome.fitness), _fmt(outcome.turnover),
+                        _fmt(outcome.self_corr), outcome.sims_used,
+                    )
+                logger.info(
+                    "   Σ {} ý tưởng / {} sim / {} pass / {} bỏ.",
+                    ideas_tried, sims_used, n_passed, n_abandoned,
+                )
                 if self.calibration_tracker is not None:
                     self.calibration_tracker.maybe_calibrate(sims_used)

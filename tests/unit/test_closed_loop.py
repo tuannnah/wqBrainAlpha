@@ -195,3 +195,41 @@ def test_closed_loop_report_includes_rho_when_tracker_set(repo) -> None:  # noqa
     # từ tracker.last_rho (không crash). Cốt lõi: field tồn tại + vòng chạy xong.
     assert hasattr(report, "rho_sharpe")
     assert report.ideas_tried == 1
+
+
+def test_run_logs_progress(repo) -> None:  # noqa: ANN001
+    """ClosedLoop.run phát log tiến trình (loguru -> hiện màn hình khi chạy mục 5): batch,
+    mỗi ý tưởng, kết quả sim, và tổng running. Trước đây run() im lặng hoàn toàn."""
+    from loguru import logger
+
+    msgs: list[str] = []
+    sink_id = logger.add(lambda m: msgs.append(str(m)), level="INFO")
+    try:
+        src = _FakeIdeaSource([[_cand("close"), _cand("open")]])
+        refiner = _FakeRefiner({"close": _passed("close")})  # open -> failed mặc định
+        ClosedLoop(idea_source=src, refiner=refiner, repo=repo).run()
+    finally:
+        logger.remove(sink_id)
+
+    joined = "\n".join(msgs)
+    assert "Batch:" in joined and "ứng viên" in joined          # log batch
+    assert "Ý tưởng #1" in joined and "close" in joined         # log mỗi ý tưởng + expr
+    assert "PASSED" in joined                                    # kết quả pass của 'close'
+    assert "ý tưởng /" in joined and "sim /" in joined          # dòng tổng running
+
+
+def test_run_logs_local_gate_block_when_zero_sims(repo) -> None:  # noqa: ANN001
+    """Outcome sims_used=0 (bị gate local chặn trước sim) được log rõ, không lẫn với sim thật."""
+    from loguru import logger
+
+    msgs: list[str] = []
+    sink_id = logger.add(lambda m: msgs.append(str(m)), level="INFO")
+    try:
+        blocked = IdeaOutcome(expr="blk", canonical_hash="h_blk", passed=False,
+                              wq_alpha_id=None, sharpe=None, fitness=None, turnover=None,
+                              self_corr=None, sims_used=0, stop_reason="local_gate")
+        src = _FakeIdeaSource([[_cand("blk")]])
+        ClosedLoop(idea_source=src, refiner=_FakeRefiner({"blk": blocked}), repo=repo).run()
+    finally:
+        logger.remove(sink_id)
+    assert "gate local chặn" in "\n".join(msgs)
