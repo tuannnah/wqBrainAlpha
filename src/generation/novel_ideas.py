@@ -296,12 +296,148 @@ NOVEL_ALPHAS: list[Candidate] = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Novel-ideas v2: nâng cấp CẤU TRÚC (docs understanding-data / examples). Bài học:
+# "alpha tốt sống trong GAP/GATE/RESIDUAL, không phải LEVEL". Áp 3 khuôn mẫu lên field
+# ĐÃ VERIFY (không bịa field mới):
+#   - RESIDUAL (`vector_neut`): trừ phần chiếu tín hiệu lên một factor phổ biến -> khử
+#     self-correlation TRỰC TIẾP (theo skill, vector_neut/regression_neut là lever DUY NHẤT
+#     hạ self-corr). Đây là đòn bẩy mạnh nhất cho nguyên nhân reject #1.
+#   - GAP zscore chuẩn hóa: hiệu hai chuỗi đã zscore riêng -> profile khác hẳn mức thô.
+#   - GATE (`trade_when`): chỉ bật tín hiệu quanh sự kiện -> profile lạ, giảm turnover.
+# ---------------------------------------------------------------------------
+NOVEL_ALPHAS_V2: list[Candidate] = [
+    # 1) VRP residual: bóc phần mức realized-vol khỏi VRP -> phí bảo hiểm thuần, trực giao
+    #    với các factor vol-level (giảm trùng với low-vol/vol anomaly phổ biến).
+    Candidate(
+        family="vrp-residual",
+        overrides={"decay": 5, "truncation": 0.08},
+        expression=(
+            "group_neutralize(vector_neut("
+            "rank(implied_volatility_mean_30 - historical_volatility_30), "
+            "rank(historical_volatility_30)), industry)"
+        ),
+        hypothesis=(
+            "Chênh IV-RV còn lẫn mức biến động; sau khi khử phần realized-vol bằng "
+            "vector_neut, phần dư là volatility risk premium THUẦN, dự báo lợi suất "
+            "điều chỉnh rủi ro độc lập với mức vol."
+        ),
+        rationale=(
+            "Residualize VRP theo RV loại nhiễu chung với low-vol anomaly; vector_neut "
+            "là lever trực tiếp hạ self-correlation với các factor vol-level đại trà."
+        ),
+    ),
+    # 2) IV skew dạng GAP zscore chuẩn hóa (thay vì hiệu mức thô) -> so sánh lệch động
+    #    của cầu phòng hộ put vs call theo lịch sử mỗi cổ phiếu.
+    Candidate(
+        family="iv-skew-zscore",
+        overrides={"decay": 5, "truncation": 0.08},
+        expression=(
+            "group_neutralize(rank("
+            "ts_zscore(implied_volatility_put_30, 60) - "
+            "ts_zscore(implied_volatility_call_30, 60)), sector)"
+        ),
+        hypothesis=(
+            "Chuẩn hóa riêng IV put và IV call theo lịch sử 60 ngày rồi lấy hiệu (gap "
+            "zscore) đo mức LỆCH BẤT THƯỜNG của cầu phòng hộ downside so nền riêng từng "
+            "mã; gap cực đoan đi trước đảo chiều."
+        ),
+        rationale=(
+            "Gap của hai chuỗi đã zscore có profile khác hẳn hiệu mức thô (loại chênh "
+            "lệch cấu trúc cố định giữa put/call), giảm trùng với skew factor mức."
+        ),
+    ),
+    # 3) PCR flow residual vs price return: bóc phần dòng tiền quyền chọn giải thích được
+    #    bởi lợi suất giá gần đây -> giữ thông tin RIÊNG của thị trường quyền chọn.
+    Candidate(
+        family="pcr-residual",
+        overrides={"decay": 10, "truncation": 0.06},
+        expression=(
+            "group_neutralize(vector_neut("
+            "-rank(ts_delta(pcr_oi_30, 5)), rank(ts_sum(returns, 5))), sector)"
+        ),
+        hypothesis=(
+            "Thay đổi PCR open interest phản ánh dịch chuyển dòng tiền phòng hộ; sau "
+            "khi khử phần đồng biến với lợi suất giá 5 ngày, phần dư là tâm lý quyền "
+            "chọn THUẦN, contrarian (dấu âm)."
+        ),
+        rationale=(
+            "Residualize theo return gần đây tách tín hiệu quyền chọn khỏi momentum/"
+            "reversal giá -> trực giao factor PV, hạ self-corr."
+        ),
+    ),
+    # 4) Analyst divergence residual vs earnings revision: phân kỳ target-vs-rec còn lại
+    #    sau khi bóc phần đã được hiệu chỉnh lợi nhuận giải thích.
+    Candidate(
+        family="analyst-divergence-residual",
+        overrides={"decay": 15, "truncation": 0.05},
+        expression=(
+            "group_neutralize(vector_neut("
+            "rank(snt1_d1_nettargetpercent - snt1_d1_netrecpercent), "
+            "rank(snt1_d1_netearningsrevision)), industry)"
+        ),
+        hypothesis=(
+            "Phân kỳ giá mục tiêu nhanh hơn khuyến nghị chứa lạc quan tiềm ẩn; phần "
+            "KHÔNG giải thích được bởi net earnings revision là tín hiệu dẫn dắt nâng "
+            "hạng chưa phản ánh."
+        ),
+        rationale=(
+            "Khử thành phần earnings-revision (đã crowd) khỏi divergence để lấy phần "
+            "mới; vector_neut giảm trùng với revision-momentum phổ biến."
+        ),
+    ),
+    # 5) News-gated drift (GATE bằng trade_when): chỉ giao dịch drift tin tức khi tông tin
+    #    đang CẢI THIỆN (delta > 0 kích hoạt), giữ vị thế tới khi có tín hiệu mới.
+    Candidate(
+        family="news-gated-drift",
+        overrides={"decay": 20, "truncation": 0.04},
+        expression=(
+            "group_neutralize(trade_when("
+            "ts_delta(nws18_bee, 1), rank(ts_mean(nws18_bee, 5)), -1), sector)"
+        ),
+        hypothesis=(
+            "Tông tin tức về kết quả kinh doanh (nws18_bee) cải thiện kích hoạt drift "
+            "hậu tin; chỉ bật tín hiệu quanh thời điểm tin đổi chiều tạo profile sự kiện "
+            "lạ, ít trùng factor luôn-bật."
+        ),
+        rationale=(
+            "trade_when gate theo thay đổi tin tức giảm turnover thừa và tạo phân bố "
+            "vị thế khác factor cross-sectional liên tục -> hạ prod-correlation."
+        ),
+    ),
+    # 6) Social instability residual: BẤT ỔN của attention (std buzz) sau khi bóc mức
+    #    sentiment -> đo hype không bền, độc lập với hướng sentiment.
+    Candidate(
+        family="social-instability-residual",
+        overrides={"decay": 30, "truncation": 0.03},
+        expression=(
+            "group_neutralize(vector_neut("
+            "-rank(ts_std_dev(scl12_buzz, 10)), rank(scl12_sentiment)), industry)"
+        ),
+        hypothesis=(
+            "Độ lệch chuẩn buzz cao = chú ý bất ổn do hype ngắn hạn -> move không bền; "
+            "sau khi khử mức sentiment, phần dư là BẤT ỔN attention thuần, dự báo "
+            "underperform (dấu âm)."
+        ),
+        rationale=(
+            "Đo std(buzz) thay vì mức, rồi residualize theo sentiment -> tách khỏi cả "
+            "momentum sentiment lẫn attention-level; nguồn social ít khai thác."
+        ),
+    ),
+]
+
+
 def _neutralization_for_expression(expression: str) -> str:
     group = expression.rsplit(",", 1)[-1].rstrip(") ").strip().lower()
     return _GROUP_TO_NEUTRALIZATION.get(group, "SUBINDUSTRY")
 
 
-for candidate in NOVEL_ALPHAS:
+def all_novel_alphas() -> list[Candidate]:
+    """Gộp toàn bộ novel ideas (v1 kinh điển alt-dataset + v2 cấu trúc gap/gate/residual)."""
+    return NOVEL_ALPHAS + NOVEL_ALPHAS_V2
+
+
+for candidate in NOVEL_ALPHAS + NOVEL_ALPHAS_V2:
     candidate.overrides.setdefault(
         "neutralization",
         _neutralization_for_expression(candidate.expression),

@@ -66,10 +66,11 @@ def seed_cores_from_families() -> list[Node]:
 
 
 def seed_cores_from_novel_ideas() -> list[Node]:
-    """Seed từ 10 alpha dataset ít người khai thác (src/generation/novel_ideas.py)."""
-    from src.generation.novel_ideas import NOVEL_ALPHAS
+    """Seed từ alpha dataset ít người khai thác (src/generation/novel_ideas.py) — gồm cả
+    v1 (khung alt-dataset kinh điển) lẫn v2 (cấu trúc gap/gate/residual chống self-corr)."""
+    from src.generation.novel_ideas import all_novel_alphas
 
-    return _parse_all([c.expression for c in NOVEL_ALPHAS], source="novel_ideas")
+    return _parse_all([c.expression for c in all_novel_alphas()], source="novel_ideas")
 
 
 def seed_cores_from_llm(
