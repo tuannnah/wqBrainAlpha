@@ -7,10 +7,13 @@
   (`rKlkG9O8`/`kq0RY2G8`/`E5E3NKZJ`, VWAP intraday-reversal) Sharpe ~1.5, `failed_checks=[]`
   (qua hết is.checks), **self-corr 0.49/0.47/0.50 < 0.70** (verify khi session còn hạn).
   Chưa nộp (submissions=0) vì (a) bug correlation-poll ĐÃ FIX, (b) submit cần người dùng đồng ý.
-- **Session:** người dùng đã đăng nhập lại QR (23:38) -> session mới hợp lệ. Dry-run
-  `submit` chạy thông suốt (correlation-poll đã fix): e2e HOÀN CHỈNH (khám phá -> sim ->
-  verify self-corr -> chọn alpha sẵn sàng nộp). Chưa nộp thật — chờ người dùng xác nhận
-  (hành động không đảo ngược); alpha tốt nhất nên nộp: `rKlkG9O8` Sharpe 1.57 self-corr 0.49.
+- **Session:** người dùng đã đăng nhập lại QR (23:38). Dry-run `submit` chạy thông suốt
+  (correlation-poll đã fix): e2e HOÀN CHỈNH (khám phá -> sim -> verify self-corr -> chọn
+  alpha sẵn sàng nộp). Người dùng CHỌN chưa nộp, GIỮ SẴN SÀNG — alpha `rKlkG9O8` (Sharpe
+  1.57, self-corr 0.49, `failed_checks=[]`) nằm trong DB, nộp sau bằng `submit --no-dry-run`.
+- **Next (đề xuất):** merge nhánh `alpha-quality-from-brain-docs` vào `main` khi duyệt; nếu
+  muốn e2e tự chạy dài tin cậy hơn cần giải nút thắt throughput GP + calibrate pre-sim floor
+  (đã có sẵn opt-in) — xem roadmap trong spec 2026-07-06.
 - **Done:** Phase 0-8 theo `docs/tailieu/BUILD_GUIDE_AI_alpha_tool.md` (đăng nhập, data
   fields/operators, GP engine, backtest/metrics/gate local, LLM refine, short-list
   decorrelate). Nhánh `closed-loop-integration` (DB cầu Brain SIM <-> MiniBrain, orchestrator
