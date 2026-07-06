@@ -140,6 +140,26 @@ def _reversal() -> list[Candidate]:
         for g in ("market", "sector"):
             expr = _wrap_neutralize(f"-ts_rank(close, {w})", g)
             out.append(Candidate("reversal", expr, hyp, rat))
+    # Đảo chiều INTRADAY (close lệch khỏi VWAP/open -> quay về). ĐÃ KIỂM CHỨNG trên Brain:
+    # cấu trúc này đạt Sharpe ~1.57 và qua HẾT is.checks (failed_checks=[]) — hạt giống MẠNH
+    # cho GP thay vì để GP dò ngẫu nhiên rồi ra core rác (Sharpe <0.4). Dùng ts_mean của
+    # spread (không rank) để giữ đúng biên độ tín hiệu thắng; local Sharpe ~1.23 (Brain≈×1.28).
+    hyp_intra = "Close lệch khỏi VWAP/giá mở cửa trong ngày có xu hướng quay về (intraday mean-reversion)."
+    rat_intra = "Áp lực thanh khoản tạm thời đẩy close khỏi VWAP; đảo chiều khi áp lực hết (dấu âm)."
+    for w in (5, 10, 20):
+        out.append(Candidate("reversal", f"-ts_mean(subtract(close, vwap), {w})", hyp_intra, rat_intra))
+    for w in (3, 5, 10):
+        out.append(Candidate("reversal", f"-ts_mean(subtract(close, open), {w})", hyp_intra, rat_intra))
+    # Tổ hợp hai kênh intraday (close-vwap trọng số cao hơn + close-open) — biến thể đạt Sharpe cao nhất.
+    for k in (1, 2, 3):
+        out.append(
+            Candidate(
+                "reversal",
+                f"add(multiply({k}, multiply(-1, ts_mean(subtract(close, vwap), 10))), "
+                f"multiply(-1, ts_mean(subtract(close, open), 5)))",
+                hyp_intra, rat_intra,
+            )
+        )
     return out
 
 
