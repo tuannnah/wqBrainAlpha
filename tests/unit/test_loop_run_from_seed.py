@@ -94,3 +94,21 @@ def test_run_from_seed_loopresult_carries_brain_metrics() -> None:
     assert "sharpe" in result.best_metrics
     # alpha_id do repo.save_alpha trả (fake repo sqlite in-memory) — không None khi đã sim
     assert result.best_alpha_id is not None
+
+
+class _RaisingRefiner:
+    """Mô phỏng LLM refine lỗi TẠM THỜI (claude-cli exit≠0) — phải KHÔNG làm sập phiên."""
+
+    def refine(self, candidate, metrics, weak_dimension):
+        raise RuntimeError("CLI 'claude' exit 1:  (loi tam thoi)")
+
+
+def test_run_from_seed_khong_crash_khi_refiner_loi() -> None:
+    """LLM refine ném RuntimeError -> loop coi như bước không sinh được (bỏ qua) và vẫn trả
+    LoopResult hợp lệ giữ best từ seed, KHÔNG crash cả phiên (fix reliability chạy dài)."""
+    loop = _make_loop()
+    loop.refiner = _RaisingRefiner()
+    result = loop.run_from_seed("rank(close)")
+    assert isinstance(result, LoopResult)
+    assert result.best_candidate is not None  # vẫn giữ best từ seed đã sim
+    assert result.sims_used >= 1

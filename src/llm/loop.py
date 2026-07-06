@@ -495,7 +495,18 @@ class RefinementLoop:
             if best_ev.regime_blocked:
                 restrict.add("regime_fit")
             weak = weakest_dimension(best_ev.vector, restrict=restrict)
-            cand = self.refiner.refine(best_cand, best_ev.metrics, weak)
+            # LLM refine có thể lỗi TẠM THỜI (claude-cli exit≠0 / timeout / mạng) -> KHÔNG
+            # được làm sập cả phiên dài. Coi như bước này không sinh được (cand=None) rồi đi
+            # tiếp. refine() CHỈ gọi LLM (không sim) nên không phát Auth/Quota; chỉ re-raise
+            # KeyboardInterrupt để Ctrl+C vẫn dừng ngay. Đây là fix reliability cho chạy dài.
+            try:
+                cand = self.refiner.refine(best_cand, best_ev.metrics, weak)
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:  # noqa: BLE001 - lỗi LLM tạm thời không được sập phiên
+                logger.warning("LLM refine lỗi (bỏ qua bước, đi tiếp): {}", exc)
+                self.repo.record_failure(best_cand.expression, "llm_error", str(exc)[:200], "llm")
+                cand = None
             if cand is None:
                 patience += 1
                 stuck += 1
