@@ -24,25 +24,39 @@ class PoolCorrelation:
     def __init__(
         self, pool: dict[int, tuple[Dates, npt.NDArray[np.float64]]]
     ) -> None:
-        self._pool = pool
+        # PRE-SORT mỗi pool member MỘT LẦN theo dates (trước đây sort lại ở MỖI max_corr
+        # call -> với pool lớn là ~48k argsort/batch = nút thắt production 54%). Sort ở đây
+        # 1 lần/pool member; max_corr chỉ sort candidate 1 lần rồi align.
+        self._pool: dict[int, tuple[Dates, npt.NDArray[np.float64]]] = {}
+        for pid, (d, p) in pool.items():
+            d_arr = np.asarray(d)
+            p_arr = np.asarray(p, dtype=np.float64)
+            order = np.argsort(d_arr)
+            self._pool[pid] = (d_arr[order], p_arr[order])
 
     def max_corr(
         self, candidate_pnl: npt.NDArray[np.float64], dates: Dates
     ) -> tuple[float, int | None]:
         """Trả (max(|rho|), id) qua toàn bộ pool; pool rỗng -> (0.0, None).
 
-        Caller KHÔNG cần sort dates trước: hàm tự sort cả candidate lẫn từng pool
-        entry theo dates trước khi align (xem _pairwise_rho), nên dates lệch thứ
-        tự vẫn cho kết quả đúng.
+        Caller KHÔNG cần sort dates trước: hàm tự sort candidate MỘT LẦN (pool đã pre-sort
+        ở __init__) trước khi align, nên dates lệch thứ tự vẫn cho kết quả đúng.
         """
         if not self._pool:
             return 0.0, None
+
+        # Sort candidate MỘT LẦN (thay vì lặp lại trong từng _pairwise_rho như trước).
+        cand_dates = np.asarray(dates)
+        cand_pnl = np.asarray(candidate_pnl, dtype=np.float64)
+        cand_order = np.argsort(cand_dates)
+        cand_dates = cand_dates[cand_order]
+        cand_pnl = cand_pnl[cand_order]
 
         best_abs_rho = 0.0
         best_id: int | None = None
 
         for pool_id, (pool_dates, pool_pnl) in self._pool.items():
-            rho = self._pairwise_rho(candidate_pnl, dates, pool_pnl, pool_dates)
+            rho = self._rho_sorted(cand_pnl, cand_dates, pool_pnl, pool_dates)
             if rho is None:
                 continue
             abs_rho = abs(rho)
@@ -54,32 +68,27 @@ class PoolCorrelation:
             return 0.0, None
         return best_abs_rho, best_id
 
-    def _pairwise_rho(
-        self,
+    @staticmethod
+    def _rho_sorted(
         candidate_pnl: npt.NDArray[np.float64],
         candidate_dates: Dates,
         pool_pnl: npt.NDArray[np.float64],
         pool_dates: Dates,
     ) -> float | None:
-        # BẮT BUỘC sort theo dates trước khi searchsorted: searchsorted giả định
-        # mảng đã sort tăng dần. Nếu dates đầu vào lệch thứ tự (caller không đảm
-        # bảo — type alias Dates/storage/caller đều không ràng buộc), searchsorted
-        # sẽ ghép cặp PnL sai ngày (hoặc trả index ngoài biên) -> rho SAI âm thầm.
-        cand_order = np.argsort(candidate_dates)
-        candidate_dates = candidate_dates[cand_order]
-        candidate_pnl = candidate_pnl[cand_order]
-        pool_order = np.argsort(pool_dates)
-        pool_dates = pool_dates[pool_order]
-        pool_pnl = pool_pnl[pool_order]
+        """|Pearson rho| trên ngày giao nhau; GIẢ ĐỊNH cả hai đã sort tăng dần theo dates.
 
-        common = np.intersect1d(candidate_dates, pool_dates)
-        if common.size < _MIN_OVERLAP_POINTS:
-            return None
-
-        cand_idx = np.searchsorted(candidate_dates, common)
-        pool_idx = np.searchsorted(pool_dates, common)
-        cand_aligned = candidate_pnl[cand_idx]
-        pool_aligned = pool_pnl[pool_idx]
+        Fast-path CÙNG TRỤC NGÀY (mọi alpha lưu qua save_pool_pnl với cùng data.dates ->
+        đa số cặp trùng ngày): bỏ intersect1d/searchsorted (đắt), align = identity. Kết
+        quả TƯƠNG ĐƯƠNG nhánh tổng quát vì dates trùng chính xác."""
+        if candidate_dates.shape == pool_dates.shape and np.array_equal(candidate_dates, pool_dates):
+            cand_aligned = candidate_pnl
+            pool_aligned = pool_pnl
+        else:
+            common = np.intersect1d(candidate_dates, pool_dates)
+            if common.size < _MIN_OVERLAP_POINTS:
+                return None
+            cand_aligned = candidate_pnl[np.searchsorted(candidate_dates, common)]
+            pool_aligned = pool_pnl[np.searchsorted(pool_dates, common)]
 
         finite = np.isfinite(cand_aligned) & np.isfinite(pool_aligned)
         if finite.sum() < _MIN_OVERLAP_POINTS:
