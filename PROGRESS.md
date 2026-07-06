@@ -1,10 +1,16 @@
 # MiniBrain — Progress log
 
 ## Current state
-- **Phase:** Sau Phase 8 (short-list + CLI) — vòng kín đã merge `main`. Đang bổ sung một
-  đợt **nâng cấp chất lượng alpha rút từ docs WorldQuant Brain** (nhánh
-  `alpha-quality-from-brain-docs`, CHƯA merge): đọc toàn bộ `docs/worldquantbrain/docs`
-  bằng 4 sub-agent song song -> spec tổng hợp + 2 nâng cấp code có test.
+- **Phase:** Sau Phase 8 — nhánh `alpha-quality-from-brain-docs` (CHƯA merge). Đã (1) nâng
+  cấp chất lượng alpha từ docs WQ (4 sub-agent), (2) CHẠY THẬT Auto SIM + đánh giá e2e +
+  cải thiện. **KẾT QUẢ THEN CHỐT: e2e ĐÃ có alpha đạt chất lượng submit** — 3 alpha
+  (`rKlkG9O8`/`kq0RY2G8`/`E5E3NKZJ`, VWAP intraday-reversal) Sharpe ~1.5, `failed_checks=[]`
+  (qua hết is.checks), **self-corr 0.49/0.47/0.50 < 0.70** (verify khi session còn hạn).
+  Chưa nộp (submissions=0) vì (a) bug correlation-poll ĐÃ FIX, (b) submit cần người dùng đồng ý.
+- **Session:** người dùng đã đăng nhập lại QR (23:38) -> session mới hợp lệ. Dry-run
+  `submit` chạy thông suốt (correlation-poll đã fix): e2e HOÀN CHỈNH (khám phá -> sim ->
+  verify self-corr -> chọn alpha sẵn sàng nộp). Chưa nộp thật — chờ người dùng xác nhận
+  (hành động không đảo ngược); alpha tốt nhất nên nộp: `rKlkG9O8` Sharpe 1.57 self-corr 0.49.
 - **Done:** Phase 0-8 theo `docs/tailieu/BUILD_GUIDE_AI_alpha_tool.md` (đăng nhập, data
   fields/operators, GP engine, backtest/metrics/gate local, LLM refine, short-list
   decorrelate). Nhánh `closed-loop-integration` (DB cầu Brain SIM <-> MiniBrain, orchestrator
