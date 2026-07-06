@@ -35,6 +35,7 @@ class LocalGateVerdict:
 
 def score_local_gate(
     expr: str, cfg: PortfolioConfig, data: MarketData, self_corr: float = 0.0,
+    *, min_sharpe: float = 0.0, require_is_ladder: bool = False,
 ) -> LocalGateVerdict:
     """Gate Phase 4: expr phải parse được, eval không toàn-NaN, backtest ra được ít nhất
     1 ngày pnl hữu hạn, RỒI áp GateEvaluator thật (depth/fields_ok/self_corr/weight_
@@ -42,7 +43,16 @@ def score_local_gate(
 
     `self_corr` mặc định 0.0 vì `RefinementLoop` (3 vị trí gọi `local_gate_fn`) chưa
     truyền tham số này — `PoolCorrelation` (so sánh với pool alpha đã có) chỉ xuất hiện ở
-    Phase 6, nên tạm coi self_corr = 0.0 (không chặn) để giữ tương thích ngược với loop."""
+    Phase 6, nên tạm coi self_corr = 0.0 (không chặn) để giữ tương thích ngược với loop.
+
+    Pre-sim floor OPT-IN (mặc định TẮT để giữ nguyên hành vi + mọi test cũ):
+    - `min_sharpe > 0`: bỏ qua sim nếu Sharpe LOCAL < ngưỡng — chặn phí quota vào alpha
+      Brain gần như chắc chắn fail LOW_SHARPE (bằng chứng: `failed_checks` thực tế đầy
+      LOW_SHARPE/LOW_FITNESS). Đặt bảo thủ (local×~1.28 ≈ Brain) để không lọc oan.
+    - `require_is_ladder=True`: bỏ qua sim nếu IS-Ladder local FAIL (Sharpe 2 năm gần
+      nhất tụt) — khớp check IS_LADDER_SHARPE/LOW_2Y_SHARPE thật của Brain.
+    Bật hai cờ này qua `functools.partial` ở composition root (main.py) khi calibration
+    ρ đủ tin cậy; KHÔNG bật cứng ở đây để tránh làm đói loop khi ρ chưa xác thực."""
     try:
         node = parse(expr)
     except ParseError as exc:
@@ -72,4 +82,11 @@ def score_local_gate(
     )
     if not verdict.passed:
         return LocalGateVerdict(False, f"gate hard fail: {'; '.join(verdict.hard_failures)}")
+    # Pre-sim floor opt-in (tiết kiệm quota; mặc định min_sharpe=0.0 -> luôn qua).
+    if min_sharpe > 0.0 and metrics.sharpe < min_sharpe:
+        return LocalGateVerdict(
+            False, f"pre-sim floor: Sharpe local {metrics.sharpe:.2f} < {min_sharpe}"
+        )
+    if require_is_ladder and not metrics.is_ladder_passed:
+        return LocalGateVerdict(False, f"pre-sim floor: IS-Ladder FAIL ({metrics.is_ladder_detail})")
     return LocalGateVerdict(True, "ok")
