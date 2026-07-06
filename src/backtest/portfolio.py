@@ -59,19 +59,32 @@ class PortfolioBuilder:
             return demeaned
         group_key = _GROUP_KEY[kind]
         groups = data.groups[group_key]  # raise KeyError nếu thiếu — đúng hợp đồng
-        out = np.full_like(signal, np.nan)
-        t = signal.shape[0]
-        for row in range(t):
-            row_signal = signal[row]
-            row_groups = groups[row]
-            for g in np.unique(row_groups):
-                idx = row_groups == g
-                vals = row_signal[idx]
-                if np.all(np.isnan(vals)):
-                    continue
-                gmean = np.nanmean(vals)
-                out[row, idx] = vals - gmean
-        return out
+        return self._group_demean(signal, groups)
+
+    @staticmethod
+    def _group_demean(signal: Panel, groups: Panel) -> Panel:
+        """Trừ trung bình theo nhóm cross-sectional mỗi hàng — VECTORIZE hoàn toàn (thay
+        double-loop (ngày × nhóm) gọi nanmean ~28.8k lần/backtest = nút thắt throughput GP).
+
+        Cách: gán mỗi cell một 'bucket' toàn cục = row*G + group_code (G = số nhãn nhóm),
+        rồi `np.bincount` tính tổng+đếm mỗi bucket TRÊN CELL HỢP LỆ, ra mean per bucket,
+        map ngược về từng cell. Tương đương ĐÚNG double-loop cũ: cell hợp lệ -> vals-gmean;
+        cell NaN / nhóm all-NaN -> giữ NaN (không thuộc valid mask nên out=NaN)."""
+        t, n = signal.shape
+        valid = ~np.isnan(signal)
+        # Mã hóa nhãn nhóm -> code nguyên (np.unique gộp mọi nhãn giống nhau, kể cả số/chuỗi).
+        _uniq, codes = np.unique(groups, return_inverse=True)
+        codes = codes.reshape(t, n)
+        g = _uniq.size
+        bucket = np.arange(t)[:, None] * g + codes  # (T,N) bucket id toàn cục
+        n_buckets = t * g
+        flat_bucket = bucket[valid]
+        sums = np.bincount(flat_bucket, weights=signal[valid], minlength=n_buckets)
+        counts = np.bincount(flat_bucket, minlength=n_buckets)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            means = np.where(counts > 0, sums / counts, np.nan)
+        cell_mean = means[bucket]  # map mean nhóm về từng cell
+        return np.where(valid, signal - cell_mean, np.nan)
 
     def _truncate(self, signal: Panel, cap: float) -> Panel:
         """Giới hạn tỉ lệ mỗi vị thế: `|w_i| <= cap * gross` (gross = tổng |w| trong ngày).
