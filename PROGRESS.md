@@ -87,6 +87,38 @@
   trên các file sửa. Đã merge `closed-loop-integration` → `main` (merge commit) và
   `git push origin main` thành công (`fbe4b2b..70e3e54`).
 
+### [2026-07-06] Session 04 — Chạy thật Auto SIM (mục 5) + đánh giá e2e + cải thiện
+- **Phase:** Sau Phase 8 — LẦN CHẠY THẬT ĐẦU TIÊN của closed-loop qua đăng nhập thật (đúng
+  Next step tồn đọng). Nhánh `alpha-quality-from-brain-docs`.
+- **Done (đánh giá e2e bằng dữ liệu THẬT):**
+  - Auth non-interactive OK (session `.wq_session` còn hạn; `.env` có mật khẩu). Crash `✅`
+    cp1252 CHỈ khi gọi python trực tiếp — `run.ps1`+`main.py` đã set UTF-8 nên KHÔNG phải bug.
+  - Chẩn đoán 240 sim: **67% error** lịch sử (áp đảo auth-expiry cũ, nay đã có
+    `AuthExpiredError`); `failed_checks` THẬT của Brain = LOW_SHARPE/LOW_FITNESS/**IS_LADDER_
+    SHARPE**/LOW_2Y_SHARPE/LOW_SUB_UNIVERSE_SHARPE → xác nhận Brain thật sự enforce IS-Ladder.
+  - **Sim lại winner core (VWAP intraday-reversal) dưới luật hiện tại: status=passed,
+    failed_checks=[], Sharpe 1.57, fitness 0.73** → pipeline CÓ alpha qua hết is.checks;
+    fitness>1 KHÔNG phải hard-check account này. Gate còn lại: self-corr (endpoint
+    `/correlations/self` trả HTTP 200 body RỖNG — WQ tính bất đồng bộ, cần poll; chưa verify).
+  - **Calibration xác nhận local≈Brain/1.28** (winner local Sharpe 1.23 vs Brain 1.57).
+  - **Nút thắt phát hiện:** (1) throughput thấp (~3 sim/30ph; refine claude-cli chậm + đôi khi
+    phản tác dụng, hạ Sharpe 1.57→1.46); (2) GP seed ngẫu nhiên bỏ lỡ họ VWAP tốt → run sinh
+    core rác (Sharpe <0.4); (3) submissions=0 (loop chỉ khám phá).
+- **Cải thiện đã commit:**
+  - `b57ae66` pre-sim floor OPT-IN (`min_sharpe`/`require_is_ladder`, mặc định TẮT — tránh đói
+    loop khi ρ chưa calibrate; local IS-Ladder dùng ngưỡng Brain nên hiện quá strict, để soft).
+  - `d481fe1` seed họ `reversal` bằng 9 core intraday-reversal ĐÃ KIỂM CHỨNG (close↔vwap,
+    close↔open + tổ hợp) — PV-only, chấm local được → GP tin cậy khám phá vùng tốt.
+- **In progress:** phiên `wq_autosim_v2.log` (PID mới, market_yf, pop20×gen2, patience2,
+  base_seed0, seed intraday) đang chạy — đánh giá xem seed cải thiện có ra alpha tốt ổn định.
+- **Blockers / open risks:** self-corr chưa verify được (endpoint cần poll — `CorrelationChecker`
+  chưa xử lý 200+body rỗng → crash JSON). Submit là hành động KHÔNG đảo ngược → cần người dùng
+  đồng ý, KHÔNG auto-submit. Đạt "2h→1 submit alpha" tin cậy là bài toán nghiên cứu (vượt
+  Sharpe~1.58 + IS-Ladder), không chỉ tinh chỉnh tham số.
+- **Next step:** Đánh giá `wq_autosim_v2.log`; nếu seed intraday cho alpha passed ổn định →
+  fix `CorrelationChecker` (poll 200+empty) để verify self-corr, rồi hỏi người dùng về submit.
+- **Tests:** pytest xanh (1021→ +tests mới), 1 fail psycopg có sẵn. 3 commit code trên nhánh.
+
 ### [2026-07-06] Session 03 — Nâng cấp chất lượng alpha từ docs WQ Brain (4 sub-agent)
 - **Phase:** Sau Phase 8 — đợt cải thiện chất lượng alpha độc lập, nhánh
   `alpha-quality-from-brain-docs` (chưa merge). Không đụng luồng ClosedLoop/quota.
