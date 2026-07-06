@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from loguru import logger
 
 
@@ -12,13 +14,27 @@ class CorrelationChecker:
         self.client = client
         self.max_self_corr = max_self_corr if max_self_corr is not None else self.MAX_SELF_CORR
 
-    def max_self_correlation(self, wq_alpha_id: str) -> float:
-        resp = self.client.get(f"/alphas/{wq_alpha_id}/correlations/self")
-        if resp.status_code not in (200, 201):
-            logger.warning("Không lấy được correlation cho {}: {}", wq_alpha_id, resp.status_code)
-            # Không xác định được → coi như rủi ro cao để an toàn.
-            return 1.0
-        return self._extract_max(resp.json())
+    def max_self_correlation(
+        self, wq_alpha_id: str, *, max_polls: int = 20, sleep_fn=time.sleep,
+    ) -> float:
+        """Max self-correlation với pool user. WQ tính BẤT ĐỒNG BỘ: `GET /correlations/self`
+        trả HTTP 200 **body RỖNG + header Retry-After** trong lúc tính, chỉ khi xong mới trả
+        JSON (schema+records). Phải POLL — trước đây gọi `resp.json()` trên body rỗng ->
+        JSONDecodeError làm sập cả bước submit. Poll tới `max_polls` lần rồi mới bỏ cuộc."""
+        for _ in range(max(1, max_polls)):
+            resp = self.client.get(f"/alphas/{wq_alpha_id}/correlations/self")
+            if resp.status_code not in (200, 201):
+                logger.warning("Không lấy được correlation cho {}: {}", wq_alpha_id, resp.status_code)
+                # Không xác định được → coi như rủi ro cao để an toàn.
+                return 1.0
+            # Body rỗng + Retry-After = WQ đang tính -> chờ rồi thử lại (fake trong test
+            # không set Retry-After nên rơi thẳng xuống _extract_max, giữ hành vi cũ).
+            if not (getattr(resp, "text", "") or "").strip() and resp.headers.get("Retry-After"):
+                sleep_fn(float(resp.headers.get("Retry-After") or 1.0))
+                continue
+            return self._extract_max(resp.json())
+        logger.warning("Self-corr {} chưa tính xong sau {} lần poll — coi rủi ro cao", wq_alpha_id, max_polls)
+        return 1.0
 
     @staticmethod
     def _extract_max(payload: dict) -> float:

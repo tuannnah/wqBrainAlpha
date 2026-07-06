@@ -325,3 +325,26 @@ def test_submit_khong_gan_tag_khi_thieu_hypothesis():
     result = mgr.submit("WQ1")
     assert result.status == "submitted"
     assert not any(c[0] == "PATCH" for c in client.calls)
+
+
+def test_max_self_correlation_poll_body_rong_roi_lay_duoc():
+    """WQ trả 200 body rỗng + Retry-After trong lúc tính -> poll tới khi có JSON.
+    Trước fix: resp.json() trên body rỗng -> JSONDecodeError làm sập submit."""
+    client = FakeClient()
+    client.queue_get(FakeResponse(200, text="", headers={"Retry-After": "1"}))
+    client.queue_get(FakeResponse(200, text="", headers={"Retry-After": "1"}))
+    client.queue_get(FakeResponse(200, json_data={"max": 0.48}, text='{"max":0.48}'))
+    checker = CorrelationChecker(client)
+    val = checker.max_self_correlation("WQ1", sleep_fn=lambda _s: None)
+    assert val == 0.48
+    assert sum(1 for c in client.calls if c[0] == "GET") == 3  # đã poll 3 lần
+
+
+def test_max_self_correlation_poll_qua_han_coi_rui_ro_cao():
+    """Tính mãi không xong (luôn rỗng) -> sau max_polls trả 1.0 (an toàn: coi corr cao)."""
+    client = FakeClient()
+    for _ in range(5):
+        client.queue_get(FakeResponse(200, text="", headers={"Retry-After": "1"}))
+    checker = CorrelationChecker(client)
+    val = checker.max_self_correlation("WQ1", max_polls=5, sleep_fn=lambda _s: None)
+    assert val == 1.0
