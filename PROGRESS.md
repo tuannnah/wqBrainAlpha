@@ -11,9 +11,11 @@
   (correlation-poll đã fix): e2e HOÀN CHỈNH (khám phá -> sim -> verify self-corr -> chọn
   alpha sẵn sàng nộp). Người dùng CHỌN chưa nộp, GIỮ SẴN SÀNG — alpha `rKlkG9O8` (Sharpe
   1.57, self-corr 0.49, `failed_checks=[]`) nằm trong DB, nộp sau bằng `submit --no-dry-run`.
-- **Next (đề xuất):** merge nhánh `alpha-quality-from-brain-docs` vào `main` khi duyệt; nếu
-  muốn e2e tự chạy dài tin cậy hơn cần giải nút thắt throughput GP + calibrate pre-sim floor
-  (đã có sẵn opt-in) — xem roadmap trong spec 2026-07-06.
+- **E2e chạy dài tin cậy hơn (Session 05):** ĐÃ giải nút throughput GP (batch 117s→54s, 2.2x,
+  commit `223be99`), bật pre-sim floor calibrate (`c476a65`), fix LLM refine không sập phiên
+  dài (`ed0e34f`). Nút phụ `_truncate`/`_decay` (~19s/batch) để roadmap.
+- **Next (đề xuất):** merge nhánh `alpha-quality-from-brain-docs` vào `main` khi duyệt; (tùy
+  chọn) chạy lại `closed-loop` đo throughput+quota thực; nộp `rKlkG9O8` khi muốn.
 - **Done:** Phase 0-8 theo `docs/tailieu/BUILD_GUIDE_AI_alpha_tool.md` (đăng nhập, data
   fields/operators, GP engine, backtest/metrics/gate local, LLM refine, short-list
   decorrelate). Nhánh `closed-loop-integration` (DB cầu Brain SIM <-> MiniBrain, orchestrator
@@ -42,6 +44,30 @@
 
 ## Entries
 <!-- append-only; newest at the bottom -->
+
+### [2026-07-07] Session 05 — E2e tự chạy dài TIN CẬY hơn (throughput + pre-sim floor + LLM robust)
+- **Phase:** Sau Phase 8, nhánh `alpha-quality-from-brain-docs`. Theo yêu cầu người dùng:
+  giải nút throughput GP + calibrate pre-sim floor (để e2e tự chạy dài tin cậy hơn).
+- **Done:**
+  - **Throughput (commit `223be99`):** profile 1 GP batch (pop20×gen2) = 117s; hotspot áp đảo
+    `portfolio.py::_neutralize` = 72s/61% (double-loop Python ngày×nhóm gọi `np.nanmean` 2.1
+    TRIỆU lần). Vectorize bằng `np.bincount` bucket `row*G+code` → **batch 117s→53.6s (2.2x)**;
+    tương đương số học (test_backtest_portfolio + golden + mvp xanh).
+  - **Pre-sim floor (commit `c476a65`):** calibrate local≈Brain/1.28 (winner local 1.23 vs
+    Brain 1.57); bật `PRE_SIM_LOCAL_SHARPE_FLOOR=0.5` qua `functools.partial(score_local_gate,
+    min_sharpe=…)` trong `_run_closed_loop_session` → bỏ sim alpha local Sharpe<0.5 (rác đã
+    quan sát: 0.39/-0.02/-0.13). Bảo thủ nên không đói loop (winner local 1.23 vẫn qua).
+  - **LLM robustness (commit `ed0e34f`):** `_refine_loop` gọi `refiner.refine` (LLM) trước đây
+    KHÔNG catch → claude-cli exit≠0 1 call là crash cả phiên dài. Bọc try/except: lỗi LLM tạm
+    thời → bỏ qua bước (cand=None), chỉ re-raise KeyboardInterrupt. TDD `_RaisingRefiner`.
+- **Decisions:** Không vectorize `_truncate`/`_decay`/`argsort` (nhỏ hơn + rủi ro numerics cao
+  hơn) — ghi roadmap. Floor 0.5 bảo thủ thay vì siết mạnh để ưu tiên không đói loop.
+- **In progress:** Không.
+- **Blockers / open risks:** Chưa chạy lại phiên dài thật với 3 cải thiện này (session Brain
+  cần QR khi hết hạn). `_truncate`/`_decay` vẫn là nút phụ (~19s/batch).
+- **Next step:** (tùy chọn) chạy lại `closed-loop` để đo throughput+quota thực tế; merge nhánh.
+- **Tests:** `pytest -q` **1027 passed**, 1 fail psycopg có sẵn. ruff sạch. 3 commit.
+
 
 ### [2026-07-02] Session 01 (journal) — Rút gọn menu run.bat còn 5 mục + dọn code thừa + merge main
 - **Phase:** Sau Phase 8 — hoàn tất tích hợp `closed-loop-integration` vào `main` + đơn giản
