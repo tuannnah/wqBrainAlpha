@@ -1,8 +1,10 @@
 # MiniBrain — Progress log
 
 ## Current state
-- **Phase:** Sau Phase 8 (short-list + CLI) — vòng kín AI+MiniBrain (ClosedLoop) đã merge
-  vào `main`; menu tương tác `run.bat` vừa được rút gọn còn 5 mục.
+- **Phase:** Sau Phase 8 (short-list + CLI) — vòng kín đã merge `main`. Đang bổ sung một
+  đợt **nâng cấp chất lượng alpha rút từ docs WorldQuant Brain** (nhánh
+  `alpha-quality-from-brain-docs`, CHƯA merge): đọc toàn bộ `docs/worldquantbrain/docs`
+  bằng 4 sub-agent song song -> spec tổng hợp + 2 nâng cấp code có test.
 - **Done:** Phase 0-8 theo `docs/tailieu/BUILD_GUIDE_AI_alpha_tool.md` (đăng nhập, data
   fields/operators, GP engine, backtest/metrics/gate local, LLM refine, short-list
   decorrelate). Nhánh `closed-loop-integration` (DB cầu Brain SIM <-> MiniBrain, orchestrator
@@ -15,12 +17,12 @@
   thiết kế vòng kín (`docs/superpowers/specs/2026-06-26-ai-minibrain-closed-loop-design.md` +
   6 plan phase) + vá gap phát hiện quota (`QuotaExceededError`, xem entry bên dưới) — sẵn sàng
   bắt đầu kiểm thử thật.
-- **Next step:** Chạy thật mục 5 (Auto SIM) với đăng nhập thật để xác nhận end-to-end với
-  WQ Brain SIM/quota thật — ĐÂY SẼ LÀ LẦN CHẠY THẬT ĐẦU TIÊN của toàn luồng SIM Brain qua
-  ClosedLoop (mục 4 chỉ test local, không đụng WQ). Theo dõi sát: (1) `QuotaExceededError`
-  mới vá có bắt đúng phản hồi thật của WQ khi gần/hết quota không (chưa verify với response
-  thật, chỉ verify logic qua fake response); (2) `RefinementLoop.repo.save_alpha/
-  save_simulation` có ghi đúng để `top`/`submit` thấy alpha tìm được không.
+- **Next step:** (a) Cân nhắc merge nhánh `alpha-quality-from-brain-docs` vào `main` sau khi
+  người dùng duyệt; (b) tiếp roadmap trong
+  `docs/superpowers/specs/2026-07-06-alpha-quality-upgrade-from-brain-docs.md` (Sub-Universe
+  gate, ngoại lệ self-corr Sharpe+10%, profile Single-Dataset/Power-Pool, hash-cache chống
+  SIM trùng); (c) vẫn giữ mục chạy thật Auto SIM (mục 5) end-to-end với WQ Brain SIM/quota
+  thật — theo dõi `QuotaExceededError` với response thật + `RefinementLoop.repo.save_*`.
 - **Blockers / open risks:** Không có blocker biết tới ở thời điểm này. LLM_BACKEND hiện là
   `deepseek` (đã xác nhận API còn hoạt động khi chạy mục 4 thật trong phiên này). Feedback (d)
   "AI học từ SIM" (`AlphaTranslator.avoid_subtrees`/zoo) chỉ refresh giữa các phiên, không
@@ -84,6 +86,47 @@
   không liên quan, đã xanh từ trước phiên này). `ruff check --select F401,F811,F821` sạch
   trên các file sửa. Đã merge `closed-loop-integration` → `main` (merge commit) và
   `git push origin main` thành công (`fbe4b2b..70e3e54`).
+
+### [2026-07-06] Session 03 — Nâng cấp chất lượng alpha từ docs WQ Brain (4 sub-agent)
+- **Phase:** Sau Phase 8 — đợt cải thiện chất lượng alpha độc lập, nhánh
+  `alpha-quality-from-brain-docs` (chưa merge). Không đụng luồng ClosedLoop/quota.
+- **Done:**
+  - Đọc toàn bộ `docs/worldquantbrain/docs` (74 file) bằng **4 sub-agent Explore song song**
+    theo 4 nhóm: neutralization/risk, submission-tests/settings, consultant-quality,
+    dataset/seed. Tổng hợp thành spec
+    `docs/superpowers/specs/2026-07-06-alpha-quality-upgrade-from-brain-docs.md` (bảng ngưỡng
+    submission THẬT + đòn bẩy neutralization + khuôn mẫu chống-crowding + roadmap 10 mục) và
+    memory `reference_brain_submission_thresholds`. Commit `1490530`.
+  - **Commit `912a797` — IS-Ladder robustness gate:** module thuần `src/backtest/is_ladder.py`
+    (`ladder_decision` + `is_ladder_verdict`) xét Sharpe cửa sổ trượt N=2..10 năm gần nhất
+    (FAIL<1.58, PASS thang 2.38..1.59, turnover<30% ×0.85); ngưỡng ở `config/thresholds.py`;
+    wire vào `MetricsCalculator` (thêm field `is_ladder_passed/detail` CÓ DEFAULT -> không phá
+    17 constructor `AlphaMetrics` cũ) + soft-score `is_ladder` của `GateEvaluator`. Bắt alpha
+    suy thoái gần đây mà Sharpe-tổng bỏ sót. TDD 12 case.
+  - **Commit `5d12a0e` — novel-ideas v2:** thêm 6 alpha cấu trúc GAP/GATE/RESIDUAL
+    (`vector_neut` residualize = lever DUY NHẤT hạ self-corr, gap zscore, `trade_when` gate)
+    trên `VERIFIED_FIELDS` (KHÔNG bịa field mới, theo cardinal rule #1). Danh sách riêng
+    `NOVEL_ALPHAS_V2` + `all_novel_alphas()`; `seed_cores_from_novel_ideas` nay seed 16 core
+    (10 v1 + 6 v2), 6/6 parse qua registry thật. TDD `tests/test_novel_ideas_v2.py`.
+- **Decisions:**
+  - Panel local `market_yf` CHỈ có PV -> alpha dataset-thay-thế thuộc path Brain, không chấm
+    local được; vì thế originality cắm ở `novel_ideas.py`/seed (ground field), KHÔNG hardcode
+    field vào panel. Bài học cốt lõi từ docs: "alpha tốt sống trong GAP/GATE/RESIDUAL, không
+    phải LEVEL" -> ưu tiên `vector_neut` (hạ self-corr — nguyên nhân reject #1).
+  - IS-Ladder để SOFT (không chặn `passed`) đúng triết lý gate hiện tại: Brain là trọng tài
+    cuối, gate local chỉ pre-filter tiết kiệm quota.
+  - KHÔNG lật cứng `DEFAULT_NEUTRALIZATION` SUBINDUSTRY->INDUSTRY (mâu thuẫn commit `c33983b`
+    có chủ đích); docs khuyên neutralization THEO CATEGORY — đã có `sweep-config` quét
+    neutralization sẵn, nên để roadmap thay vì đổi default. KHÔNG làm ngoại lệ self-corr
+    Sharpe+10% trong phiên này (checker chỉ trả max-corr, cần Sharpe từng alpha + format
+    response thật chưa chắc — rủi ro trên đường submission thật).
+- **In progress:** Không (nhánh sạch, chờ người dùng duyệt merge).
+- **Blockers / open risks:** Field trong v2 dựa `VERIFIED_FIELDS` đã verify trước đó; nếu DB
+  đổi tên field cần verify lại. Nhánh chưa merge `main`.
+- **Next step:** Xem `Current state`.
+- **Tests:** `venv` pytest: **1021 passed**, 1 fail có sẵn (`test_db_postgres` thiếu psycopg,
+  không liên quan). `ruff --select F401,F811,F821` sạch trên file sửa. 3 commit trên nhánh
+  `alpha-quality-from-brain-docs`.
 
 ### [2026-07-02] Session 02 — Đối chiếu mục 5 (Auto SIM) với tài liệu thiết kế + vá gap quota
 - **Phase:** Sau Phase 8 — kiểm tra hoàn thiện `ClosedLoop` (mục 5) trước khi bắt đầu kiểm thử
