@@ -11,9 +11,13 @@
   (correlation-poll đã fix): e2e HOÀN CHỈNH (khám phá -> sim -> verify self-corr -> chọn
   alpha sẵn sàng nộp). Người dùng CHỌN chưa nộp, GIỮ SẴN SÀNG — alpha `rKlkG9O8` (Sharpe
   1.57, self-corr 0.49, `failed_checks=[]`) nằm trong DB, nộp sau bằng `submit --no-dry-run`.
-- **E2e chạy dài tin cậy hơn (Session 05):** ĐÃ giải nút throughput GP (batch 117s→54s, 2.2x,
-  commit `223be99`), bật pre-sim floor calibrate (`c476a65`), fix LLM refine không sập phiên
-  dài (`ed0e34f`). Nút phụ `_truncate`/`_decay` (~19s/batch) để roadmap.
+- **E2e chạy dài tin cậy hơn (Session 05):** giải 2 nút throughput — `_neutralize` 72s→5s
+  (`223be99`) + `pool_corr.max_corr` 62s→7s (`2b327f2`, lộ khi profile POOL THẬT) → **batch
+  pool-thật 113s→58s (~2x)**; pre-sim floor calibrate (`c476a65`); LLM refine không sập phiên
+  (`ed0e34f`). **Đo LIVE:** sim-throughput giờ bị chặn bởi POOL BÃO HÒA (gate `độc đáo<0.35`
+  loại ~11/16 candidate — vùng VWAP đã mine trong pool 268), KHÔNG phải tốc độ; quota rất tiết
+  kiệm. Muốn nhiều alpha submit mới → mở rộng dataset (novel-v2, path-Brain). `_truncate` 12.5s
+  còn để roadmap.
 - **Next (đề xuất):** merge nhánh `alpha-quality-from-brain-docs` vào `main` khi duyệt; (tùy
   chọn) chạy lại `closed-loop` đo throughput+quota thực; nộp `rKlkG9O8` khi muốn.
 - **Done:** Phase 0-8 theo `docs/tailieu/BUILD_GUIDE_AI_alpha_tool.md` (đăng nhập, data
