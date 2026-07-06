@@ -65,6 +65,9 @@ class GateEvaluator:
             "fitness": m.fitness,
             "turnover_band": self._turnover_band_score(m.turnover),
             "per_year_min": min(m.per_year_sharpe.values()) if m.per_year_sharpe else 0.0,
+            # IS-Ladder robustness (soft: bắt alpha suy thoái 2 năm gần nhất mà Sharpe-tổng
+            # bỏ sót). 1.0 = qua/borderline, 0.0 = FAIL — caller ưu tiên alpha 1.0.
+            "is_ladder": 1.0 if m.is_ladder_passed else 0.0,
         }
 
         return GateVerdict(

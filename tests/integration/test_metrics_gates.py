@@ -59,9 +59,11 @@ def test_handwritten_alpha_end_to_end_metrics_and_gate(small_panel: MarketData) 
     assert isinstance(verdict, GateVerdict)
     # Không assert verdict.passed is True cứng — alpha viết tay trên data nhỏ có thể không
     # đạt sharpe/turnover thật; assert ĐÚNG HÀNH VI: verdict luôn có cả hard_failures (list)
-    # và soft_scores (dict) đầy đủ 4 khoá, bất kể pass/fail.
+    # và soft_scores (dict) đầy đủ 5 khoá (thêm is_ladder robustness), bất kể pass/fail.
     assert isinstance(verdict.hard_failures, list)
-    assert set(verdict.soft_scores) == {"sharpe", "fitness", "turnover_band", "per_year_min"}
+    assert set(verdict.soft_scores) == {
+        "sharpe", "fitness", "turnover_band", "per_year_min", "is_ladder"
+    }
     print(
         f"[Phase4 demo] sharpe={metrics.sharpe:.3f} fitness={metrics.fitness:.3f} "
         f"turnover={metrics.turnover:.3f} concentration={metrics.weight_concentration:.3f} "

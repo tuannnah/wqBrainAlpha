@@ -14,6 +14,7 @@ import numpy as np
 
 from config.thresholds import TURNOVER_FLOOR
 from src.backtest.backtester import BacktestResult
+from src.backtest.is_ladder import is_ladder_verdict
 from src.data.market_panel import MarketData
 
 
@@ -26,6 +27,10 @@ class AlphaMetrics:
     fitness: float
     per_year_sharpe: dict[int, float]
     weight_concentration: float
+    # IS-Ladder robustness (default True/"": tương thích ngược với mọi constructor cũ dựng
+    # AlphaMetrics trực tiếp — chỉ MetricsCalculator.compute mới điền giá trị thật).
+    is_ladder_passed: bool = True
+    is_ladder_detail: str = ""
 
 
 class MetricsCalculator:
@@ -41,10 +46,12 @@ class MetricsCalculator:
         fitness = sharpe * np.sqrt(abs(annual_return) / max(turnover, TURNOVER_FLOOR))
         per_year_sharpe = self._per_year_sharpe(bt.daily_pnl, data)
         weight_concentration = self._weight_concentration(bt.weights)
+        ladder = is_ladder_verdict(bt.daily_pnl, data, turnover)
         return AlphaMetrics(
             sharpe=sharpe, annual_return=annual_return, turnover=turnover,
             max_drawdown=max_drawdown, fitness=float(fitness),
             per_year_sharpe=per_year_sharpe, weight_concentration=weight_concentration,
+            is_ladder_passed=ladder.passed, is_ladder_detail=ladder.detail,
         )
 
     def _sharpe(self, daily_pnl: np.ndarray) -> float:
