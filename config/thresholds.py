@@ -31,3 +31,8 @@ IS_LADDER_LOW_TURNOVER_MULT: float = 0.85  # chỉ nhân lên ngưỡng PASS, KH
 
 # --- Calibration (tin cậy cả tool) ---
 CALIBRATION_RHO_BAR: float = 0.5  # Spearman ρ tối thiểu để tin ranking local
+# Pre-sim floor cho closed-loop: local Sharpe < mức này -> KHÔNG đốt sim Brain (chắc chắn
+# rác). Calibrate local≈Brain/1.28 (đo trực tiếp: winner local 1.23 vs Brain 1.57). Floor
+# 0.5 -> Brain ~0.64: chỉ loại rác (đã quan sát loop sim Sharpe 0.39/-0.02/-0.13), KHÔNG
+# đụng ứng viên tốt (local ~1.2+). Bảo thủ để không đói loop; nới lên nếu muốn siết quota.
+PRE_SIM_LOCAL_SHARPE_FLOOR: float = 0.5

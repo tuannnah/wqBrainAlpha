@@ -677,6 +677,16 @@ def _run_closed_loop_session(
     )
     loop.market_data = data          # bật local gate trước sim
     loop.local_gate_cfg = cfg
+    # Pre-sim floor (calibrate local≈Brain/1.28): bỏ qua sim alpha local Sharpe quá thấp
+    # (chắc chắn rác) -> tiết kiệm quota cho chạy dài. Bảo thủ nên không đói loop.
+    import functools as _functools
+
+    from config.thresholds import PRE_SIM_LOCAL_SHARPE_FLOOR
+    from src.backtest.gate import score_local_gate as _score_local_gate
+
+    loop.local_gate_fn = _functools.partial(
+        _score_local_gate, min_sharpe=PRE_SIM_LOCAL_SHARPE_FLOOR
+    )
     loop.max_simulations = 10**9     # không trần local; dừng theo quota Brain (QuotaExhausted)
 
     seed = _resolve_base_seed(base_seed)
