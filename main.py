@@ -647,9 +647,13 @@ def _run_closed_loop_session(
     *, pop_size: int = 30, n_generations: int = 3, top_k: int = 10, max_corr: float = 0.70,
     patience: int = 5, max_ideas: int | None = None,
     neutralization: str = "SUBINDUSTRY", decay: int = 4, truncation: float = 0.08,
-    base_seed: int | None = None,
+    base_seed: int | None = None, refiner_kind: str = "local",
 ) -> bool:
     """Dựng + chạy vòng kín AI+MiniBrain thật (dùng chung cho CLI `closed-loop` và menu mục 5).
+
+    `refiner_kind`: "local" (mặc định) -> LocalTunerRefiner — tune tham số/config bằng eval
+    local (Task 2/3), CHỈ sim Brain 1 lần cho cấu hình tốt nhất, KHÔNG dùng LLM refine (bỏ
+    bước ~16 phút/ý tưởng). "llm" -> RefinementLoopRefiner cũ (bọc `loop` AI refine nhiều bước).
 
     Trả False nếu không load được MarketData (lỗi cấu hình, chưa kịp chạy); True nếu đã chạy
     xong (kể cả dừng do hết quota/Ctrl+C — kết quả vẫn lưu DB)."""
@@ -690,10 +694,26 @@ def _run_closed_loop_session(
     loop.max_simulations = 10**9     # không trần local; dừng theo quota Brain (QuotaExhausted)
 
     seed = _resolve_base_seed(base_seed)
+    if refiner_kind == "local":
+        from src.app.closed_loop_adapters import LocalTunerRefiner
+
+        # loop.repo là AlphaRepository (save_alpha/save_simulation) — KHÁC `repo`
+        # (MiniBrainRepository) mà ClosedLoop/GPIdeaSource dùng ở trên. LocalTunerRefiner
+        # cần đúng AlphaRepository mà RefinementLoop đang dùng để lịch sử alpha/sim nhất
+        # quán với các đường refine khác (marathon/research) trong cùng DB.
+        refiner: object | None = LocalTunerRefiner(
+            simulator=loop.simulator, repo=loop.repo, data=data,
+            local_config=cfg, sim_config=sim_config,
+            pool_corr_fn=loop.pool_corr_fn, region=region, universe=universe,
+        )
+    else:
+        refiner = None  # build_closed_loop mặc định RefinementLoopRefiner(loop) (đường LLM cũ)
+
     cl = build_closed_loop(
         data=data, repo=repo, config=cfg, registry=default_registry(), loop=loop,
         region=region, universe=universe, pop_size=pop_size, n_generations=n_generations,
         top_k=top_k, max_corr=max_corr, max_ideas=max_ideas, base_seed=seed,
+        refiner=refiner,
     )
     console.print(f"[cyan]Bắt đầu vòng kín (base_seed={seed}, Ctrl+C để dừng)…[/cyan]")
     try:
@@ -730,9 +750,13 @@ def closed_loop_cmd(
     base_seed: int = typer.Option(
         0, help="Seed GP sinh ý tưởng; 0 = ngẫu nhiên mỗi lần (tránh no_more_ideas)"
     ),
+    refiner: str = typer.Option(
+        "local", help="local (LocalTuner, mặc định, không LLM) | llm (RefinementLoop cũ)"
+    ),
 ) -> None:
-    """Vòng kín AI + MiniBrain: GP sinh ý tưởng → AI refine ≤patience + gate local → SIM Brain
-    → lưu DB + feedback → lặp đến khi hết quota (Ctrl+C để dừng tay). Cần đăng nhập + .env AI."""
+    """Vòng kín AI + MiniBrain: GP sinh ý tưởng → refine (LocalTuner local mặc định, hoặc AI
+    refine ≤patience nếu --refiner llm) + gate local → SIM Brain → lưu DB + feedback → lặp
+    đến khi hết quota (Ctrl+C để dừng tay). Cần đăng nhập (+ .env AI nếu --refiner llm)."""
     _setup_logging()
 
     if not Path(market_data_dir).is_dir():
@@ -750,7 +774,7 @@ def closed_loop_cmd(
         pop_size=pop_size, n_generations=n_generations, top_k=top_k, max_corr=max_corr,
         patience=patience, max_ideas=(max_ideas or None),
         neutralization=neutralization, decay=decay, truncation=truncation,
-        base_seed=(base_seed or None),
+        base_seed=(base_seed or None), refiner_kind=refiner,
     )
     if not ok:
         raise typer.Exit(code=1)
@@ -1708,7 +1732,7 @@ def _menu_auto_sim(state: _MenuState) -> None:
 
     _run_closed_loop_session(
         state.session_factory, state.client, state.region, state.universe, state.delay,
-        market_data_dir,
+        market_data_dir, refiner_kind="local",
     )
 
 

@@ -190,17 +190,21 @@ def build_closed_loop(
     pop_size: int = 30, n_generations: int = 3, base_seed: int = 42,
     top_k: int = 10, max_corr: float = 0.70,
     calibrate_every: int = 10, rho_bar: float = 0.5, max_ideas: int | None = None,
+    refiner: object | None = None,
 ) -> "ClosedLoop":
-    """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + RefinementLoopRefiner (AI refine+sim qua
-    `loop`) + CalibrationTracker (ρ) + ClosedLoop. `loop` là RefinementLoop đã dựng (đăng nhập
-    + Simulator thật) do composition root (main.py) truyền vào."""
+    """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
+    bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
+    qua LLM refine, chỉ tune local rồi sim Brain 1 lần) + CalibrationTracker (ρ) + ClosedLoop.
+    `loop` là RefinementLoop đã dựng (đăng nhập + Simulator thật) do composition root
+    (main.py) truyền vào; không dùng tới khi đã truyền `refiner` tường minh."""
     from src.pipeline.closed_loop import CalibrationTracker, ClosedLoop
 
     idea_source = GPIdeaSource(
         data, repo, config, registry, pop_size=pop_size, n_generations=n_generations,
         base_seed=base_seed, top_k=top_k, max_corr=max_corr,
     )
-    refiner = RefinementLoopRefiner(loop)
+    if refiner is None:
+        refiner = RefinementLoopRefiner(loop)
     tracker = CalibrationTracker(repo, every=calibrate_every, rho_bar=rho_bar)  # type: ignore[arg-type]
     return ClosedLoop(
         idea_source=idea_source, refiner=refiner, repo=repo,  # type: ignore[arg-type]

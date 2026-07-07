@@ -102,7 +102,7 @@ def test_menu_auto_sim_tu_dong_tim_market_data_khong_hoi_input(monkeypatch):
     called = {}
     monkeypatch.setattr(
         main, "_run_closed_loop_session",
-        lambda session_factory, client, region, universe, delay, market_data_dir:
+        lambda session_factory, client, region, universe, delay, market_data_dir, **_kw:
             called.setdefault("market_data_dir", market_data_dir),
     )
 
