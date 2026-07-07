@@ -169,10 +169,22 @@ class RefinementLoop:
         self.local_gate_fn = local_gate_fn or score_local_gate
         self.market_data = market_data
         self.local_gate_cfg = local_gate_cfg or PortfolioConfig()
-        if self.market_data is None:
-            logger.warning("local gate tắt: thiếu market_data")
+        # KHÔNG cảnh báo gate ở đây: caller (vd closed-loop) thường set market_data SAU
+        # khi dựng loop -> cảnh báo lúc init là báo động giả. Log đúng trạng thái MỘT LẦN
+        # khi run() bắt đầu (lúc đó market_data đã chốt) qua _ensure_gate_status_logged().
+        self._gate_logged = False
         self.sims_used = 0
         self.zoo_added = 0
+
+    def _ensure_gate_status_logged(self) -> None:
+        """Log trạng thái local gate đúng một lần cho vòng đời loop (gọi ở đầu mỗi run)."""
+        if self._gate_logged:
+            return
+        self._gate_logged = True
+        if self.market_data is None:
+            logger.warning("local gate TẮT: thiếu market_data (candidate đi thẳng lên sim)")
+        else:
+            logger.info("local gate BẬT: pre-sim floor lọc rác trước khi tốn quota Brain")
 
     # --------------------------------------------------------------- seed
     def seed_candidates(self, research_direction: str) -> list:
@@ -382,6 +394,7 @@ class RefinementLoop:
 
     # ---------------------------------------------------------------- run
     def run(self, research_direction: str, on_progress=None) -> LoopResult:
+        self._ensure_gate_status_logged()
         self.sims_used = 0
         self.zoo_added = 0
         history: list = []
@@ -561,6 +574,7 @@ class RefinementLoop:
         from src.llm.hypothesis import Hypothesis
         from src.llm.translator import AlphaCandidate
 
+        self._ensure_gate_status_logged()
         self.sims_used = 0
         self.zoo_added = 0
         history: list = []
