@@ -11,12 +11,16 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.pipeline.closed_loop import ClosedLoop
 
+from config.thresholds import PRE_SIM_LOCAL_SHARPE_FLOOR
+from src.backtest.local_tuner import tune as _tune
 from src.gp.engine import GPEngine
 from src.lang.parser import parse
 from src.lang.visitors import CanonicalHasher
 from src.pipeline.closed_loop import IdeaOutcome, QuotaExhausted
 from src.pipeline.runner import generate_many
 from src.pipeline.shortlist import ShortlistCandidate
+from src.scoring.filter import passes as _default_filter
+from src.scoring.vector import score_vector as _score_vector
 from src.simulation.simulator import AuthExpiredError, QuotaExceededError
 
 
@@ -48,6 +52,84 @@ class RefinementLoopRefiner:
             self_corr=result.best_self_corr,
             sims_used=result.sims_used,
             stop_reason=result.stop_reason,
+        )
+
+
+class LocalTunerRefiner:
+    """Refiner vòng kín KHÔNG dùng LLM: tune tham số/config quanh core bằng eval local
+    (Task 3 `tune`), rồi CHỈ sim Brain 1 lần cho cấu hình tốt nhất tìm được. Drop-in
+    thay `RefinementLoopRefiner` — cùng protocol `refine_and_sim(candidate) -> IdeaOutcome`.
+
+    Local Sharpe < `min_local_sharpe` (mặc định `PRE_SIM_LOCAL_SHARPE_FLOOR`) -> KHÔNG đốt
+    quota Brain, trả outcome 0 sim ngay (chắc chắn rác theo hiệu chỉnh local≈Brain/1.28)."""
+
+    def __init__(
+        self, *, simulator, repo, data, local_config, sim_config,
+        pool_corr_fn=None, min_local_sharpe: float = PRE_SIM_LOCAL_SHARPE_FLOOR,
+        hard_filter_fn=_default_filter, score_vector_fn=_score_vector,
+        region: str = "USA", universe: str = "TOP3000", registry=None, tune_fn=None,
+        max_pool_corr: float = 0.70,
+    ) -> None:
+        self.simulator = simulator
+        self.repo = repo
+        self.data = data
+        self.local_config = local_config
+        self.sim_config = sim_config
+        self.pool_corr_fn = pool_corr_fn
+        self.min_local_sharpe = min_local_sharpe
+        self.hard_filter_fn = hard_filter_fn
+        self.score_vector_fn = score_vector_fn
+        self.region = region
+        self.universe = universe
+        self.registry = registry
+        self.max_pool_corr = max_pool_corr
+        self._tune = tune_fn or _tune
+
+    def refine_and_sim(self, candidate: ShortlistCandidate) -> IdeaOutcome:
+        # Giai đoạn 1 (không mạng): coordinate descent quanh core + config, đánh giá bằng
+        # đúng đường backtest local (Evaluator -> PortfolioBuilder -> Backtester -> Metrics).
+        tr = self._tune(candidate.expr, self.local_config, self.data, registry=self.registry)
+        canonical_hash = CanonicalHasher().visit(parse(tr.best_expr))
+        if tr.local_sharpe < self.min_local_sharpe:
+            # Dưới sàn pre-sim: KHÔNG gọi simulator -> sims_used=0, không tốn quota Brain.
+            return IdeaOutcome(
+                expr=tr.best_expr, canonical_hash=canonical_hash, passed=False,
+                wq_alpha_id=None, sharpe=None, fitness=None, turnover=None,
+                self_corr=None, sims_used=0, stop_reason="local_floor",
+            )
+
+        # Giai đoạn 2 (1 lần gọi mạng): sim Brain đúng config tốt nhất tune() tìm được.
+        sim_cfg = self.sim_config.with_overrides(
+            decay=tr.best_config.decay, truncation=tr.best_config.truncation,
+        )
+        try:
+            result = self.simulator.simulate(tr.best_expr, settings=sim_cfg.to_settings())
+        except (AuthExpiredError, QuotaExceededError) as exc:
+            # Cùng lý do như RefinementLoopRefiner: session chết hoặc hết quota ngày ->
+            # ClosedLoop cần dừng gọn, không coi là "sim lỗi" rồi thử thêm ứng viên khác.
+            raise QuotaExhausted(str(exc)) from exc
+
+        vector = self.score_vector_fn(result)
+        alpha_id = self.repo.save_alpha(
+            tr.best_expr, source="gp_local_tuner", hypothesis={},
+            description="local-tuned motif", parent_id=None,
+        )
+        self.repo.save_simulation(
+            result, region=self.region, universe=self.universe,
+            score=vector.total, alpha_id=alpha_id, config_key=sim_cfg.key(),
+        )
+        ok_hard, _reasons = self.hard_filter_fn(result)
+        passed = result.status == "passed" and ok_hard
+        self_corr = None
+        if passed and self.pool_corr_fn is not None and result.alpha_id:
+            self_corr = self.pool_corr_fn(result.alpha_id)
+            if self_corr is not None and abs(self_corr) >= self.max_pool_corr:
+                passed = False
+        return IdeaOutcome(
+            expr=tr.best_expr, canonical_hash=canonical_hash, passed=passed,
+            wq_alpha_id=result.alpha_id, sharpe=result.sharpe, fitness=result.fitness,
+            turnover=result.turnover, self_corr=self_corr, sims_used=1,
+            stop_reason="local_tuned",
         )
 
 
