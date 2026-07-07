@@ -54,8 +54,14 @@ class PortfolioBuilder:
         if kind is Neutralization.NONE:
             return signal
         if kind is Neutralization.MARKET:
-            row_mean = np.nanmean(signal, axis=1, keepdims=True)
-            demeaned: Panel = signal - row_mean
+            # Mean per hàng qua Σ/đếm trên ô HỮU HẠN (thay np.nanmean) — hàng toàn-NaN (vd
+            # prefix warm-up của decay/lookback) KHÔNG phun 'Mean of empty slice'; row_mean=NaN
+            # nên hàng đó giữ NaN sau khi trừ (đồng nhất nanmean, chỉ tắt tiếng ồn).
+            finite = np.isfinite(signal)
+            cnt = finite.sum(axis=1, keepdims=True)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                row_mean = np.where(cnt > 0, np.where(finite, signal, 0.0).sum(axis=1, keepdims=True) / cnt, np.nan)
+                demeaned: Panel = signal - row_mean
             return demeaned
         group_key = _GROUP_KEY[kind]
         groups = data.groups[group_key]  # raise KeyError nếu thiếu — đúng hợp đồng
@@ -84,7 +90,8 @@ class PortfolioBuilder:
         with np.errstate(invalid="ignore", divide="ignore"):
             means = np.where(counts > 0, sums / counts, np.nan)
         cell_mean = means[bucket]  # map mean nhóm về từng cell
-        return np.where(valid, signal - cell_mean, np.nan)
+        with np.errstate(invalid="ignore"):  # inf/NaN trong signal -> NaN im lặng (chỉ ô valid giữ lại)
+            return np.where(valid, signal - cell_mean, np.nan)
 
     def _truncate(self, signal: Panel, cap: float) -> Panel:
         """Giới hạn tỉ lệ mỗi vị thế: `|w_i| <= cap * gross` (gross = tổng |w| trong ngày).

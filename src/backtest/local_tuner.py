@@ -127,7 +127,7 @@ def tune(
     data,
     *,
     registry: OperatorRegistry | None = None,
-    budget: int = 40,
+    budget: int = 48,  # lưới config gấp đôi (decay×trunc×neut=24); chừa ~24 eval cho window/hệ số
     max_turnover: float = _MAX_TURNOVER,
     eval_fn=None,
 ) -> TuneResult:
