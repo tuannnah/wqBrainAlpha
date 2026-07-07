@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from src.backtest.config import PortfolioConfig
+from src.backtest.config import Neutralization, PortfolioConfig
 from src.lang.ast import Call, Constant, Node
 from src.lang.parser import parse
 from src.lang.registry import ArgKind, OperatorRegistry, default_registry
@@ -58,6 +58,8 @@ def set_constant(node: Node, path: tuple[int, ...], new_value: float) -> Node:
 _WINDOW_LADDER = (3, 5, 10, 20, 40, 60, 120)
 _DECAYS = (2, 3, 4, 6)
 _TRUNCS = (0.02, 0.05, 0.08)
+# Chỉ MARKET/SECTOR: docs khuyến nghị cho price/volume + eval local được (panel có group sector).
+_NEUTS = (Neutralization.MARKET, Neutralization.SECTOR)
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +162,7 @@ def tune(
     # Chừa ngân sách cho Giai đoạn 2 (config): biểu thức nhiều hằng có thể nuốt hết budget ở
     # Giai đoạn 1, khiến decay/truncation — thứ quan trọng nhất — không bao giờ được quét.
     # Giới hạn Giai đoạn 1 ở `budget - kích thước lưới config` để Giai đoạn 2 luôn có chỗ.
-    phase1_cap = max(1, budget - len(_DECAYS) * len(_TRUNCS))
+    phase1_cap = max(1, budget - len(_DECAYS) * len(_TRUNCS) * len(_NEUTS))
 
     # Giai đoạn 1: quét window/hệ số của từng hằng số trong biểu thức.
     for path, value, is_window in iter_constants(base_node, registry):
@@ -176,18 +178,19 @@ def tune(
             if s > best:
                 best, best_node, best_metrics = s, trial, m
 
-    # Giai đoạn 2: quét config (decay x truncation) quanh biểu thức tốt nhất tìm được.
-    for d in _DECAYS:
-        for t in _TRUNCS:
-            if evals >= budget:
-                break
-            cfg = replace(base_config, decay=d, truncation=t)
-            if cfg == best_config:
-                continue
-            s, m = score(best_node, cfg)
-            evals += 1
-            if s > best:
-                best, best_config, best_metrics = s, cfg, m
+    # Giai đoạn 2: quét config (decay x truncation x neutralization) quanh biểu thức tốt nhất.
+    for neut in _NEUTS:
+        for d in _DECAYS:
+            for t in _TRUNCS:
+                if evals >= budget:
+                    break
+                cfg = replace(base_config, decay=d, truncation=t, neutralization=neut)
+                if cfg == best_config:
+                    continue
+                s, m = score(best_node, cfg)
+                evals += 1
+                if s > best:
+                    best, best_config, best_metrics = s, cfg, m
 
     return TuneResult(
         best_expr=Serializer().visit(best_node), best_config=best_config,
