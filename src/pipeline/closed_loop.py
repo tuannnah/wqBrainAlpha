@@ -49,6 +49,9 @@ class IdeaOutcome:
     self_corr: float | None
     sims_used: int
     stop_reason: str
+    # Cờ Power Pool (docs Brain): Sharpe>=1.0, <=8 operator, <=3 field (trừ grouping),
+    # self_corr<=0.5. Default False để tương thích ngược với nơi tạo IdeaOutcome cũ.
+    power_pool_eligible: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +193,8 @@ class ClosedLoop:
                         _fmt(outcome.sharpe), _fmt(outcome.fitness), _fmt(outcome.turnover),
                         _fmt(outcome.self_corr), outcome.sims_used,
                     )
+                if getattr(outcome, "power_pool_eligible", False):
+                    logger.info("   ⭐ Power Pool eligible (Sharpe≥1.0, ≤8 op, ≤3 field, self_corr≤0.5)")
                 logger.info(
                     "   Σ {} ý tưởng / {} sim / {} pass / {} bỏ.",
                     ideas_tried, sims_used, n_passed, n_abandoned,

@@ -15,13 +15,33 @@ from config.thresholds import PRE_SIM_LOCAL_SHARPE_FLOOR
 from src.backtest.local_tuner import tune as _tune
 from src.gp.engine import GPEngine
 from src.lang.parser import parse
-from src.lang.visitors import CanonicalHasher
+from src.lang.registry import default_registry
+from src.lang.visitors import CanonicalHasher, FieldCollector, OperatorCollector
 from src.pipeline.closed_loop import IdeaOutcome, QuotaExhausted
 from src.pipeline.runner import generate_many
 from src.pipeline.shortlist import ShortlistCandidate
 from src.scoring.filter import passes as _default_filter
 from src.scoring.vector import score_vector as _score_vector
 from src.simulation.simulator import AuthExpiredError, QuotaExceededError
+
+# Grouping field không tính vào giới hạn "3 field dữ liệu" của Power Pool (chỉ field dữ liệu
+# thật, vd close/volume — field group như sector/industry chỉ dùng để neutralize).
+_POWER_POOL_GROUPS = frozenset(
+    {"country", "exchange", "market", "sector", "industry", "subindustry", "currency"}
+)
+
+
+def is_power_pool(expr: str, sharpe: float | None, self_corr: float | None, registry: Any) -> bool:
+    """Đủ tiêu chí Power Pool (docs Brain): <=8 operator, <=3 field (trừ grouping),
+    Sharpe>=1.0, self_corr None HOẶC <=0.5."""
+    if sharpe is None or sharpe < 1.0:
+        return False
+    if self_corr is not None and abs(self_corr) > 0.5:
+        return False
+    node = parse(expr)
+    n_ops = len(OperatorCollector().visit(node))
+    n_fields = len(FieldCollector(registry).visit(node) - _POWER_POOL_GROUPS)
+    return n_ops <= 8 and n_fields <= 3
 
 
 class RefinementLoopRefiner:
@@ -154,11 +174,13 @@ class LocalTunerRefiner:
             self_corr = self.pool_corr_fn(result.alpha_id)
             if self_corr is not None and abs(self_corr) >= self.max_pool_corr:
                 passed = False
+        registry = self.registry or default_registry()
+        power_pool = passed and is_power_pool(tr.best_expr, result.sharpe, self_corr, registry)
         return IdeaOutcome(
             expr=tr.best_expr, canonical_hash=canonical_hash, passed=passed,
             wq_alpha_id=result.alpha_id, sharpe=result.sharpe, fitness=result.fitness,
             turnover=result.turnover, self_corr=self_corr, sims_used=1,
-            stop_reason="local_tuned",
+            stop_reason="local_tuned", power_pool_eligible=power_pool,
         )
 
 
