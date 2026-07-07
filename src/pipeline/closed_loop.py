@@ -183,9 +183,10 @@ class ClosedLoop:
                     n_passed += 1
                 else:
                     n_abandoned += 1
-                # Kết quả 1 dòng: 0 sim = bị gate local chặn trước khi đốt quota Brain.
+                # Kết quả 1 dòng: 0 sim = bị gate local chặn trước khi đốt quota Brain. In kèm
+                # lý do (stop_reason) để phân biệt local_floor (Sharpe/turnover) vs sub_universe.
                 if outcome.sims_used == 0:
-                    logger.info("   → ⚠ bị gate local chặn (0 sim Brain).")
+                    logger.info("   → ⚠ bị gate local chặn [{}] (0 sim Brain).", outcome.stop_reason)
                 else:
                     logger.info(
                         "   → {} Sharpe={} fit={} TO={} self_corr={} ({} sim)",
