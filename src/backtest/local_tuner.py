@@ -60,6 +60,7 @@ _DECAYS = (2, 3, 4, 6)
 _TRUNCS = (0.02, 0.05, 0.08)
 # Chỉ MARKET/SECTOR: docs khuyến nghị cho price/volume + eval local được (panel có group sector).
 _NEUTS = (Neutralization.MARKET, Neutralization.SECTOR)
+_MAX_TURNOVER = 0.70  # Brain đòi 1%-70%; config vượt trần là rác chắc chắn fail.
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +128,7 @@ def tune(
     *,
     registry: OperatorRegistry | None = None,
     budget: int = 40,
+    max_turnover: float = _MAX_TURNOVER,
     eval_fn=None,
 ) -> TuneResult:
     """Coordinate descent quanh `expr`: quét window (thang bậc) + hệ số (×0.5/×2) của từng
@@ -136,6 +138,9 @@ def tune(
     `eval_fn(node, config) -> float` inject được cho test deterministic không cần backtest
     thật; None thì dùng `local_sharpe` thật trên `data`/`registry`. Biến thể làm `eval_fn`
     raise lỗi bị coi là −inf (bỏ qua), KHÔNG làm sập `tune`.
+
+    `max_turnover` chỉ áp ở đường thật (khi `eval_fn is None`): Brain đòi turnover 1%-70%,
+    config vượt trần bị loại (điểm −inf) dù Sharpe local cao hơn, để winner luôn nộp được.
     """
     registry = registry or default_registry()
 
@@ -148,6 +153,8 @@ def tune(
             m = local_metrics(node, config, data, registry)
             if m is None:
                 return float("-inf"), None
+            if m.turnover is not None and m.turnover > max_turnover:
+                return float("-inf"), m   # vượt trần turnover -> loại (giữ metrics để báo cáo)
             s = m.sharpe
             return (float(s) if s is not None and np.isfinite(s) else float("-inf")), m
         except (KeyError, ValueError, ZeroDivisionError):
