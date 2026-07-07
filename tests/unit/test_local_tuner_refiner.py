@@ -148,3 +148,43 @@ def test_refiner_crowded_thi_khong_pass():
     out = r.refine_and_sim(_cand())
     assert out.passed is False
     assert out.self_corr == 0.9
+
+
+def test_refiner_sub_universe_fail_thi_khong_sim(monkeypatch):
+    """Winner KHÔNG đạt proxy sub-universe -> gate chặn TRƯỚC sim: không gọi simulator,
+    sims_used=0, stop_reason='sub_universe'. (Phủ trực tiếp nhánh reject của gate Task 4.)"""
+    monkeypatch.setattr("src.backtest.sub_universe.sub_universe_ok", lambda *a, **kw: False)
+    from src.backtest.local_tuner import TuneResult
+    from src.backtest.metrics_local import AlphaMetrics
+
+    metrics = AlphaMetrics(
+        sharpe=1.6, annual_return=0.2, turnover=0.3, max_drawdown=0.1,
+        fitness=1.2, per_year_sharpe={2020: 1.5}, weight_concentration=0.05,
+    )
+
+    class _Sim:
+        def __init__(self):
+            self.calls = 0
+
+        def simulate(self, expr, settings=None):
+            self.calls += 1
+            return _passed_result(expr, settings)
+
+    def fake_tune(expr, cfg, data, **kw):
+        return TuneResult(
+            best_expr="rank(ts_delta(close, 20))",
+            best_config=PortfolioConfig(decay=3, truncation=0.02),
+            local_sharpe=1.6, local_metrics=metrics,
+        )
+
+    sim = _Sim()
+    r = LocalTunerRefiner(
+        simulator=sim, repo=_Repo(), data=object(),
+        local_config=PortfolioConfig(decay=4, truncation=0.08),
+        sim_config=SimConfig.default(), tune_fn=fake_tune,
+    )
+    out = r.refine_and_sim(_cand())
+    assert sim.calls == 0
+    assert out.sims_used == 0
+    assert out.stop_reason == "sub_universe"
+    assert out.passed is False
