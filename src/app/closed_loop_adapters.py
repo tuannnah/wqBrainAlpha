@@ -164,9 +164,14 @@ class LocalTunerRefiner:
                 self_corr=None, sims_used=0, stop_reason="sub_universe",
             )
 
-        # Giai đoạn 2 (1 lần gọi mạng): sim Brain đúng config tốt nhất tune() tìm được.
+        # Giai đoạn 2 (1 lần gọi mạng): sim Brain đúng config tốt nhất tune() tìm được —
+        # bao gồm CẢ neutralization đã sweep (Task 1: MARKET/SECTOR), không chỉ decay/
+        # truncation (thiếu neutralization ở đây từng khiến Brain sim luôn chạy default
+        # SUBINDUSTRY dù local đã tune ra config tốt hơn). `.name` của enum Neutralization
+        # (MARKET/SECTOR, chữ hoa) khớp thẳng VALID_NEUTRALIZATIONS của SimConfig.
         sim_cfg = self.sim_config.with_overrides(
             decay=tr.best_config.decay, truncation=tr.best_config.truncation,
+            neutralization=tr.best_config.neutralization.name,
         )
         try:
             result = self.simulator.simulate(tr.best_expr, settings=sim_cfg.to_settings())

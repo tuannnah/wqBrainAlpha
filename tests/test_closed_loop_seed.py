@@ -56,10 +56,13 @@ def test_closed_loop_configs_local_ha_cap_brain_day_du() -> None:
 
 
 def test_closed_loop_defaults_la_bo_config_thong_nhat() -> None:
-    """Default closed-loop phải là bộ thống nhất SUBINDUSTRY/4/0.08 (đổi mặc định engine)."""
+    """Default closed-loop phải là bộ thống nhất MARKET/4/0.08 (Task 5: đổi mặc định
+    neutralization SUBINDUSTRY -> MARKET — docs Brain khuyến nghị MARKET/SECTOR cho alpha
+    price/volume, và sweep neutralization (Task 1) sẽ tự chọn lại MARKET/SECTOR cho từng
+    ứng viên nên default chỉ là điểm khởi đầu)."""
     import inspect
 
     sig = inspect.signature(main._run_closed_loop_session)
-    assert sig.parameters["neutralization"].default == "SUBINDUSTRY"
+    assert sig.parameters["neutralization"].default == "MARKET"
     assert sig.parameters["decay"].default == 4
     assert sig.parameters["truncation"].default == 0.08

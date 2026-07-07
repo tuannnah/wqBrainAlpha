@@ -150,6 +150,37 @@ def test_refiner_crowded_thi_khong_pass():
     assert out.self_corr == 0.9
 
 
+def test_refiner_ap_neutralization_da_tune_vao_sim():
+    """Neutralization mà tune() (Task 1) chọn (sweep MARKET/SECTOR) PHẢI được áp vào
+    SimConfig gửi Brain — trước đây refiner chỉ forward decay/truncation, bỏ quên
+    neutralization đã tune -> Brain sim luôn chạy default SUBINDUSTRY dù local đã tune ra
+    SECTOR/MARKET tốt hơn."""
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.backtest.local_tuner import TuneResult
+
+    seen = {}
+
+    class _Sim:
+        def simulate(self, expr, settings=None):
+            seen["neut"] = settings.get("neutralization")
+            return _passed_result(expr, settings)
+
+    def fake_tune(expr, cfg, data, **kw):
+        return TuneResult(
+            best_expr="rank(ts_delta(close, 20))",
+            best_config=PortfolioConfig(neutralization=Neutralization.SECTOR, decay=3, truncation=0.02),
+            local_sharpe=1.6, local_metrics=None,
+        )
+
+    r = LocalTunerRefiner(
+        simulator=_Sim(), repo=_Repo(), data=object(),
+        local_config=PortfolioConfig(decay=4, truncation=0.08),
+        sim_config=SimConfig.default(), tune_fn=fake_tune,
+    )
+    r.refine_and_sim(_cand())
+    assert seen["neut"] == "SECTOR"   # neutralization tune -> áp vào Brain sim
+
+
 def test_refiner_sub_universe_fail_thi_khong_sim(monkeypatch):
     """Winner KHÔNG đạt proxy sub-universe -> gate chặn TRƯỚC sim: không gọi simulator,
     sims_used=0, stop_reason='sub_universe'. (Phủ trực tiếp nhánh reject của gate Task 4.)"""

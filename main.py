@@ -646,7 +646,7 @@ def _run_closed_loop_session(
     session_factory, client, region, universe, delay, market_data_dir,
     *, pop_size: int = 30, n_generations: int = 3, top_k: int = 10, max_corr: float = 0.70,
     patience: int = 5, max_ideas: int | None = None,
-    neutralization: str = "SUBINDUSTRY", decay: int = 4, truncation: float = 0.08,
+    neutralization: str = "MARKET", decay: int = 4, truncation: float = 0.08,
     base_seed: int | None = None, refiner_kind: str = "local",
 ) -> bool:
     """Dựng + chạy vòng kín AI+MiniBrain thật (dùng chung cho CLI `closed-loop` và menu mục 5).
@@ -747,7 +747,9 @@ def closed_loop_cmd(
     top_k: int = typer.Option(10, help="Số ý tưởng/batch sau decorrelate"),
     max_corr: float = typer.Option(0.70),
     max_ideas: int = typer.Option(0, help="0 = không trần (chạy đến hết quota)"),
-    neutralization: str = typer.Option("SUBINDUSTRY"),
+    neutralization: str = typer.Option(
+        "MARKET", help="neutralization khoi diem (sweep se chon MARKET/SECTOR)"
+    ),
     decay: int = typer.Option(4),
     truncation: float = typer.Option(0.08),
     base_seed: int = typer.Option(
