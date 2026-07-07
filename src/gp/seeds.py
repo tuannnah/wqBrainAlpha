@@ -102,10 +102,13 @@ def all_seed_cores(
     hypothesis_gen: _HypothesisGenLike | None = None,
     translator: _TranslatorLike | None = None,
     research_directions: list[str] | None = None,
+    field_names: set[str] | None = None,
 ) -> list[Node]:
     """Gộp toàn bộ seed: families + novel_ideas luôn chạy (rẻ, không mạng); LLM tùy chọn,
     fail-fast nếu with_llm=True mà thiếu dependency (tránh âm thầm bỏ qua phần LLM khi
-    caller tưởng đã bật)."""
+    caller tưởng đã bật). Khi `field_names` được truyền, LOẠI các core tham chiếu field
+    ngoài panel local (alt-data chắc chắn chết ở gate `fields_ok`) — tránh pha loãng quần
+    thể GP và tiêu lượt đánh giá vô ích."""
     nodes = seed_cores_from_families() + seed_cores_from_novel_ideas()
     if with_llm:
         if hypothesis_gen is None or translator is None or not research_directions:
@@ -113,4 +116,10 @@ def all_seed_cores(
                 "with_llm=True cần hypothesis_gen, translator, research_directions đầy đủ"
             )
         nodes += seed_cores_from_llm(hypothesis_gen, translator, research_directions)
+    if field_names is not None:
+        from src.lang.registry import default_registry
+        from src.lang.visitors import FieldCollector
+
+        reg = default_registry()
+        nodes = [n for n in nodes if FieldCollector(reg).visit(n).issubset(field_names)]
     return nodes

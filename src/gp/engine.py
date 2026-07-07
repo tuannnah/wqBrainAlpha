@@ -294,7 +294,10 @@ class GPEngine:
         ``pool_corr`` được nạp lại từ DB ở đầu mỗi vòng (pool lớn dần khi có alpha pass)."""
         rng = np.random.default_rng(self.seed)
         fields = tuple(sorted(self.data.field_names()))
-        seed_cores = all_seed_cores(with_llm=self.with_llm_seeds)
+        seed_cores = all_seed_cores(
+            with_llm=self.with_llm_seeds,
+            field_names=set(self.data.field_names()),
+        )
         population = init_population(
             registry=self.registry,
             rng=rng,

@@ -25,6 +25,22 @@ from src.lang.registry import default_registry
 from src.lang.visitors import DepthVisitor, FieldCollector
 
 
+def local_usable(expr: str, data: MarketData) -> bool:
+    """True nếu MỌI field (vị trí PANEL) trong expr đều có trong panel local.
+
+    Dùng đúng logic `fields_ok` của gate (FieldCollector chỉ gom field vị trí PANEL,
+    bỏ WINDOW/SCALAR/GROUP) để KHÔNG loại oan alpha group_neutralize. parse lỗi -> False.
+    Dùng để lọc seed alt-data (field ngoài panel local) TRƯỚC khi đưa vào quần thể GP —
+    tránh tốn lượt đánh giá cho core chắc chắn fail ở `fields_ok`.
+    """
+    try:
+        node = parse(expr)
+    except ParseError:
+        return False
+    fields = FieldCollector(default_registry()).visit(node)
+    return fields.issubset(data.field_names())
+
+
 @dataclass(frozen=True, slots=True)
 class LocalGateVerdict:
     """Kết quả gate local: pass/fail kèm lý do (để ghi `record_failure`)."""
