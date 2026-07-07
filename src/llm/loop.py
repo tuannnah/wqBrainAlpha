@@ -108,6 +108,7 @@ class RefinementLoop:
         reseed_every: int = 0,
         referee=None,
         config_tuner=None,
+        min_refine_steps_before_abandon: int = 0,
         local_gate_fn: Callable[[str, PortfolioConfig, MarketData], LocalGateVerdict] | None = None,
         market_data: MarketData | None = None,
         local_gate_cfg: PortfolioConfig | None = None,
@@ -164,6 +165,10 @@ class RefinementLoop:
         # tune_config. Trần cứng (patience/max_sims) vẫn là giới hạn an toàn cuối cùng.
         self.referee = referee
         self.config_tuner = config_tuner
+        # Sàn số bước refine tối thiểu TRƯỚC khi tôn trọng 'abandon' của referee: chống bỏ
+        # hướng quá sớm (referee hay abandon ngay sau seed ở total ~0.4, chưa cho refine
+        # thử vượt biên). 0 = tôn trọng abandon ngay (hành vi cũ).
+        self.min_refine_steps_before_abandon = min_refine_steps_before_abandon
         # Local pre-filter BẮT BUỘC trước simulate (D9 — gỡ đường cũ "LLM->sim trực tiếp").
         # market_data=None -> gate bị bỏ qua (chưa wire data thật, Phase 3 MVP); có
         # market_data -> MỌI candidate phải pass local_gate_fn trước khi tốn sim.
@@ -459,7 +464,11 @@ class RefinementLoop:
                 # KHÔNG bỏ hướng dựa trên một sim LỖI/TIMEOUT: đó là nhiễu hạ tầng (metric
                 # rỗng), không phải bằng chứng hướng kém. Bỏ qua abandon, xuống nhánh refine
                 # để lấy một sim thật; trần patience/max_sims vẫn chặn vòng vô hạn.
-                if verdict.action == "abandon" and not best_ev.sim_error:
+                if (
+                    verdict.action == "abandon"
+                    and not best_ev.sim_error
+                    and step >= self.min_refine_steps_before_abandon
+                ):
                     abandoned = True
                     break
                 if verdict.action == "tune_config" and self.config_tuner is not None:

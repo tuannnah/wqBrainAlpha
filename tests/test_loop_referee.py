@@ -121,6 +121,27 @@ def test_referee_abandon_dung_som_truoc_khi_refine():
     assert res.best_candidate.expression == "rank(close)"
 
 
+def test_referee_abandon_bi_hoan_toi_khi_du_so_buoc():
+    """min_refine_steps_before_abandon=2 -> referee abandon bị bỏ qua cho tới khi đã
+    refine đủ 2 bước, chống bỏ hướng quá sớm ngay sau seed."""
+    scores = {
+        "rank(close)": 1.0,
+        "rank(ts_mean(close, 5))": 1.5,
+        "rank(ts_delta(close, 3))": 2.0,
+    }
+    sim = FakeSimulator(results=lambda e: _result(e, scores[e]))
+    refiner = _FakeRefiner(["rank(ts_mean(close, 5))", "rank(ts_delta(close, 3))"])
+    loop = _loop(
+        _FakeTranslator("rank(close)"), refiner, sim, _repo(),
+        max_simulations=10, no_improve_patience=5,
+        referee=_FakeReferee([ABANDON, ABANDON, ABANDON]),
+        min_refine_steps_before_abandon=2,
+    )
+    res = loop.run("X")
+    assert refiner.calls >= 2          # abandon bị hoãn cho tới khi refine đủ 2 bước
+    assert res.stop_reason == "abandon"
+
+
 def test_referee_khong_abandon_khi_sim_loi_timeout():
     """Sim seed lỗi/timeout (status=error, metric rỗng) -> referee KHÔNG được abandon dựa
     trên metric rác của hạ tầng; phải refine để có một sim thật. Chỉ khi có best 'thật'

@@ -1010,6 +1010,9 @@ def _make_research_loop(
         reseed_every=reseed_every,
         referee=referee,
         config_tuner=config_tuner,
+        # Marathon: cho referee ít nhất 2 bước refine trước khi được bỏ hướng — tránh
+        # abandon ngay sau seed (thủ phạm 'best total=0.4, 1 sim, abandon' trong log dài).
+        min_refine_steps_before_abandon=2 if marathon else 0,
     )
     return loop, deepseek
 
