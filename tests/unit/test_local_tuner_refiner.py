@@ -87,9 +87,17 @@ def test_refiner_quota_thi_nem_QuotaExhausted():
         pass
 
 
-def test_refiner_luu_local_eval_cho_calibration():
+def test_refiner_luu_local_eval_cho_calibration(monkeypatch):
     """Khi có calib_repo, refiner lưu expression + evaluation local của expr ĐÃ TUNE (theo
-    hash) -> join brain_local_sharpe_pairs khớp -> ρ local↔Brain thu được dữ liệu."""
+    hash) -> join brain_local_sharpe_pairs khớp -> ρ local↔Brain thu được dữ liệu.
+
+    Fixture (Task 4): local_metrics KHÔNG None ở đây (khác các test refiner khác) vì đúng là
+    thứ đang được kiểm — nên KHÔNG dùng data=object() suông được nữa: refine_and_sim giờ chạy
+    gate sub_universe_ok thật khi local_metrics is not None, mà object() không phải MarketData
+    (không có .field/.universe) sẽ vỡ. Test này chỉ nhắm calib-save (đã có test_sub_universe.py
+    riêng cho gate) nên monkeypatch sub_universe_ok về True — giữ data=object() gọn, tách bạch
+    mối quan tâm, tránh phụ thuộc kết quả backtest thật trên panel giả (dễ chập chờn)."""
+    monkeypatch.setattr("src.backtest.sub_universe.sub_universe_ok", lambda *a, **kw: True)
     from src.backtest.local_tuner import TuneResult
     from src.backtest.metrics_local import AlphaMetrics
 

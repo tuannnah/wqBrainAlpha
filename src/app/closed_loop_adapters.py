@@ -147,6 +147,23 @@ class LocalTunerRefiner:
                 self_corr=None, sims_used=0, stop_reason="local_floor",
             )
 
+        # Proxy robustness sub-universe (xấp xỉ sub-universe test của Brain): winner phải giữ
+        # Sharpe khi giới hạn về nhóm mã thanh khoản nhất -> không đạt thì KHÔNG đốt quota Brain.
+        # Chỉ chạy khi có local_metrics thật (tr.local_metrics is not None) -> test refiner cũ
+        # dùng eval_fn giả (data=object(), không backtest thật) không bị vỡ vì gate này.
+        from src.backtest.sub_universe import sub_universe_ok
+
+        registry = self.registry or default_registry()
+        if tr.local_metrics is not None and not sub_universe_ok(
+            parse(tr.best_expr), tr.best_config, self.data, registry,
+            full_sharpe=tr.local_metrics.sharpe,
+        ):
+            return IdeaOutcome(
+                expr=tr.best_expr, canonical_hash=canonical_hash, passed=False,
+                wq_alpha_id=None, sharpe=None, fitness=None, turnover=None,
+                self_corr=None, sims_used=0, stop_reason="sub_universe",
+            )
+
         # Giai đoạn 2 (1 lần gọi mạng): sim Brain đúng config tốt nhất tune() tìm được.
         sim_cfg = self.sim_config.with_overrides(
             decay=tr.best_config.decay, truncation=tr.best_config.truncation,
