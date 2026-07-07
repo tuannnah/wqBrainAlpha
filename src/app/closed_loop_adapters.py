@@ -206,6 +206,47 @@ class LocalTunerRefiner:
         )
 
 
+# Core price/volume ĐÃ KIỂM CHỨNG trên Brain (commit d481fe1: intraday mean-reversion
+# close↔vwap/open, Sharpe ~1.5+ và qua HẾT is.checks). Seed thẳng để LocalTuner tune quanh
+# thay vì để GP random pha loãng — bằng chứng live: GP thường sinh biến thể yếu (local<0.5).
+VERIFIED_CORES: tuple[str, ...] = (
+    # Tổ hợp hai kênh intraday (biến thể đạt Sharpe cao nhất ~1.57).
+    "add(multiply(2, multiply(-1, ts_mean(subtract(close, vwap), 10))), "
+    "multiply(-1, ts_mean(subtract(close, open), 5)))",
+    "add(multiply(1, multiply(-1, ts_mean(subtract(close, vwap), 10))), "
+    "multiply(-1, ts_mean(subtract(close, open), 5)))",
+    # Từng kênh riêng (đơn giản hơn -> hợp cấu trúc Power Pool: ít op/field).
+    "multiply(-1, ts_mean(subtract(close, vwap), 10))",
+    "multiply(-1, ts_mean(subtract(close, vwap), 20))",
+    "multiply(-1, ts_mean(subtract(close, open), 5))",
+    "multiply(-1, ts_mean(subtract(close, open), 10))",
+)
+
+
+class CuratedIdeaSource:
+    """Yield các core ĐÃ KIỂM CHỨNG ở batch ĐẦU, rồi ủy quyền cho nguồn fallback (GP). Đưa hạt
+    giống mạnh vào pipeline trước để LocalTuner tune quanh -> chạm alpha đạt chuẩn nộp nhanh,
+    thay vì phụ thuộc GP random tình cờ sinh đúng cấu trúc thắng."""
+
+    def __init__(self, *, fallback, cores: tuple[str, ...] = VERIFIED_CORES) -> None:
+        self._fallback = fallback
+        self._cores = tuple(cores)
+        self._served_curated = False
+
+    def next_batch(self):
+        if not self._served_curated:
+            self._served_curated = True
+            import numpy as np
+
+            empty = np.zeros(0, dtype=np.float64)
+            dates = np.zeros(0, dtype="datetime64[ns]")
+            return [
+                ShortlistCandidate(expr=e, metrics=None, pnl=empty, dates=dates)
+                for e in self._cores
+            ]
+        return self._fallback.next_batch()
+
+
 class GPIdeaSource:
     """Nguồn ý tưởng cho ClosedLoop: mỗi next_batch() chạy GPEngine với seed MỚI (tăng dần để
     đa dạng) rồi rút short-list qua generate_many. Pool decorrelate lấy từ repo.load_pool()."""
@@ -263,7 +304,7 @@ def build_closed_loop(
     pop_size: int = 30, n_generations: int = 3, base_seed: int = 42,
     top_k: int = 10, max_corr: float = 0.70,
     calibrate_every: int = 10, rho_bar: float = 0.5, max_ideas: int | None = None,
-    refiner: object | None = None,
+    refiner: object | None = None, curated_seeds: bool = True,
 ) -> "ClosedLoop":
     """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
     bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
@@ -272,10 +313,14 @@ def build_closed_loop(
     (main.py) truyền vào; không dùng tới khi đã truyền `refiner` tường minh."""
     from src.pipeline.closed_loop import CalibrationTracker, ClosedLoop
 
-    idea_source = GPIdeaSource(
+    idea_source: object = GPIdeaSource(
         data, repo, config, registry, pop_size=pop_size, n_generations=n_generations,
         base_seed=base_seed, top_k=top_k, max_corr=max_corr,
     )
+    # Thử core price/volume ĐÃ KIỂM CHỨNG (Brain ~1.5+) TRƯỚC, rồi mới tới GP random — hạt
+    # giống mạnh vào pipeline sớm để LocalTuner tune quanh -> chạm alpha đạt chuẩn nộp nhanh.
+    if curated_seeds:
+        idea_source = CuratedIdeaSource(fallback=idea_source)
     if refiner is None:
         refiner = RefinementLoopRefiner(loop)
     tracker = CalibrationTracker(repo, every=calibrate_every, rho_bar=rho_bar)  # type: ignore[arg-type]
