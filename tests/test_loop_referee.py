@@ -90,6 +90,14 @@ def _result(expr, sharpe, status="passed"):
     )
 
 
+def _error_result(expr):
+    """Sim lỗi/timeout: status='error', metric rỗng (như timeout khi poll simulation)."""
+    return SimulationResult(
+        expression=expr, alpha_id=None, status="error",
+        raw={"error": "timeout khi poll simulation"},
+    )
+
+
 def _loop(translator, refiner, sim, repo, **kw):
     return RefinementLoop(
         hypothesis_gen=_FakeHyp(), translator=translator, refiner=refiner,
@@ -111,6 +119,25 @@ def test_referee_abandon_dung_som_truoc_khi_refine():
     assert refiner.calls == 0          # bỏ hướng trước khi refine
     assert res.stop_reason == "abandon"
     assert res.best_candidate.expression == "rank(close)"
+
+
+def test_referee_khong_abandon_khi_sim_loi_timeout():
+    """Sim seed lỗi/timeout (status=error, metric rỗng) -> referee KHÔNG được abandon dựa
+    trên metric rác của hạ tầng; phải refine để có một sim thật. Chỉ khi có best 'thật'
+    mà referee vẫn abandon thì mới bỏ hướng."""
+    def results(e):
+        return _error_result(e) if e == "rank(close)" else _result(e, 1.5)
+
+    sim = FakeSimulator(results=results)
+    refiner = _FakeRefiner(["rank(ts_mean(close, 5))"])
+    loop = _loop(
+        _FakeTranslator("rank(close)"), refiner, sim, _repo(),
+        max_simulations=10, no_improve_patience=5,
+        referee=_FakeReferee([ABANDON, ABANDON]),
+    )
+    res = loop.run("X")
+    assert refiner.calls >= 1  # đã refine dù referee bảo abandon trên sim lỗi
+    assert res.best_candidate.expression == "rank(ts_mean(close, 5))"
 
 
 # ------------------------------------------------------------------ tune_config

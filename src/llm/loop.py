@@ -65,6 +65,7 @@ class _Eval:
     effective_total: float = 0.0  # điểm dùng để so sánh best (điều chuẩn nếu bật, else = vector.total)
     pool_corr: float | None = None  # self-corr với pool (đo sau sim); None = chưa/không đo
     regime_blocked: bool = False    # năm tệ nhất dưới ngưỡng -> refine nhắm regime_fit
+    sim_error: bool = False         # sim lỗi/timeout (metric rác của hạ tầng, không phải alpha kém)
 
 
 class RefinementLoop:
@@ -390,7 +391,9 @@ class RefinementLoop:
         else:
             self.repo.record_failure(expr, "low_score", "; ".join(reasons) or result.status, "llm")
         eff = self._effective_total(vector, expr, originality, alignment)
-        return _Eval(vector, normalize(result), alpha_id, passed, eff, pool_corr, regime_blocked)
+        sim_error = result.status == "error" or metrics_missing
+        return _Eval(vector, normalize(result), alpha_id, passed, eff, pool_corr,
+                     regime_blocked, sim_error)
 
     # ---------------------------------------------------------------- run
     def run(self, research_direction: str, on_progress=None) -> LoopResult:
@@ -453,7 +456,10 @@ class RefinementLoop:
             # refine_formula (hoặc không có referee) -> rơi xuống nhánh refine biểu thức.
             if self.referee is not None:
                 verdict = self.referee.judge(research_direction, history, best_ev.metrics)
-                if verdict.action == "abandon":
+                # KHÔNG bỏ hướng dựa trên một sim LỖI/TIMEOUT: đó là nhiễu hạ tầng (metric
+                # rỗng), không phải bằng chứng hướng kém. Bỏ qua abandon, xuống nhánh refine
+                # để lấy một sim thật; trần patience/max_sims vẫn chặn vòng vô hạn.
+                if verdict.action == "abandon" and not best_ev.sim_error:
                     abandoned = True
                     break
                 if verdict.action == "tune_config" and self.config_tuner is not None:
