@@ -133,13 +133,18 @@ def tune(
     best = score(base_node, best_config)
     evals = 1
 
+    # Chừa ngân sách cho Giai đoạn 2 (config): biểu thức nhiều hằng có thể nuốt hết budget ở
+    # Giai đoạn 1, khiến decay/truncation — thứ quan trọng nhất — không bao giờ được quét.
+    # Giới hạn Giai đoạn 1 ở `budget - kích thước lưới config` để Giai đoạn 2 luôn có chỗ.
+    phase1_cap = max(1, budget - len(_DECAYS) * len(_TRUNCS))
+
     # Giai đoạn 1: quét window/hệ số của từng hằng số trong biểu thức.
     for path, value, is_window in iter_constants(base_node, registry):
-        if evals >= budget:
+        if evals >= phase1_cap:
             break
         cands = _window_candidates(value) if is_window else _coef_candidates(value)
         for cand in cands:
-            if evals >= budget:
+            if evals >= phase1_cap:
                 break
             trial = set_constant(best_node, path, cand)
             s = score(trial, best_config)
