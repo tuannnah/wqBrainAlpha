@@ -25,5 +25,6 @@ def group_neutralize(ctx: EvalContext, x: Panel, group_name: str) -> Panel:
         sums = np.bincount(inv, weights=row[valid])
         counts = np.bincount(inv)
         means = sums / counts
-        out[t][valid] = row[valid] - means[inv]
+        with np.errstate(invalid="ignore"):  # inf trong row -> inf-inf = NaN im lặng
+            out[t][valid] = row[valid] - means[inv]
     return out

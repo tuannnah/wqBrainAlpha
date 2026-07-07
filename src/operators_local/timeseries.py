@@ -29,7 +29,11 @@ def _rolling_nan_stats(x: Panel, d: int):
         cs = np.concatenate([zero, np.cumsum(a, axis=0)], axis=0)
         return cs[d:] - cs[:-d]  # tổng trên đúng d hàng gần nhất
 
-    return _roll(valid), _roll(xv), _roll(xv * xv)
+    # inf trong x -> cumsum inf -> inf-inf = NaN (invalid); giá trị lớn -> x*x tràn
+    # float64 (overflow). Cả hai đều propagate về NaN/inf đúng như trước, chỉ tắt
+    # TIẾNG ỒN cảnh báo (dữ liệu thị trường thật không chạm ngưỡng này).
+    with np.errstate(over="ignore", invalid="ignore"):
+        return _roll(valid), _roll(xv), _roll(xv * xv)
 
 
 @register(name="ts_mean", category=OpCategory.TIME_SERIES,
@@ -55,10 +59,15 @@ def ts_std(ctx: EvalContext, x: Panel, d: int) -> Panel:
         return out
     # Std bất biến với phép trừ hằng số -> dịch mỗi cột về quanh 0 trước khi tính
     # Σx² one-pass, tránh cancellation khi giá trị lớn (vd giá cổ phiếu ~hàng trăm).
-    with np.errstate(invalid="ignore"):
-        shift = np.nan_to_num(np.nanmean(x, axis=0), nan=0.0)
-    cnt, sx, sx2 = _rolling_nan_stats(x - shift, d)
+    # Dùng mean an-toàn (Σ/đếm trên phần tử HỮU HẠN) thay np.nanmean: cột toàn-NaN
+    # không phun 'Mean of empty slice', và inf bị loại khỏi tâm dịch (dữ liệu thật
+    # không có inf -> đồng nhất nanmean).
+    finite = np.isfinite(x)
+    fcnt = finite.sum(axis=0)
     with np.errstate(invalid="ignore", divide="ignore"):
+        shift = np.where(fcnt > 0, np.where(finite, x, 0.0).sum(axis=0) / fcnt, 0.0)
+    cnt, sx, sx2 = _rolling_nan_stats(x - shift, d)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
         mean = sx / cnt
         var = sx2 / cnt - mean * mean  # nanstd ddof=0 (population)
         vals = np.where(cnt > 0, np.sqrt(np.maximum(var, 0.0)), np.nan)
@@ -108,7 +117,8 @@ def ts_delta(ctx: EvalContext, x: Panel, d: int) -> Panel:
     # của ts_delay (mypy thấy Callable[..., Any]) -> gọi trực tiếp trong biểu thức trừ
     # sẽ suy luận ra Any; gán qua biến đã khai kiểu Panel để giữ mypy --strict sạch.
     delayed: Panel = ts_delay(ctx, x, d)
-    return x - delayed
+    with np.errstate(invalid="ignore"):  # inf - inf = NaN, propagate im lặng
+        return x - delayed
 
 
 @register(name="ts_rank", category=OpCategory.TIME_SERIES,
@@ -155,7 +165,7 @@ def ts_corr(ctx: EvalContext, x: Panel, y: Panel, d: int) -> Panel:
     # công thức centered hai-lượt (mean rồi độ lệch) để khớp np.corrcoef về số học.
     out = np.full_like(x, np.nan, dtype=np.float64)
     d = int(d)
-    with np.errstate(divide="ignore", invalid="ignore"):
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
         for t in range(x.shape[0]):
             win = _window_slice(t, d)
             if win is None:

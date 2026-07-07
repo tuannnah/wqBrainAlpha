@@ -25,7 +25,8 @@ def subtract(ctx: EvalContext, x: Panel, y: Panel) -> Panel:
 @register(name="multiply", category=OpCategory.ARITHMETIC,
           signature=(ArgKind.PANEL, ArgKind.PANEL), bounded=False, commutative=True)
 def multiply(ctx: EvalContext, x: Panel, y: Panel) -> Panel:
-    return x * y
+    with np.errstate(over="ignore", invalid="ignore"):  # giá trị lớn/inf -> inf im lặng
+        return x * y
 
 
 @register(name="divide", category=OpCategory.ARITHMETIC,
