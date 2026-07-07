@@ -68,7 +68,7 @@ class LocalTunerRefiner:
         pool_corr_fn=None, min_local_sharpe: float = PRE_SIM_LOCAL_SHARPE_FLOOR,
         hard_filter_fn=_default_filter, score_vector_fn=_score_vector,
         region: str = "USA", universe: str = "TOP3000", registry=None, tune_fn=None,
-        max_pool_corr: float = 0.70,
+        max_pool_corr: float = 0.70, calib_repo=None,
     ) -> None:
         self.simulator = simulator
         self.repo = repo
@@ -83,13 +83,42 @@ class LocalTunerRefiner:
         self.universe = universe
         self.registry = registry
         self.max_pool_corr = max_pool_corr
+        # Kho calibration (MiniBrainRepository): lưu local-eval của expr ĐÃ tune theo hash để
+        # join local↔Brain (brain_local_sharpe_pairs) thu được ρ. None -> bỏ qua (test/không cần).
+        self.calib_repo = calib_repo
         self._tune = tune_fn or _tune
+
+    def _luu_local_eval_calibration(self, tr, canonical_hash: str) -> None:
+        """Ghi ExpressionModel + EvaluationModel cho expr đã tune (khớp hash với record_brain_sim
+        mà ClosedLoop ghi sau đó) -> CalibrationTracker có cặp (local_sharpe, brain_sharpe)."""
+        import json
+
+        from src.lang.registry import default_registry
+        from src.lang.visitors import ComplexityVisitor, DepthVisitor, FieldCollector
+
+        reg = self.registry or default_registry()
+        node = parse(tr.best_expr)
+        expr_id = self.calib_repo.upsert_expression(
+            tr.best_expr, canonical_hash, DepthVisitor().visit(node),
+            ComplexityVisitor().visit(node), FieldCollector(reg).visit(node),
+        )
+        self.calib_repo.record_evaluation(
+            expr_id,
+            config_json=json.dumps(
+                {"decay": tr.best_config.decay, "truncation": tr.best_config.truncation}
+            ),
+            data_window="default", metrics=tr.local_metrics, self_corr_max=None,
+            status="local_tuned", fail_reasons=[], seed=None,
+        )
 
     def refine_and_sim(self, candidate: ShortlistCandidate) -> IdeaOutcome:
         # Giai đoạn 1 (không mạng): coordinate descent quanh core + config, đánh giá bằng
         # đúng đường backtest local (Evaluator -> PortfolioBuilder -> Backtester -> Metrics).
         tr = self._tune(candidate.expr, self.local_config, self.data, registry=self.registry)
         canonical_hash = CanonicalHasher().visit(parse(tr.best_expr))
+        # Lưu local-eval để calibration ρ khớp hash với Brain sim ghi sau (chỉ khi có kho + metrics).
+        if self.calib_repo is not None and tr.local_metrics is not None:
+            self._luu_local_eval_calibration(tr, canonical_hash)
         if tr.local_sharpe < self.min_local_sharpe:
             # Dưới sàn pre-sim: KHÔNG gọi simulator -> sims_used=0, không tốn quota Brain.
             return IdeaOutcome(

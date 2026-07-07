@@ -705,6 +705,9 @@ def _run_closed_loop_session(
             simulator=loop.simulator, repo=loop.repo, data=data,
             local_config=cfg, sim_config=sim_config,
             pool_corr_fn=loop.pool_corr_fn, region=region, universe=universe,
+            # repo (MiniBrainRepository) là kho calibration: lưu local-eval expr đã tune để
+            # CalibrationTracker đo ρ local↔Brain (join theo hash với record_brain_sim).
+            calib_repo=repo,
         )
     else:
         refiner = None  # build_closed_loop mặc định RefinementLoopRefiner(loop) (đường LLM cũ)

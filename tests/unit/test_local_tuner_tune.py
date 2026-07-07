@@ -41,6 +41,34 @@ def test_tune_chua_budget_cho_config_du_expr_nhieu_hang():
     assert abs(res.best_config.truncation - 0.02) < 1e-9
 
 
+def test_tune_eval_fn_khong_co_local_metrics():
+    # Đường inject eval_fn (test) không chạy backtest thật -> không có AlphaMetrics.
+    res = tune("rank(close)", _cfg(), data=None, budget=40, eval_fn=lambda n, c: 1.0)
+    assert res.local_metrics is None
+
+
+def test_tune_giu_local_metrics_tren_panel_that():
+    import numpy as np
+
+    from src.data.market_panel import MarketData
+
+    rng = np.random.default_rng(1)
+    t, n = 60, 8
+    dates = np.arange("2020-01-01", "2020-03-01", dtype="datetime64[D]")[:t].astype("datetime64[ns]")
+    close = 100 + np.cumsum(rng.normal(0, 1, (t, n)), axis=0)
+    fields = {name: close.copy() for name in ("close", "open", "high", "low", "vwap")}
+    fields["volume"] = np.abs(rng.normal(1e6, 1e5, (t, n)))
+    data = MarketData(
+        dates=dates, assets=np.array([f"S{i}" for i in range(n)]), fields=fields,
+        universe=np.ones((t, n), dtype=bool),
+        returns=np.vstack([np.zeros((1, n)), np.diff(close, axis=0) / close[:-1]]),
+        groups={"sector": (np.arange(n) % 2).reshape(1, n).repeat(t, axis=0)},
+    )
+    res = tune("rank(ts_delta(close, 5))", _cfg(), data=data, budget=12)
+    assert res.local_metrics is not None
+    assert np.isfinite(res.local_metrics.sharpe)
+
+
 def test_tune_chon_config_tot_hon():
     # mọi expr như nhau (0.5), nhưng truncation=0.02 cho điểm cao hơn
     def eval_fn(node, config):

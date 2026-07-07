@@ -5,6 +5,7 @@ giữ biểu thức gốc làm cận dưới (không bao giờ trả kết quả
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -13,6 +14,9 @@ from src.lang.ast import Call, Constant, Node
 from src.lang.parser import parse
 from src.lang.registry import ArgKind, OperatorRegistry, default_registry
 from src.lang.visitors import Serializer
+
+if TYPE_CHECKING:
+    from src.backtest.metrics_local import AlphaMetrics
 
 
 def iter_constants(
@@ -63,6 +67,9 @@ class TuneResult:
     best_expr: str
     best_config: PortfolioConfig
     local_sharpe: float
+    # AlphaMetrics local của best (đường backtest thật) — để refiner lưu vào kho calibration
+    # (join local↔Brain theo hash). None khi tune qua eval_fn inject (test, không backtest thật).
+    local_metrics: "AlphaMetrics | None" = None
 
 
 def _window_candidates(value: float) -> list[float]:
@@ -79,9 +86,11 @@ def _coef_candidates(value: float) -> list[float]:
     return [value * 0.5, value * 2.0]
 
 
-def local_sharpe(node: Node, config: PortfolioConfig, data, registry: OperatorRegistry) -> float:
-    """Sharpe local qua đúng đường backtest của gate (Evaluator -> PortfolioBuilder ->
-    Backtester -> MetricsCalculator); trả −inf nếu lỗi/NaN/không có pnl hữu hạn."""
+def local_metrics(
+    node: Node, config: PortfolioConfig, data, registry: OperatorRegistry
+) -> "AlphaMetrics | None":
+    """AlphaMetrics local qua đúng đường backtest của gate (Evaluator -> PortfolioBuilder ->
+    Backtester -> MetricsCalculator); trả None nếu lỗi/NaN/không có pnl hữu hạn."""
     from src.backtest.backtester import Backtester
     from src.backtest.metrics_local import MetricsCalculator
     from src.backtest.portfolio import PortfolioBuilder
@@ -90,14 +99,22 @@ def local_sharpe(node: Node, config: PortfolioConfig, data, registry: OperatorRe
     try:
         signal = Evaluator(EvalContext(data=data, registry=registry, cache=None)).evaluate(node)
         if np.all(np.isnan(signal)):
-            return float("-inf")
+            return None
         weights = PortfolioBuilder().build(signal, config, data)
         result = Backtester().run(weights, data)
         if not np.isfinite(result.daily_pnl).any():
-            return float("-inf")
-        s = MetricsCalculator().compute(result, data).sharpe
+            return None
+        return MetricsCalculator().compute(result, data)
     except (KeyError, ValueError, ZeroDivisionError):
+        return None
+
+
+def local_sharpe(node: Node, config: PortfolioConfig, data, registry: OperatorRegistry) -> float:
+    """Sharpe local (bọc `local_metrics`); trả −inf nếu lỗi/NaN/không có pnl hữu hạn."""
+    m = local_metrics(node, config, data, registry)
+    if m is None:
         return float("-inf")
+    s = m.sharpe
     return float(s) if s is not None and np.isfinite(s) else float("-inf")
 
 
@@ -119,18 +136,25 @@ def tune(
     raise lỗi bị coi là −inf (bỏ qua), KHÔNG làm sập `tune`.
     """
     registry = registry or default_registry()
-    scorer = eval_fn or (lambda n, c: local_sharpe(n, c, data, registry))
 
-    def score(node: Node, config: PortfolioConfig) -> float:
+    def score(node: Node, config: PortfolioConfig) -> "tuple[float, AlphaMetrics | None]":
+        """Trả (điểm, metrics|None). eval_fn inject (test) chỉ cho điểm, không có metrics;
+        đường thật trả AlphaMetrics để refiner lưu vào kho calibration. Biến thể lỗi -> −inf."""
         try:
-            return scorer(node, config)
+            if eval_fn is not None:
+                return float(eval_fn(node, config)), None
+            m = local_metrics(node, config, data, registry)
+            if m is None:
+                return float("-inf"), None
+            s = m.sharpe
+            return (float(s) if s is not None and np.isfinite(s) else float("-inf")), m
         except (KeyError, ValueError, ZeroDivisionError):
-            return float("-inf")
+            return float("-inf"), None
 
     base_node = parse(expr)
     best_node = base_node
     best_config = base_config
-    best = score(base_node, best_config)
+    best, best_metrics = score(base_node, best_config)
     evals = 1
 
     # Chừa ngân sách cho Giai đoạn 2 (config): biểu thức nhiều hằng có thể nuốt hết budget ở
@@ -147,10 +171,10 @@ def tune(
             if evals >= phase1_cap:
                 break
             trial = set_constant(best_node, path, cand)
-            s = score(trial, best_config)
+            s, m = score(trial, best_config)
             evals += 1
             if s > best:
-                best, best_node = s, trial
+                best, best_node, best_metrics = s, trial, m
 
     # Giai đoạn 2: quét config (decay x truncation) quanh biểu thức tốt nhất tìm được.
     for d in _DECAYS:
@@ -160,11 +184,12 @@ def tune(
             cfg = replace(base_config, decay=d, truncation=t)
             if cfg == best_config:
                 continue
-            s = score(best_node, cfg)
+            s, m = score(best_node, cfg)
             evals += 1
             if s > best:
-                best, best_config = s, cfg
+                best, best_config, best_metrics = s, cfg, m
 
     return TuneResult(
-        best_expr=Serializer().visit(best_node), best_config=best_config, local_sharpe=best
+        best_expr=Serializer().visit(best_node), best_config=best_config,
+        local_sharpe=best, local_metrics=best_metrics,
     )

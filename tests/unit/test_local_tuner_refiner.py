@@ -87,6 +87,54 @@ def test_refiner_quota_thi_nem_QuotaExhausted():
         pass
 
 
+def test_refiner_luu_local_eval_cho_calibration():
+    """Khi có calib_repo, refiner lưu expression + evaluation local của expr ĐÃ TUNE (theo
+    hash) -> join brain_local_sharpe_pairs khớp -> ρ local↔Brain thu được dữ liệu."""
+    from src.backtest.local_tuner import TuneResult
+    from src.backtest.metrics_local import AlphaMetrics
+
+    metrics = AlphaMetrics(
+        sharpe=1.6, annual_return=0.2, turnover=0.3, max_drawdown=0.1,
+        fitness=1.2, per_year_sharpe={2020: 1.5}, weight_concentration=0.05,
+    )
+
+    class _Sim:
+        def simulate(self, expr, settings=None):
+            return _passed_result(expr, settings)
+
+    class _Calib:
+        def __init__(self):
+            self.upserts = []
+            self.evals = []
+
+        def upsert_expression(self, expr_string, canonical_hash, depth, complexity, fields):
+            self.upserts.append(expr_string)
+            return 7
+
+        def record_evaluation(self, expression_id, config_json, data_window,
+                              metrics, self_corr_max, status, fail_reasons, seed):
+            self.evals.append((expression_id, metrics))
+            return 1
+
+    def fake_tune(expr, cfg, data, **kw):
+        return TuneResult(
+            best_expr="rank(ts_delta(close, 20))",
+            best_config=PortfolioConfig(decay=3, truncation=0.02),
+            local_sharpe=1.6, local_metrics=metrics,
+        )
+
+    calib = _Calib()
+    r = LocalTunerRefiner(
+        simulator=_Sim(), repo=_Repo(), data=object(),
+        local_config=PortfolioConfig(decay=4, truncation=0.08),
+        sim_config=SimConfig.default(), tune_fn=fake_tune, calib_repo=calib,
+    )
+    out = r.refine_and_sim(_cand())
+    assert calib.upserts == ["rank(ts_delta(close, 20))"]   # lưu expr ĐÃ tune (không phải core gốc)
+    assert calib.evals and calib.evals[0][1] is metrics      # evaluation mang AlphaMetrics local
+    assert out.passed is True
+
+
 def test_refiner_crowded_thi_khong_pass():
     r = _refiner(_passed_result, pool_corr_fn=lambda aid: 0.9)  # >= 0.70
     out = r.refine_and_sim(_cand())
