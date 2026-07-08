@@ -23,7 +23,7 @@ for _stream in (sys.stdout, sys.stderr):
 from config.settings import settings
 from src.data.client import WQBrainClient
 from src.data.fields import FieldRepository
-from src.data.operators import OperatorRepository, count_positional_arity
+from src.data.operators import OperatorRepository, count_max_arity
 from src.data.universe_matrix import iter_scopes
 from src.data.warm_cache import warm_cache
 from src.simulation.simulator import Simulator
@@ -421,13 +421,13 @@ def _cached_symbols(session_factory):
         o.name for o in cached_ops
         if o.name and getattr(o, "category", "") in ("Time Series", "Cross Sectional")
     }
-    # Arity positional (bỏ tham số named-only có '=') tính lại từ definition đã lưu
-    # -> chặn cả lỗi thừa input lẫn gọi named-param (winsorize/bucket) positional.
+    # Arity TỐI ĐA (gồm cả param có default `=`) từ definition đã lưu -> chỉ chặn khi THỪA
+    # input so với chữ ký (Brain cho truyền positional cả param default: ts_backfill/rank/…).
     operator_arity = {}
     for o in cached_ops:
         if not o.name:
             continue
-        n = count_positional_arity(o.definition or "")
+        n = count_max_arity(o.definition or "")
         if n:
             operator_arity[o.name] = n
     return fields, operators, field_types, matrix_only_ops, operator_arity

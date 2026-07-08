@@ -66,13 +66,15 @@ def _split_top_level(s: str) -> list[str]:
     return parts
 
 
-def count_positional_arity(definition: str) -> int:
-    """Số tham số POSITIONAL (không có default `=`) trong chữ ký đầu tiên.
+def count_max_arity(definition: str) -> int:
+    """Số tham số TỐI ĐA (gồm CẢ param có default `=`) trong chữ ký đầu tiên.
 
-    Tham số có `=` (vd `std=4`, `range=…`, `dense=false`) là named-only — không
-    truyền positional được; nếu truyền positional WQ báo "Invalid number of
-    inputs". Đây là arity tối đa positional để PreFilter chặn biểu thức thừa input
-    (gồm cả trường hợp gọi named-param như winsorize/bucket bằng positional)."""
+    WQ CHO truyền positional cả param có default: `ts_backfill(close, 120)`,
+    `rank(x, 2)`, `winsorize(x, 4)` đều hợp lệ (default chỉ là giá trị mặc định khi
+    bỏ trống, KHÔNG phải named-only). Bản cũ (`count_positional_arity`) bỏ param có
+    `=` khỏi cap -> ts_backfill (`ts_backfill(x, lookback=d, k=1)`) bị cap=1 CHẶN OAN
+    `ts_backfill(x, 22)` (biểu thức hợp lệ trên Brain). Cap đúng = TỔNG param của chữ
+    ký đầu; PreFilter chỉ chặn khi THỪA hơn cap này (Brain là trọng tài cuối)."""
     if "(" not in definition or ")" not in definition:
         return 0
     # Một số operator có nhiều dạng chữ ký phân tách bởi 'or'/xuống dòng -> lấy dòng đầu.
@@ -82,7 +84,7 @@ def count_positional_arity(definition: str) -> int:
     inside = head[head.find("(") + 1 : head.rfind(")")]
     if not inside.strip():
         return 0
-    return sum(1 for p in _split_top_level(inside) if p.strip() and "=" not in p)
+    return sum(1 for p in _split_top_level(inside) if p.strip())
 
 
 def _parse_operator(raw: dict) -> Operator:
