@@ -12,7 +12,9 @@ if TYPE_CHECKING:
     from src.pipeline.closed_loop import ClosedLoop
 
 from config.thresholds import PRE_SIM_LOCAL_SHARPE_FLOOR
+from src.backtest.gate import local_usable
 from src.backtest.local_tuner import tune as _tune
+from src.generation.alt_data_seeds import ALT_DATA_CORES, neutralization_for_expr
 from src.gp.engine import GPEngine
 from src.lang.parser import parse
 from src.lang.registry import default_registry
@@ -131,7 +133,75 @@ class LocalTunerRefiner:
             status="local_tuned", fail_reasons=[], seed=None,
         )
 
+    def _is_alt_data(self, expr: str) -> bool:
+        """Expr dùng field NGOÀI panel local -> không chấm/tune local được -> phải sim thẳng.
+        `data` không có `field_names()` (test fake/object()) -> coi như local (giữ hành vi cũ)."""
+        try:
+            return not local_usable(expr, self.data)
+        except Exception:
+            return False
+
+    def _sim_direct(self, candidate: ShortlistCandidate) -> IdeaOutcome:
+        """Nhánh alt-data: BỎ tune/floor local (panel không có field), sim Brain 1 lần với
+        neutralization chọn theo category dataset (docs WQ), rồi chấm/lưu như đường tune."""
+        expr = candidate.expr
+        canonical_hash = CanonicalHasher().visit(parse(expr))
+        neut = neutralization_for_expr(expr, self.registry)
+        sim_cfg = self.sim_config.with_overrides(neutralization=neut)
+        try:
+            result = self.simulator.simulate(expr, settings=sim_cfg.to_settings())
+        except (AuthExpiredError, QuotaExceededError) as exc:
+            raise QuotaExhausted(str(exc)) from exc
+        return self._finalize(
+            result, expr, canonical_hash, sim_cfg,
+            stop_reason="alt_data_direct", source="alt_data", description="alt-data direct",
+        )
+
+    def _finalize(
+        self, result, expr: str, canonical_hash: str, sim_cfg, *,
+        stop_reason: str, source: str, description: str,
+    ) -> IdeaOutcome:
+        """Chấm điểm + lưu DB + xét Power Pool cho 1 kết quả sim Brain — DÙNG CHUNG cho đường
+        tune (local_tuned) và đường alt-data (alt_data_direct) để không lặp logic."""
+        vector = self.score_vector_fn(result)
+        alpha_id = self.repo.save_alpha(
+            expr, source=source, hypothesis={}, description=description, parent_id=None,
+        )
+        self.repo.save_simulation(
+            result, region=self.region, universe=self.universe,
+            score=vector.total, alpha_id=alpha_id, config_key=sim_cfg.key(),
+        )
+        ok_hard, _reasons = self.hard_filter_fn(result)
+        passed = result.status == "passed" and ok_hard
+        registry = self.registry or default_registry()
+        # Cấu trúc Power Pool (chưa xét self_corr): Sharpe>=1.0, <=8 op, <=3 field, turnover hợp lệ.
+        turnover_ok = result.turnover is not None and 0.01 <= result.turnover <= 0.70
+        pp_structural = (
+            result.status != "error"
+            and result.sharpe is not None
+            and turnover_ok
+            and is_power_pool(expr, result.sharpe, None, registry)
+        )
+        # Chỉ đo self-corr (tốn 1 lệnh Brain API) khi alpha CÓ THỂ nộp được: đã passed Regular,
+        # HOẶC đạt cấu trúc Power Pool. Alpha yếu không bao giờ nộp được nên khỏi tốn corr-check.
+        self_corr = None
+        if self.pool_corr_fn is not None and result.alpha_id and (passed or pp_structural):
+            self_corr = self.pool_corr_fn(result.alpha_id)
+            if passed and self_corr is not None and abs(self_corr) >= self.max_pool_corr:
+                passed = False
+        # power_pool_eligible ĐỘC LẬP với `passed` Regular: cấu trúc đạt + self_corr<=0.5.
+        power_pool = pp_structural and is_power_pool(expr, result.sharpe, self_corr, registry)
+        return IdeaOutcome(
+            expr=expr, canonical_hash=canonical_hash, passed=passed,
+            wq_alpha_id=result.alpha_id, sharpe=result.sharpe, fitness=result.fitness,
+            turnover=result.turnover, self_corr=self_corr, sims_used=1,
+            stop_reason=stop_reason, power_pool_eligible=power_pool,
+        )
+
     def refine_and_sim(self, candidate: ShortlistCandidate) -> IdeaOutcome:
+        # Seed alt-data (field ngoài panel local) đi thẳng Brain — không tune/floor local được.
+        if self._is_alt_data(candidate.expr):
+            return self._sim_direct(candidate)
         # Giai đoạn 1 (không mạng): coordinate descent quanh core + config, đánh giá bằng
         # đúng đường backtest local (Evaluator -> PortfolioBuilder -> Backtester -> Metrics).
         tr = self._tune(candidate.expr, self.local_config, self.data, registry=self.registry)
@@ -180,41 +250,9 @@ class LocalTunerRefiner:
             # ClosedLoop cần dừng gọn, không coi là "sim lỗi" rồi thử thêm ứng viên khác.
             raise QuotaExhausted(str(exc)) from exc
 
-        vector = self.score_vector_fn(result)
-        alpha_id = self.repo.save_alpha(
-            tr.best_expr, source="gp_local_tuner", hypothesis={},
-            description="local-tuned motif", parent_id=None,
-        )
-        self.repo.save_simulation(
-            result, region=self.region, universe=self.universe,
-            score=vector.total, alpha_id=alpha_id, config_key=sim_cfg.key(),
-        )
-        ok_hard, _reasons = self.hard_filter_fn(result)
-        passed = result.status == "passed" and ok_hard
-        registry = self.registry or default_registry()
-        # Cấu trúc Power Pool (chưa xét self_corr): Sharpe>=1.0, <=8 op, <=3 field, turnover hợp lệ.
-        turnover_ok = result.turnover is not None and 0.01 <= result.turnover <= 0.70
-        pp_structural = (
-            result.status != "error"
-            and result.sharpe is not None
-            and turnover_ok
-            and is_power_pool(tr.best_expr, result.sharpe, None, registry)
-        )
-        # Chỉ đo self-corr (tốn 1 lệnh Brain API) khi alpha CÓ THỂ nộp được: đã passed Regular,
-        # HOẶC đạt cấu trúc Power Pool. Alpha yếu (Sharpe<1.0 / cấu trúc không hợp) không bao giờ
-        # nộp được nên khỏi tốn correlation-check — vừa đúng eligibility Power Pool vừa tiết kiệm API.
-        self_corr = None
-        if self.pool_corr_fn is not None and result.alpha_id and (passed or pp_structural):
-            self_corr = self.pool_corr_fn(result.alpha_id)
-            if passed and self_corr is not None and abs(self_corr) >= self.max_pool_corr:
-                passed = False
-        # power_pool_eligible ĐỘC LẬP với `passed` Regular: cấu trúc đạt + self_corr<=0.5.
-        power_pool = pp_structural and is_power_pool(tr.best_expr, result.sharpe, self_corr, registry)
-        return IdeaOutcome(
-            expr=tr.best_expr, canonical_hash=canonical_hash, passed=passed,
-            wq_alpha_id=result.alpha_id, sharpe=result.sharpe, fitness=result.fitness,
-            turnover=result.turnover, self_corr=self_corr, sims_used=1,
-            stop_reason="local_tuned", power_pool_eligible=power_pool,
+        return self._finalize(
+            result, tr.best_expr, canonical_hash, sim_cfg,
+            stop_reason="local_tuned", source="gp_local_tuner", description="local-tuned motif",
         )
 
 
@@ -248,6 +286,31 @@ class CuratedIdeaSource:
     def next_batch(self):
         if not self._served_curated:
             self._served_curated = True
+            import numpy as np
+
+            empty = np.zeros(0, dtype=np.float64)
+            dates = np.zeros(0, dtype="datetime64[ns]")
+            return [
+                ShortlistCandidate(expr=e, metrics=None, pnl=empty, dates=dates)
+                for e in self._cores
+            ]
+        return self._fallback.next_batch()
+
+
+class AltDataIdeaSource:
+    """Yield các core ALT-DATA (option8/socialmedia8… — field ngoài panel local) ở batch ĐẦU,
+    rồi ủy quyền fallback. Giống CuratedIdeaSource nhưng cho seed đi THẲNG Brain: refiner nhận
+    diện qua `local_usable == False` và sim thẳng (không tune local). Mở rộng khỏi họ price/
+    volume đã bão hòa -> alpha mới ít trùng self-corr (đòn bẩy chất lượng chính)."""
+
+    def __init__(self, *, fallback, cores: tuple[str, ...] = ALT_DATA_CORES) -> None:
+        self._fallback = fallback
+        self._cores = tuple(cores)
+        self._served = False
+
+    def next_batch(self):
+        if not self._served:
+            self._served = True
             import numpy as np
 
             empty = np.zeros(0, dtype=np.float64)
@@ -317,6 +380,7 @@ def build_closed_loop(
     top_k: int = 10, max_corr: float = 0.70,
     calibrate_every: int = 10, rho_bar: float = 0.5, max_ideas: int | None = None,
     refiner: object | None = None, curated_seeds: bool = True,
+    include_alt_data: bool = False,
 ) -> "ClosedLoop":
     """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
     bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
@@ -333,6 +397,10 @@ def build_closed_loop(
     # giống mạnh vào pipeline sớm để LocalTuner tune quanh -> chạm alpha đạt chuẩn nộp nhanh.
     if curated_seeds:
         idea_source = CuratedIdeaSource(fallback=idea_source)
+    # Alt-data đặt NGOÀI CÙNG -> phục vụ ở batch đầu (trước cả curated PV) để phiên ngắn/
+    # --max-ideas nhỏ vẫn chạm alt-data (đòn bẩy độ mới), không bị PV core nuốt hết quota.
+    if include_alt_data:
+        idea_source = AltDataIdeaSource(fallback=idea_source)
     if refiner is None:
         refiner = RefinementLoopRefiner(loop)
     tracker = CalibrationTracker(repo, every=calibrate_every, rho_bar=rho_bar)  # type: ignore[arg-type]

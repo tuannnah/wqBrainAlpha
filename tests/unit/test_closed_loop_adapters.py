@@ -226,3 +226,25 @@ def test_build_closed_loop_wires_components(small_panel, repo) -> None:  # noqa:
     report = loop.run()  # chạy với GP thật (pop nhỏ) + _NoopLoop refiner -> không crash
     assert report.ideas_tried >= 0
     assert report.stop_reason in {"no_more_ideas", "quota"}
+
+
+def test_build_closed_loop_include_alt_data(small_panel, repo) -> None:  # noqa: ANN001
+    """include_alt_data=True -> batch ĐẦU của idea_source là các core alt-data (đi thẳng Brain)."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.generation.alt_data_seeds import ALT_DATA_CORES
+    from src.lang.registry import default_registry
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2,
+                             curated_seeds=False, include_alt_data=True)
+    batch = loop.idea_source.next_batch()
+    assert [c.expr for c in batch] == list(ALT_DATA_CORES)

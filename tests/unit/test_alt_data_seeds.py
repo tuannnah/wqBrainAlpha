@@ -1,0 +1,55 @@
+"""Alt-data seed cores: biểu thức GAP/normalize/reversal trên dataset alt-data ĐÃ VERIFY
+LIVE (option8 IV/HV, socialmedia8 sentiment) đi THẲNG tới Brain sim (không chấm local được
+vì panel local chỉ có price/volume). Kèm helper map category dataset → neutralization theo
+docs WQ (option→SECTOR, news/social→SUBINDUSTRY, analyst/fundamental→INDUSTRY)."""
+
+from __future__ import annotations
+
+import src.operators_local  # noqa: F401  # đăng ký operator (ts_backfill/ts_mean/subtract…)
+from src.generation.alt_data_seeds import ALT_DATA_CORES, neutralization_for_expr
+from src.lang.parser import parse
+from src.lang.registry import default_registry
+from src.lang.visitors import FieldCollector
+
+_PV_FIELDS = {"close", "open", "vwap", "volume", "high", "low", "returns"}
+
+
+def test_moi_core_parse_duoc_qua_registry():
+    # parse(validate=True) đòi mọi operator có trong registry — bắt lỗi operator lạ sớm.
+    for expr in ALT_DATA_CORES:
+        parse(expr)  # không raise là đạt
+
+
+def test_moi_core_thuc_su_la_alt_data():
+    # Mỗi core PHẢI dùng ít nhất 1 field NGOÀI price/volume (nếu không thì không phải alt-data
+    # và sẽ đi nhầm đường local-tune thay vì sim-thẳng).
+    reg = default_registry()
+    for expr in ALT_DATA_CORES:
+        fields = FieldCollector(reg).visit(parse(expr))
+        assert not fields.issubset(_PV_FIELDS), expr
+
+
+def test_neutralization_map_theo_category():
+    # option (implied/historical_volatility) → SECTOR; social (snt_social_*) → SUBINDUSTRY.
+    assert neutralization_for_expr(
+        "subtract(ts_backfill(implied_volatility_put_30, 22), "
+        "ts_backfill(implied_volatility_call_30, 22))"
+    ) == "SECTOR"
+    assert neutralization_for_expr("multiply(-1, ts_mean(snt_social_value, 5))") == "SUBINDUSTRY"
+    # analyst/fundamental → INDUSTRY (dù chưa dùng trong core, helper phải map đúng).
+    assert neutralization_for_expr("ts_backfill(anl4_fs_estimate_eps_mean, 66)") == "INDUSTRY"
+
+
+def test_option_core_co_ts_backfill():
+    # Field option sparse (coverage ~0.97) PHẢI backfill (cardinal rule #3) để không bị NaN.
+    option_cores = [e for e in ALT_DATA_CORES if "implied_volatility" in e or "historical_volatility" in e]
+    assert option_cores, "phải có core option"
+    for expr in option_cores:
+        assert "ts_backfill" in expr, expr
+
+
+def test_co_da_dang_it_nhat_hai_dataset():
+    # Đa dạng nguồn = giảm self-corr chéo: ít nhất option8 + socialmedia8.
+    joined = " ".join(ALT_DATA_CORES)
+    assert "implied_volatility" in joined
+    assert "snt_social" in joined
