@@ -1,11 +1,18 @@
 # MiniBrain — Progress log
 
 ## Current state
-- **Phase:** Sau Phase 8 — nhánh `alpha-quality-from-brain-docs` (CHƯA merge). Đã (1) nâng
-  cấp chất lượng alpha từ docs WQ (4 sub-agent), (2) CHẠY THẬT Auto SIM + đánh giá e2e +
-  cải thiện. **KẾT QUẢ THEN CHỐT: e2e ĐÃ có alpha đạt chất lượng submit** — 3 alpha
-  (`rKlkG9O8`/`kq0RY2G8`/`E5E3NKZJ`, VWAP intraday-reversal) Sharpe ~1.5, `failed_checks=[]`
-  (qua hết is.checks), **self-corr 0.49/0.47/0.50 < 0.70** (verify khi session còn hạn).
+- **Phase:** Sau Phase 8 — nhánh `alpha-quality-from-brain-docs` (CHƯA merge). **[2026-07-09
+  Session 07] MỞ ĐƯỜNG ALT-DATA đi thẳng Brain** (đòn bẩy độ mới, gỡ pool bão hòa 1 họ PV).
+  Verify field alt-data thật qua API (option8 IV/HV, socialmedia8 sentiment); thêm
+  `AltDataIdeaSource` + nhánh sim-thẳng trong LocalTunerRefiner (khi `local_usable==False`:
+  bỏ tune/floor local, sim Brain với neutralization theo category) + cờ `--alt-data`. **CHẠY
+  THẬT menu-5 xác nhận: 2/2 core social đạt Brain sim thật** (`snt_social_value` fade: Sharpe
+  -0.48/TO 0.22 và -0.19/TO 0.37 — SAI DẤU nhưng |Sharpe|~0.5 = có nội dung dự báo; TO thấp
+  tốt cho Power Pool). **Bonus fix:** run lộ bug pre-filter `count_positional_arity` cap
+  `ts_backfill`=1 → chặn OAN mọi core option (biểu thức hợp lệ Brain) → sửa `count_max_arity`.
+- **Phase (trước):** Đã (1) nâng chất lượng alpha từ docs WQ, (2) CHẠY THẬT Auto SIM + cải
+  thiện. **e2e ĐÃ có alpha đạt chất lượng submit** — 3 alpha (`rKlkG9O8`/`kq0RY2G8`/`E5E3NKZJ`,
+  VWAP intraday-reversal) Sharpe ~1.5, `failed_checks=[]`, self-corr 0.49/0.47/0.50 < 0.70.
   Chưa nộp (submissions=0) vì (a) bug correlation-poll ĐÃ FIX, (b) submit cần người dùng đồng ý.
 - **Session:** người dùng đã đăng nhập lại QR (23:38). Dry-run `submit` chạy thông suốt
   (correlation-poll đã fix): e2e HOÀN CHỈNH (khám phá -> sim -> verify self-corr -> chọn
@@ -48,6 +55,46 @@
 
 ## Entries
 <!-- append-only; newest at the bottom -->
+
+### [2026-07-09] Session 07 — Mở đường ALT-DATA đi thẳng Brain (đòn bẩy độ mới) + fix pre-filter
+- **Phase:** Sau Phase 8, nhánh `alpha-quality-from-brain-docs`. Mục tiêu người dùng: đọc
+  docs+log, research để cải thiện chất lượng tool, chạy menu-5 kiểm thử, đọc lại định hướng.
+- **Chẩn đoán:** Tool đã sinh alpha đạt chuẩn nộp nhưng **khóa cứng vào 1 họ PV reversal đã
+  bão hòa** (mọi ý tưởng run gần nhất = close-vwap/close-open → alpha mới fail self-corr). Nút
+  cũ "không verify được field alt-data" (cardinal rule #1) — nay ĐÃ ĐĂNG NHẬP nên gỡ được qua
+  API. Cũng thấy Brain free-tier sim 8-20′/cái (timeout 1200s cắt oan ~50% ở run 07-08).
+- **Done:**
+  - **`b56cd3a` Đường alt-data đi thẳng Brain:** verify field thật (get_datafields):
+    option8 `implied_volatility_call/put/mean_*` + `historical_volatility_*`, socialmedia8
+    `snt_social_value/volume`. Module `src/generation/alt_data_seeds.py` (6 core GAP/reversal
+    xen kẽ option↔social, `ts_backfill` field option sparse) + `neutralization_for_expr`
+    (option→SECTOR, social/news→SUBINDUSTRY, analyst→INDUSTRY). `AltDataIdeaSource` +
+    **nhánh sim-thẳng** trong `LocalTunerRefiner._sim_direct` (khi `local_usable==False`: BỎ
+    tune/floor local — panel không có field — sim Brain 1 lần với neut theo category; trích
+    `_finalize` dùng chung). Cờ `--alt-data` (build_closed_loop `include_alt_data`, đặt NGOÀI
+    CÙNG idea-source để phiên ngắn vẫn chạm alt-data). TDD 3 file mới + wiring.
+  - **`b6a3cb0` Fix pre-filter chặn oan:** run thật lộ `count_positional_arity` bỏ param có
+    `=` khỏi cap → `ts_backfill(x,lookback=d,k=1)` cap=1 → chặn OAN `ts_backfill(x,22)` (HỢP
+    LỆ Brain). Đổi `count_max_arity` (tổng param). Ảnh hưởng cả rank/winsorize/ts_decay.
+  - **Chạy thật menu-5** (`closed-loop --alt-data --max-ideas 4`): 2/2 core social đạt Brain
+    sim thật (không timeout, 11-12′/cái) — **XÁC NHẬN đường alt-data hoạt động e2e** (field
+    nhận, neut SUBINDUSTRY áp, ra metric, lưu `source=alt_data`). Kết quả Sharpe -0.48/-0.19
+    (SAI DẤU: fade sai chiều, |Sharpe|~0.5 = tín hiệu CÓ THẬT; TO 0.22/0.37 thấp).
+- **Decisions:** Chỉ dùng field ĐÃ verify LIVE (KHÔNG dùng opt6_*/pcr_*/snt1_* trong
+  VERIFIED_FIELDS — dataset option6/sentiment1 KHÔNG có cho account này). Không GATE bằng
+  comparison (`greater`/`less` chưa đăng ký local) — dùng scaling nhân thay. Refiner alt-data
+  chưa tune sign — hardcode dấu seed (nên có core sai dấu).
+- **Next step (định hướng tiếp):** (a) **lật dấu / tune nhẹ cho alt-data** (bằng chứng: fade
+  sai chiều → thêm biến thể `+` hoặc coordinate-descent sign trong `_sim_direct`); (b) refiner
+  alt-data hiện KHÔNG chọn được sign/param tối ưu — cân nhắc mini-sweep dấu×decay 1-2 sim; (c)
+  **throughput sim** vẫn là nút phụ (8-20′/sim tuần tự; timeout lãng phí quota khi >20′) — cân
+  nhắc multi-simulation Brain (create_multi_simulation) hoặc reap-on-timeout; (d) mở rộng seed
+  alt-data (analyst4 revision/surprise, option skew term-structure, news18) khi cần thêm độ mới.
+- **Blockers/mở:** Alt-data đi thẳng Brain KHÔNG có pre-sim local floor (không chấm local
+  được) → mỗi core tốn 1 sim thật; cần seed CHẤT (đúng dấu) để không phí quota. Session Brain
+  ~2-3h hết hạn cần QR terminal thật.
+- **Tests:** `pytest -q` **1094 passed**, 1 fail psycopg có sẵn. ruff sạch. 2 commit code +
+  test trên nhánh. Menu-5 chạy thật xác nhận (log `wq_altdata_test.log`).
 
 ### [2026-07-07] Session 05 — E2e tự chạy dài TIN CẬY hơn (throughput + pre-sim floor + LLM robust)
 - **Phase:** Sau Phase 8, nhánh `alpha-quality-from-brain-docs`. Theo yêu cầu người dùng:
