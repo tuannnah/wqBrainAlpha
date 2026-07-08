@@ -172,9 +172,11 @@ def _error_detail(payload: dict) -> str:
 
 class Simulator:
     POLL_INTERVAL = 3.0
-    # WQ Brain đôi lúc xử lý sim > 5 phút (tải/queue cao) — deadline 300s cũ khiến mọi
-    # sim bị bỏ oan trước khi COMPLETE. Cho 600s để sim kịp hoàn tất.
-    TIMEOUT_SECONDS = 600.0
+    # WQ Brain đôi lúc xử lý sim > 10 phút (tải/queue cao). Bằng chứng live 2026-07-08: core
+    # ĐÃ KIỂM CHỨNG (~1.57) bị bỏ oan ở 600s vì Brain chưa kịp COMPLETE -> metric rỗng, mất cơ
+    # hội xác nhận alpha tốt. Nâng 600->1200s để sim chậm kịp hoàn tất (đánh đổi: timeout thật
+    # chờ lâu hơn, chấp nhận được vì sim rỗng làm hỏng cả vòng săn alpha đạt chuẩn nộp).
+    TIMEOUT_SECONDS = 1200.0
     # Số lần POST /simulations lỗi xác thực LIÊN TIẾP trước khi bỏ cuộc (client đã
     # tự re-auth 1 lần; còn 401 nghĩa là session chết) — chặn phí quota kéo dài.
     MAX_CONSECUTIVE_AUTH_FAILURES = 3
