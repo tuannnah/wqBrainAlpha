@@ -396,3 +396,80 @@ def test_timeout_seconds_du_dai_cho_wq_cham():
     """TIMEOUT_SECONDS phải >= 600s: WQ Brain đôi lúc xử lý sim > 5 phút, deadline 300s
     cũ khiến mọi sim bị bỏ oan trước khi COMPLETE."""
     assert Simulator.TIMEOUT_SECONDS >= 600.0
+
+
+def test_simulate_chu_dong_sleep_khi_ratelimit_remaining_ve_0():
+    """POST /simulations thành công nhưng X-Ratelimit-Remaining=0 -> CHỦ ĐỘNG sleep theo
+    X-Ratelimit-Reset TRƯỚC khi bị 429 (phòng ngừa, khác _is_quota_exhausted xử lý SAU khi
+    đã bị chặn)."""
+    client = FakeClient()
+    client.queue_post(
+        FakeResponse(
+            201,
+            headers={
+                "Location": "/simulations/sim-7",
+                "X-Ratelimit-Remaining": "0",
+                "X-Ratelimit-Reset": "5",
+            },
+        )
+    )
+    client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": "alpha-9"}))
+    client.queue_get(FakeResponse(200, json_data={"is": {"sharpe": 1.0, "checks": []}}))
+
+    sleeps: list[float] = []
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=sleeps.append, time_func=lambda: 0.0
+    )
+    result = sim.simulate("rank(close)")
+
+    assert sleeps == [5.0]  # đúng 1 lần sleep chủ động, không lẫn sleep của poll (COMPLETE ngay)
+    assert result.status == "passed"
+
+
+def test_simulate_khong_sleep_chu_dong_khi_con_remaining():
+    """X-Ratelimit-Remaining > 0 -> KHÔNG sleep chủ động (chỉ phòng ngừa khi thật sự cạn)."""
+    client = FakeClient()
+    client.queue_post(
+        FakeResponse(
+            201,
+            headers={"Location": "/simulations/sim-8", "X-Ratelimit-Remaining": "10"},
+        )
+    )
+    client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": "alpha-10"}))
+    client.queue_get(FakeResponse(200, json_data={"is": {"sharpe": 1.0, "checks": []}}))
+
+    sleeps: list[float] = []
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=sleeps.append, time_func=lambda: 0.0
+    )
+    result = sim.simulate("rank(close)")
+
+    assert sleeps == []
+    assert result.status == "passed"
+
+
+def test_simulate_cap_sleep_khi_reset_la_epoch_tuyet_doi():
+    """AN TOÀN: nếu X-Ratelimit-Reset là epoch tuyệt đối (khổng lồ), sleep phải bị CAP ở
+    MAX_RATE_LIMIT_SLEEP thay vì chờ ~vô tận."""
+    client = FakeClient()
+    client.queue_post(
+        FakeResponse(
+            201,
+            headers={
+                "Location": "/simulations/sim-9",
+                "X-Ratelimit-Remaining": "0",
+                "X-Ratelimit-Reset": "1720000000",  # epoch tuyệt đối (không phải giây tương đối)
+            },
+        )
+    )
+    client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": "alpha-11"}))
+    client.queue_get(FakeResponse(200, json_data={"is": {"sharpe": 1.0, "checks": []}}))
+
+    sleeps: list[float] = []
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=sleeps.append, time_func=lambda: 0.0
+    )
+    result = sim.simulate("rank(close)")
+
+    assert sleeps == [Simulator.MAX_RATE_LIMIT_SLEEP]   # bị cap, không chờ 1.7 tỉ giây
+    assert result.status == "passed"

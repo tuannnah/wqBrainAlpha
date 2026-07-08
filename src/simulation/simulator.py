@@ -80,6 +80,17 @@ class QuotaExceededError(RuntimeError):
     khác (vòng kín sẽ không bao giờ dừng gọn nếu không phân biệt hai trường hợp này)."""
 
 
+def _parse_positive_number(raw: str | None) -> float | None:
+    """Parse chuỗi header thành float; trả None nếu thiếu/không parse được (an toàn,
+    không đoán mò khi header lạ)."""
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 def _is_auth_error(status_code: int, text: str) -> bool:
     return status_code in (401, 403) or "authentication credentials" in (text or "").lower()
 
@@ -180,6 +191,8 @@ class Simulator:
     # Số lần POST /simulations lỗi xác thực LIÊN TIẾP trước khi bỏ cuộc (client đã
     # tự re-auth 1 lần; còn 401 nghĩa là session chết) — chặn phí quota kéo dài.
     MAX_CONSECUTIVE_AUTH_FAILURES = 3
+    # Cap sleep tự-giãn rate-limit (giây): chống footgun nếu X-Ratelimit-Reset là epoch tuyệt đối.
+    MAX_RATE_LIMIT_SLEEP = 300.0
 
     def __init__(
         self,
@@ -199,6 +212,30 @@ class Simulator:
         # callback(expr)->(ok, reason): chặn biểu thức field-bịa TRƯỚC khi tốn 1 lượt API.
         self.pre_sim_validator = pre_sim_validator
         self._consecutive_auth_failures = 0
+
+    def _respect_rate_limit(self, resp) -> None:
+        """Tự-giãn PHÒNG NGỪA: đọc X-Ratelimit-Remaining trên response POST /simulations
+        THÀNH CÔNG; nếu đã về 0 (hay thấp hơn), chủ động sleep theo X-Ratelimit-Reset (hoặc
+        Retry-After nếu Reset vắng mặt) TRƯỚC khi tiếp tục — thay vì đợi tới khi bị 429 mới
+        xử lý (đó là việc của `_is_quota_exhausted`, xảy ra SAU khi đã bị chặn). Header
+        thiếu hoặc không parse được -> bỏ qua, không đoán mò (an toàn)."""
+        remaining = _parse_positive_number(resp.headers.get("X-Ratelimit-Remaining"))
+        if remaining is None or remaining > 0:
+            return
+        wait_s = _parse_positive_number(resp.headers.get("X-Ratelimit-Reset"))
+        if wait_s is None:
+            wait_s = _parse_positive_number(resp.headers.get("Retry-After"))
+        if wait_s is None:
+            return
+        # AN TOÀN: nếu Brain trả Reset là timestamp EPOCH tuyệt đối (không phải giây tương đối),
+        # sleep(wait_s) sẽ chờ ~vô tận -> cap ở MAX_RATE_LIMIT_SLEEP. Reset quota thực tế chỉ vài
+        # giây tới ~1 phút; cap 300s vừa đủ rộng vừa chặn footgun epoch.
+        wait_s = min(wait_s, self.MAX_RATE_LIMIT_SLEEP)
+        logger.info(
+            "X-Ratelimit-Remaining=0 -> chủ động sleep {}s trước khi tiếp tục (tránh bị 429).",
+            wait_s,
+        )
+        self._sleep(wait_s)
 
     def _build_body(self, expression: str, settings: dict | None) -> dict:
         body = {
@@ -251,6 +288,8 @@ class Simulator:
             return SimulationResult(
                 expression=expression, status="error", raw={"error": "thiếu Location header"}
             )
+
+        self._respect_rate_limit(resp)  # phòng ngừa: sleep trước khi poll nếu quota đã cạn.
 
         try:
             progress = self._poll(location)
