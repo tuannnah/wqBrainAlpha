@@ -61,6 +61,21 @@ _TRUNCS = (0.02, 0.05, 0.08)
 # Chỉ MARKET/SECTOR: docs khuyến nghị cho price/volume + eval local được (panel có group sector).
 _NEUTS = (Neutralization.MARKET, Neutralization.SECTOR)
 _MAX_TURNOVER = 0.70  # Brain đòi 1%-70%; config vượt trần là rác chắc chắn fail.
+# Ngưỡng nộp Delay-1 (docs): Sharpe > 1.25, Fitness > 1.0. Tuner tối ưu ĐIỂM NỘP = biên
+# chuẩn hoá NHỎ NHẤT giữa hai cổng (min(Sharpe/1.25, Fitness/1.0)) thay vì Sharpe trần — bằng
+# chứng live: core đạt Sharpe 1.45 nhưng FAIL vì fitness 0.80, do tuner chỉ đuổi Sharpe.
+_SUB_SHARPE_MIN = 1.25
+_SUB_FITNESS_MIN = 1.0
+
+
+def _submission_score(m: "AlphaMetrics") -> float:
+    """Điểm hướng nộp: min(Sharpe/1.25, Fitness/1.0). ≥1 ⇔ qua CẢ hai cổng. Đẩy tuner tìm
+    config cân bằng Sharpe–Fitness (giảm turnover nâng fitness) thay vì Sharpe cao mà fail fitness."""
+    s = m.sharpe
+    f = m.fitness
+    if s is None or f is None or not (np.isfinite(s) and np.isfinite(f)):
+        return float("-inf")
+    return min(float(s) / _SUB_SHARPE_MIN, float(f) / _SUB_FITNESS_MIN)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,8 +170,9 @@ def tune(
                 return float("-inf"), None
             if m.turnover is not None and m.turnover > max_turnover:
                 return float("-inf"), m   # vượt trần turnover -> loại (giữ metrics để báo cáo)
-            s = m.sharpe
-            return (float(s) if s is not None and np.isfinite(s) else float("-inf")), m
+            # Xếp hạng theo ĐIỂM NỘP (min biên Sharpe/Fitness) — không phải Sharpe trần — để
+            # winner qua CẢ hai cổng submission, không chỉ Sharpe.
+            return _submission_score(m), m
         except (KeyError, ValueError, ZeroDivisionError):
             return float("-inf"), None
 
@@ -199,7 +215,10 @@ def tune(
                 if s > best:
                     best, best_config, best_metrics = s, cfg, m
 
+    # local_sharpe báo cáo Sharpe THẬT của best (cho pre-sim floor 0.5), KHÔNG phải điểm nộp
+    # dùng để xếp hạng. Đường eval_fn (test) không có metrics -> giữ `best` (giá trị eval_fn).
+    reported_sharpe = best if best_metrics is None else best_metrics.sharpe
     return TuneResult(
         best_expr=Serializer().visit(best_node), best_config=best_config,
-        local_sharpe=best, local_metrics=best_metrics,
+        local_sharpe=reported_sharpe, local_metrics=best_metrics,
     )
