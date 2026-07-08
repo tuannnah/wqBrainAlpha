@@ -191,13 +191,25 @@ class LocalTunerRefiner:
         )
         ok_hard, _reasons = self.hard_filter_fn(result)
         passed = result.status == "passed" and ok_hard
-        self_corr = None
-        if passed and self.pool_corr_fn is not None and result.alpha_id:
-            self_corr = self.pool_corr_fn(result.alpha_id)
-            if self_corr is not None and abs(self_corr) >= self.max_pool_corr:
-                passed = False
         registry = self.registry or default_registry()
-        power_pool = passed and is_power_pool(tr.best_expr, result.sharpe, self_corr, registry)
+        # Cấu trúc Power Pool (chưa xét self_corr): Sharpe>=1.0, <=8 op, <=3 field, turnover hợp lệ.
+        turnover_ok = result.turnover is not None and 0.01 <= result.turnover <= 0.70
+        pp_structural = (
+            result.status != "error"
+            and result.sharpe is not None
+            and turnover_ok
+            and is_power_pool(tr.best_expr, result.sharpe, None, registry)
+        )
+        # Chỉ đo self-corr (tốn 1 lệnh Brain API) khi alpha CÓ THỂ nộp được: đã passed Regular,
+        # HOẶC đạt cấu trúc Power Pool. Alpha yếu (Sharpe<1.0 / cấu trúc không hợp) không bao giờ
+        # nộp được nên khỏi tốn correlation-check — vừa đúng eligibility Power Pool vừa tiết kiệm API.
+        self_corr = None
+        if self.pool_corr_fn is not None and result.alpha_id and (passed or pp_structural):
+            self_corr = self.pool_corr_fn(result.alpha_id)
+            if passed and self_corr is not None and abs(self_corr) >= self.max_pool_corr:
+                passed = False
+        # power_pool_eligible ĐỘC LẬP với `passed` Regular: cấu trúc đạt + self_corr<=0.5.
+        power_pool = pp_structural and is_power_pool(tr.best_expr, result.sharpe, self_corr, registry)
         return IdeaOutcome(
             expr=tr.best_expr, canonical_hash=canonical_hash, passed=passed,
             wq_alpha_id=result.alpha_id, sharpe=result.sharpe, fitness=result.fitness,

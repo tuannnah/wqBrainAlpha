@@ -142,8 +142,18 @@ class ClosedLoop:
         n_abandoned = 0
         seen: set[str] = set()
         seen |= self.repo.avoided_exprs()
+        # Thu thập expr đạt Power Pool nhưng KHÔNG đạt Regular — để tóm tắt cuối phiên (không
+        # đổi ClosedLoopReport public: chỉ log, tránh rủi ro cho consumer đang đọc report).
+        power_pool_only: list[str] = []
 
         def _report(stop_reason: str) -> ClosedLoopReport:
+            if power_pool_only:
+                logger.info(
+                    "⭐ Tóm tắt Power Pool: {} ứng viên đạt Power Pool nhưng KHÔNG đạt "
+                    "Regular (đáng cân nhắc nộp qua nhánh Power Pool): {}",
+                    len(power_pool_only),
+                    ", ".join(_short(e, 40) for e in power_pool_only),
+                )
             return ClosedLoopReport(
                 ideas_tried, sims_used, n_passed, n_abandoned, stop_reason,
                 rho_sharpe=self.calibration_tracker.last_rho if self.calibration_tracker else None,
@@ -183,6 +193,8 @@ class ClosedLoop:
                     n_passed += 1
                 else:
                     n_abandoned += 1
+                    if getattr(outcome, "power_pool_eligible", False):
+                        power_pool_only.append(outcome.expr)
                 # Kết quả 1 dòng: 0 sim = bị gate local chặn trước khi đốt quota Brain. In kèm
                 # lý do (stop_reason) để phân biệt local_floor (Sharpe/turnover) vs sub_universe.
                 if outcome.sims_used == 0:
