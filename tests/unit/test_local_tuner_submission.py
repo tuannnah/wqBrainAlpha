@@ -34,3 +34,23 @@ def test_tuner_chon_config_qua_ca_hai_cong_thay_vi_sharpe_tran(monkeypatch):
     assert res.best_config.decay == 6            # KHÔNG phải decay=2 (Sharpe 3.0 nhưng fail fitness)
     assert res.local_metrics.fitness >= 1.0      # winner qua cổng fitness
     assert res.local_sharpe == 1.4               # báo cáo Sharpe THẬT của winner (không phải điểm nộp)
+
+
+def test_tuner_thuong_nhe_turnover_thap_khi_diem_nop_hoa(monkeypatch):
+    # A (decay=6): Sharpe 1.4/fit 1.1/turnover 0.25 (<0.30) -> điểm nộp gốc min(1.12,1.1)=1.10.
+    # B (decay=2): Sharpe 1.4/fit 1.1/turnover 0.50 (>=0.30) -> điểm nộp gốc min(1.12,1.1)=1.10.
+    # Hai điểm nộp GỐC hoà nhau; B gặp trước (decay=2 trước decay=6 trong _DECAYS) nên nếu
+    # KHÔNG có thưởng turnover thấp, tuner giữ B (so sánh `>` nghiêm ngặt, hoà thì không cập nhật).
+    # Có thưởng (turnover<0.30 nhân 1.10) -> điểm A = 1.21 > điểm B = 1.10 -> tuner chọn A.
+    def fake_metrics(node, config, data, registry):
+        if config.decay == 6:
+            return _m(1.4, 1.1, turnover=0.25)
+        if config.decay == 2:
+            return _m(1.4, 1.1, turnover=0.50)
+        return _m(1.0, 1.0, turnover=0.50)   # base decay=4 -> điểm thấp, không ảnh hưởng
+
+    monkeypatch.setattr(local_tuner, "local_metrics", fake_metrics)
+    base = PortfolioConfig(neutralization=Neutralization.MARKET, decay=4, truncation=0.08)
+    res = tune("rank(close)", base, data=object(), budget=80)
+    assert res.best_config.decay == 6             # A (turnover thấp) thắng nhờ thưởng
+    assert res.local_metrics.turnover == 0.25

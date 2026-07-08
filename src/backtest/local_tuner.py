@@ -66,16 +66,27 @@ _MAX_TURNOVER = 0.70  # Brain đòi 1%-70%; config vượt trần là rác chắ
 # chứng live: core đạt Sharpe 1.45 nhưng FAIL vì fitness 0.80, do tuner chỉ đuổi Sharpe.
 _SUB_SHARPE_MIN = 1.25
 _SUB_FITNESS_MIN = 1.0
+# Docs WQ Brain: turnover < 30% -> ngưỡng IS-Ladder được nhân 0.85 (dễ pass hơn) + fitness
+# thường cao hơn (đòn bẩy kép). Thưởng NHẸ điểm nộp ở vùng này để tuner ưu tiên, nhưng không
+# đủ lớn để lấn át biên Sharpe/Fitness gốc (chỉ dùng để phá hoà/nghiêng nhẹ, không đảo ngược
+# một chênh lệch điểm nộp lớn).
+_LOW_TURNOVER_THRESH = 0.30
+_LOW_TURNOVER_BONUS = 1.10
 
 
 def _submission_score(m: "AlphaMetrics") -> float:
-    """Điểm hướng nộp: min(Sharpe/1.25, Fitness/1.0). ≥1 ⇔ qua CẢ hai cổng. Đẩy tuner tìm
-    config cân bằng Sharpe–Fitness (giảm turnover nâng fitness) thay vì Sharpe cao mà fail fitness."""
+    """Điểm hướng nộp: min(Sharpe/1.25, Fitness/1.0), có thưởng nhẹ (x1.10) nếu turnover < 30%
+    (docs: ngưỡng IS-Ladder x0.85 + fitness thường cao hơn ở vùng này — đòn bẩy kép). ≥1 ⇔ qua
+    CẢ hai cổng. Đẩy tuner tìm config cân bằng Sharpe–Fitness (giảm turnover nâng fitness) thay
+    vì Sharpe cao mà fail fitness."""
     s = m.sharpe
     f = m.fitness
     if s is None or f is None or not (np.isfinite(s) and np.isfinite(f)):
         return float("-inf")
-    return min(float(s) / _SUB_SHARPE_MIN, float(f) / _SUB_FITNESS_MIN)
+    score = min(float(s) / _SUB_SHARPE_MIN, float(f) / _SUB_FITNESS_MIN)
+    if m.turnover is not None and m.turnover < _LOW_TURNOVER_THRESH:
+        score *= _LOW_TURNOVER_BONUS
+    return score
 
 
 @dataclass(frozen=True, slots=True)
