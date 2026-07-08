@@ -76,10 +76,11 @@
   - **`b6a3cb0` Fix pre-filter chặn oan:** run thật lộ `count_positional_arity` bỏ param có
     `=` khỏi cap → `ts_backfill(x,lookback=d,k=1)` cap=1 → chặn OAN `ts_backfill(x,22)` (HỢP
     LỆ Brain). Đổi `count_max_arity` (tổng param). Ảnh hưởng cả rank/winsorize/ts_decay.
-  - **Chạy thật menu-5** (`closed-loop --alt-data --max-ideas 4`): 2/2 core social đạt Brain
-    sim thật (không timeout, 11-12′/cái) — **XÁC NHẬN đường alt-data hoạt động e2e** (field
-    nhận, neut SUBINDUSTRY áp, ra metric, lưu `source=alt_data`). Kết quả Sharpe -0.48/-0.19
-    (SAI DẤU: fade sai chiều, |Sharpe|~0.5 = tín hiệu CÓ THẬT; TO 0.22/0.37 thấp).
+  - **Chạy thật menu-5** (`closed-loop --alt-data`): **3 sim Brain thật, không timeout 11-13′**
+    — XÁC NHẬN đường alt-data e2e cho CẢ 2 dataset: social `-ts_mean(snt_social_value,5)`
+    Sharpe -0.48/TO 0.22, social `-ts_delta` Sharpe -0.19/TO 0.37 (SAI DẤU), option
+    `iv_mean_90−iv_mean_30` Sharpe +0.17/TO 0.30 (ĐÚNG DẤU, sau khi fix arity qua pre-filter +
+    neut SECTOR). Chưa pass nhưng tín hiệu CÓ THẬT. Bài học: **refiner alt-data CHƯA tune sign**.
 - **Decisions:** Chỉ dùng field ĐÃ verify LIVE (KHÔNG dùng opt6_*/pcr_*/snt1_* trong
   VERIFIED_FIELDS — dataset option6/sentiment1 KHÔNG có cho account này). Không GATE bằng
   comparison (`greater`/`less` chưa đăng ký local) — dùng scaling nhân thay. Refiner alt-data
