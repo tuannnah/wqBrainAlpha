@@ -18,6 +18,33 @@ import re
 from dataclasses import dataclass
 from datetime import date
 
+# Map token tự do trong "neutralization in (...)" của theme -> enum API BRAIN (verbatim từ
+# docs/worldquantbrain/docs/advanced-topics/*-risk-neutralized-alphas.md). Token lạ -> bỏ qua.
+_NEUT_TOKEN_TO_API: dict[str, str] = {
+    "slow": "SLOW",
+    "fast": "FAST",
+    "slow and fast": "SLOW_AND_FAST",
+    "ram": "REVERSION_AND_MOMENTUM",
+    "statistical": "STATISTICAL",
+    "crowding": "CROWDING",
+}
+
+
+def parse_allowed_neutralizations(raw: str | None) -> frozenset[str]:
+    """Từ cụm 'neutralization in (a, b, ...)' trả tập enum API cho phép. Token lạ bị bỏ (không
+    đoán). Không có cụm / raw None -> frozenset() (nghĩa: theme không ràng buộc neutralization)."""
+    if not raw:
+        return frozenset()
+    m = re.search(r"neutralization\s+in\s*\(([^)]*)\)", raw)
+    if not m:
+        return frozenset()
+    out: set[str] = set()
+    for tok in m.group(1).split(","):
+        key = tok.strip().lower()
+        if key in _NEUT_TOKEN_TO_API:
+            out.add(_NEUT_TOKEN_TO_API[key])
+    return frozenset(out)
+
 
 @dataclass(frozen=True)
 class PowerPoolThemeWeek:
@@ -29,6 +56,7 @@ class PowerPoolThemeWeek:
     universe: str | None = None
     datasets_excluded: tuple[str, ...] = ()
     unparsed_constraints: str | None = None
+    allowed_neutralizations: frozenset[str] = frozenset()
 
     def contains(self, d: date) -> bool:
         return self.start_date <= d <= self.end_date
@@ -72,6 +100,15 @@ JUNE_JULY_2026_CALENDAR: list[PowerPoolThemeWeek] = [
         region="USA", delay=1, universe="TOP1000",
         datasets_excluded=("pv1",),
         unparsed_constraints="neutralization in (slow, fast, slow and fast, ram, statistical, crowding)",
+    ),
+    PowerPoolThemeWeek(
+        date(2026, 7, 6), date(2026, 7, 12),
+        region="USA", delay=1, universe="TOP1000",
+        datasets_excluded=("pv1",),
+        unparsed_constraints="neutralization in (slow, fast, slow and fast, ram, statistical, crowding)",
+        allowed_neutralizations=parse_allowed_neutralizations(
+            "neutralization in (slow, fast, slow and fast, ram, statistical, crowding)"
+        ),
     ),
 ]
 

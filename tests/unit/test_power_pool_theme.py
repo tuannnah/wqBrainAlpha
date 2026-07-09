@@ -9,6 +9,7 @@ from datetime import date
 from src.scoring.power_pool_theme import (
     JUNE_JULY_2026_CALENDAR,
     matches_theme,
+    parse_allowed_neutralizations,
     parse_theme_filter,
     theme_for_date,
 )
@@ -82,3 +83,32 @@ def test_matches_theme_tuan_khong_co_filter_chi_tiet_khong_chan_gi():
     )
     assert ok is True  # không có field nào để so -> không chặn
     assert reasons == []
+
+
+def test_parse_allowed_neutralizations_du_6_token():
+    raw = "neutralization in (slow, fast, slow and fast, ram, statistical, crowding)"
+    assert parse_allowed_neutralizations(raw) == frozenset(
+        {"SLOW", "FAST", "SLOW_AND_FAST", "REVERSION_AND_MOMENTUM", "STATISTICAL", "CROWDING"}
+    )
+
+
+def test_parse_allowed_neutralizations_bo_token_la():
+    raw = "neutralization in (statistical, khong_biet, crowding)"
+    assert parse_allowed_neutralizations(raw) == frozenset({"STATISTICAL", "CROWDING"})
+
+
+def test_parse_allowed_neutralizations_none_va_rong():
+    assert parse_allowed_neutralizations(None) == frozenset()
+    assert parse_allowed_neutralizations("region=USA & delay=1") == frozenset()
+
+
+def test_theme_tuan_hien_tai_2026_07_09():
+    week = theme_for_date(date(2026, 7, 9))
+    assert week is not None
+    assert week.region == "USA"
+    assert week.delay == 1
+    assert week.universe == "TOP1000"
+    assert week.datasets_excluded == ("pv1",)
+    assert week.allowed_neutralizations == frozenset(
+        {"SLOW", "FAST", "SLOW_AND_FAST", "REVERSION_AND_MOMENTUM", "STATISTICAL", "CROWDING"}
+    )
