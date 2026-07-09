@@ -1,15 +1,20 @@
 # MiniBrain — Progress log
 
 ## Current state
-- **Phase:** Sau Phase 8 — nhánh `alpha-quality-from-brain-docs` (CHƯA merge). **[2026-07-09
-  Session 07] MỞ ĐƯỜNG ALT-DATA đi thẳng Brain** (đòn bẩy độ mới, gỡ pool bão hòa 1 họ PV).
-  Verify field alt-data thật qua API (option8 IV/HV, socialmedia8 sentiment); thêm
-  `AltDataIdeaSource` + nhánh sim-thẳng trong LocalTunerRefiner (khi `local_usable==False`:
-  bỏ tune/floor local, sim Brain với neutralization theo category) + cờ `--alt-data`. **CHẠY
-  THẬT menu-5 xác nhận: 2/2 core social đạt Brain sim thật** (`snt_social_value` fade: Sharpe
-  -0.48/TO 0.22 và -0.19/TO 0.37 — SAI DẤU nhưng |Sharpe|~0.5 = có nội dung dự báo; TO thấp
-  tốt cho Power Pool). **Bonus fix:** run lộ bug pre-filter `count_positional_arity` cap
-  `ts_backfill`=1 → chặn OAN mọi core option (biểu thức hợp lệ Brain) → sửa `count_max_arity`.
+- **Phase:** Triển khai `docs/tailieu/IMPROVEMENT_SPEC.md` (5 pha, tuần tự). **[2026-07-10
+  Session 08] PHA 0 (Instrumentation) XONG code+test** trên `main`. Design ánh xạ spec→code:
+  `docs/superpowers/specs/2026-07-10-improvement-spec-implementation-design.md`. Đã thêm:
+  IdeaOutcome +9 trường chẩn đoán, `RunAlphaLogger` schema cố định luôn điền đủ (tách local_/
+  brain_ sharpe, không nuốt metric khi failed), `src/reporting/diagnostics.py`
+  (fail_check_from_reasons + classify_family), `src/reporting/session_summary.py` (funnel theo
+  stage/fail_check/family + median timing + dup → ghi `logs/session_summary_*.md`).
+  `LocalTunerRefiner` giữ `_reasons` (trước bị vứt) + đo timing + điền field mọi đường return.
+- **Next (Pha 1 — throughput):** canonical fold hằng số DƯƠNG trong `CanonicalHasher` + golden
+  test bất biến; dedup dùng hash TRƯỚC backtest ở `ClosedLoop`; depth guard trước backtest;
+  parsimony + hằng số rời rạc trong GP. Rồi Pha 2 (chuyển họ nhân tố — yield), 3 (regression_neut
+  ở config stage), 4 (floor calibrated).
+- **Acceptance Pha 0 còn treo:** cần USER chạy menu-5 (QR-login terminal thật) lấy
+  `session_summary` baseline — Claude Code không login QR được (memory `project_luong5_vanhanh`).
 - **Phase (trước):** Đã (1) nâng chất lượng alpha từ docs WQ, (2) CHẠY THẬT Auto SIM + cải
   thiện. **e2e ĐÃ có alpha đạt chất lượng submit** — 3 alpha (`rKlkG9O8`/`kq0RY2G8`/`E5E3NKZJ`,
   VWAP intraday-reversal) Sharpe ~1.5, `failed_checks=[]`, self-corr 0.49/0.47/0.50 < 0.70.
@@ -274,3 +279,41 @@
 - **Tests:** `pytest -q`: 883 passed (879 + 4 mới: 3 `test_simulator.py` + 1
   `test_closed_loop_adapters.py`), 1 fail có sẵn không liên quan (psycopg). `ruff --select
   F401,F811,F821` sạch. Commit `265f2e8`, đã push `main` (`0ebc68d..265f2e8`).
+
+### [2026-07-10] Session 08 — IMPROVEMENT_SPEC Pha 0: Instrumentation funnel
+- **Phase:** Bắt đầu triển khai `docs/tailieu/IMPROVEMENT_SPEC.md` (5 pha, tuần tự — user
+  chốt). Design ánh xạ spec→code: `docs/superpowers/specs/2026-07-10-improvement-spec-implementation-design.md`.
+  Pha 0 (instrumentation) XONG code+test; các pha 1-4 chưa bắt đầu.
+- **Điều tra trước (3 sub-agent, §5):** nền tảng đã có nhiều — `CanonicalHasher` sort giao
+  hoán+normalize literal+hash AST (CHƯA fold hằng số), lưu SQLite `expressions.canonical_hash
+  UNIQUE` bền cross-session; GP depth cap 7 + parsimony mềm NSGA-II; `CorrelationChecker` poll
+  checker THẬT 0.70; `regression_neut`/`vector_neut` đã implement (chưa dùng làm lever). Thiếu:
+  fail_check bị vứt (`closed_loop_adapters.py` cũ `_reasons`), CSV nuốt sharpe khi failed,
+  không session_summary, dedup dùng string thô (chạy SAU backtest).
+- **Done (verified, pytest xanh):**
+  - `IdeaOutcome` +9 trường Pha 0 (stage_reached/fail_check/family/expr_depth/gen_ms/
+    backtest_ms/sim_ms/dedup_key/local_sharpe), default tương thích ngược. `sharpe`/`fitness`
+    giữ nguyên = brain metric (giảm blast-radius; CSV tách cột local_/brain_).
+  - `RunAlphaLogger` schema cố định 27 cột, LUÔN điền đủ, ghi brain metric BẤT KỂ passed
+    (khác log cũ nuốt sharpe → không phân tích tự động được).
+  - `src/reporting/diagnostics.py`: `fail_check_from_reasons` (reasons→mã LOW_SHARPE/…),
+    `classify_family` (suy họ từ field). `src/reporting/session_summary.py`: funnel theo
+    stage, phân bố fail_check/family, median timing, dup — render markdown + ghi file.
+  - `LocalTunerRefiner` giữ `_reasons` (trước bị vứt) + đo perf_counter + điền field mọi
+    đường return. `ClosedLoop` nhận `session_summary` (record + record_dup_blocked). `main.py`
+    dựng SessionSummary → ghi `logs/session_summary_*.md` + in cuối phiên.
+- **Decisions:** (1) Canonical fold (Pha 1) sẽ **strip mọi multiply/divide hằng DƯƠNG** khỏi
+  dedup key (giữ hằng ÂM = đổi dấu = alpha khác); user ủy quyền, sẽ khóa bằng golden test ở
+  Pha 1. (2) Giữ tên trường `sharpe`/`fitness` trên IdeaOutcome thay vì đổi tên — tránh vỡ
+  mọi consumer; việc tách chỉ ở tầng CSV. (3) TDD từng bước, mỗi task 1 commit.
+- **In progress:** Pha 1 (canonical dedup + depth guard trước backtest + parsimony/hằng số
+  rời rạc) — chưa bắt đầu.
+- **Blockers / open risks:** "Chạy 1 phiên baseline funnel" (acceptance Pha 0, single-variable
+  §6) cần WQ Brain QR-login trong terminal thật — KHÔNG chạy được qua Claude Code. User cần tự
+  chạy menu-5 để lấy `session_summary` baseline trước khi so sánh Pha 1+.
+- **Next step:** Pha 1.1 — thêm constant-folding scale dương vào `CanonicalHasher` + golden
+  test bất biến PnL; rồi chuyển dedup sang dùng hash TRƯỚC backtest ở `ClosedLoop`.
+- **Tests:** `pytest -q`: 1181 passed, 1 fail pre-existing (psycopg thiếu, không liên quan).
+  Thêm test: `test_idea_outcome_fields`, `test_run_alpha_log` (viết lại), `test_session_summary`,
+  `test_diagnostics`, `test_local_refiner_instrumentation`, +1 case `test_closed_loop`.
+  Commits: `cf525ce` (design) → `3dd94f3` → `d03f75c` → `94459e3`.
