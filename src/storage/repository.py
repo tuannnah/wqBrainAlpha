@@ -335,6 +335,37 @@ class MiniBrainRepository:
         finally:
             session.close()
 
+    def good_signals_for_combine(
+        self, limit: int = 50,
+    ) -> list[tuple[str, Dates, npt.NDArray[np.float64], float]]:
+        """Nguồn tín hiệu con 'đã chứng minh tốt' cho combiner: (expr_string, dates, pnl,
+        fitness) của các evaluation PASSED có PnL trong pool (PoolPnlModel chỉ lưu eval pass).
+        Sắp fitness giảm dần, cắt `limit`. Ghép kho này với pool run hiện tại giúp combiner
+        tìm tổ hợp ít tương quan đa dạng hơn (spec 2026-07-09)."""
+        session = self.session_factory()
+        try:
+            rows = (
+                session.query(
+                    ExpressionModel.expr_string,
+                    PoolPnlModel.dates_blob,
+                    PoolPnlModel.pnl_blob,
+                    EvaluationModel.fitness,
+                )
+                .join(EvaluationModel, PoolPnlModel.evaluation_id == EvaluationModel.id)
+                .join(ExpressionModel, EvaluationModel.expression_id == ExpressionModel.id)
+                .order_by(EvaluationModel.fitness.desc())
+                .limit(limit)
+                .all()
+            )
+            out: list[tuple[str, Dates, npt.NDArray[np.float64], float]] = []
+            for expr_string, dates_blob, pnl_blob, fitness in rows:
+                dates = np.frombuffer(dates_blob, dtype="datetime64[D]")
+                pnl = np.frombuffer(pnl_blob, dtype=np.float64).copy()
+                out.append((expr_string, dates, pnl, float(fitness or 0.0)))
+            return out
+        finally:
+            session.close()
+
     def save_pool_pnl(
         self, evaluation_id: int, dates: npt.NDArray[np.datetime64],
         pnl: npt.NDArray[np.float64],

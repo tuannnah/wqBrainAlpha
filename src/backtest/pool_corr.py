@@ -18,6 +18,42 @@ from src.local_types import Dates
 _MIN_OVERLAP_POINTS = 2  # Pearson cần >=2 điểm hữu hạn để có phương sai xác định
 
 
+def pairwise_abs_rho(
+    pnl_a: npt.NDArray[np.float64], dates_a: Dates,
+    pnl_b: npt.NDArray[np.float64], dates_b: Dates,
+) -> float | None:
+    """|Pearson rho| của hai chuỗi PnL trên NGÀY GIAO NHAU; None nếu thiếu điểm hoặc
+    phương sai bằng 0 — KHÔNG bịa rho=0 giả.
+
+    Helper cấp thấp dùng chung: `PoolCorrelation` (self-corr với pool) và `combiner`
+    (chọn tín hiệu ít tương quan để ghép) đều gọi hàm này để logic tương quan chỉ tồn
+    tại MỘT chỗ. Tự sort mỗi chuỗi theo dates trước khi align nên caller không cần
+    sort trước (PnL từ DB và từ run hiện tại có thể lệch trục ngày)."""
+    dates_a = np.asarray(dates_a)
+    pnl_a = np.asarray(pnl_a, dtype=np.float64)
+    dates_b = np.asarray(dates_b)
+    pnl_b = np.asarray(pnl_b, dtype=np.float64)
+    ord_a = np.argsort(dates_a)
+    dates_a, pnl_a = dates_a[ord_a], pnl_a[ord_a]
+    ord_b = np.argsort(dates_b)
+    dates_b, pnl_b = dates_b[ord_b], pnl_b[ord_b]
+    common = np.intersect1d(dates_a, dates_b)
+    if common.size < _MIN_OVERLAP_POINTS:
+        return None
+    x = pnl_a[np.searchsorted(dates_a, common)]
+    y = pnl_b[np.searchsorted(dates_b, common)]
+    finite = np.isfinite(x) & np.isfinite(y)
+    if int(finite.sum()) < _MIN_OVERLAP_POINTS:
+        return None
+    x, y = x[finite], y[finite]
+    if float(np.std(x)) == 0.0 or float(np.std(y)) == 0.0:
+        return None
+    rho = float(np.corrcoef(x, y)[0, 1])
+    if not np.isfinite(rho):
+        return None
+    return abs(rho)
+
+
 class PoolCorrelation:
     """Max |Pearson rho| của candidate PnL so với từng alpha trong pool."""
 

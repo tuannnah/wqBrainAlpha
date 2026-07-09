@@ -648,7 +648,7 @@ def _run_closed_loop_session(
     patience: int = 5, max_ideas: int | None = None,
     neutralization: str = "MARKET", decay: int = 4, truncation: float = 0.08,
     base_seed: int | None = None, refiner_kind: str = "local",
-    include_alt_data: bool = False,
+    include_alt_data: bool = False, include_combiner: bool = True,
 ) -> bool:
     """Dựng + chạy vòng kín AI+MiniBrain thật (dùng chung cho CLI `closed-loop` và menu mục 5).
 
@@ -745,6 +745,7 @@ def _run_closed_loop_session(
         region=region, universe=universe, pop_size=pop_size, n_generations=n_generations,
         top_k=top_k, max_corr=max_corr, max_ideas=max_ideas, base_seed=seed,
         refiner=refiner, include_alt_data=include_alt_data, alpha_logger=_alpha_logger,
+        include_combiner=include_combiner,
     )
     console.print(f"[cyan]Bắt đầu vòng kín (base_seed={seed}, Ctrl+C để dừng)…[/cyan]")
     # `finally` bao trùm mọi đường ra (chạy xong bình thường/QuotaExhausted/Ctrl+C) để
@@ -799,6 +800,11 @@ def closed_loop_cmd(
         help="Seed thêm core alt-data (option8 IV / socialmedia8 sentiment) đi THẲNG Brain sim "
              "-> mở rộng khỏi họ price/volume bão hòa, giảm self-corr (đòn bẩy độ mới).",
     ),
+    combine: bool = typer.Option(
+        True, "--combine/--no-combine",
+        help="Nối tiếp mỗi batch bằng ALPHA GHÉP: tổ hợp tín hiệu ít tương quan (batch + kho DB) "
+             "thành add(rank(...)) -> Sharpe ~√N (Grinold–Kahn), dễ chạm ngưỡng nộp. Mặc định bật.",
+    ),
 ) -> None:
     """Vòng kín AI + MiniBrain: GP sinh ý tưởng → refine (LocalTuner local mặc định, hoặc AI
     refine ≤patience nếu --refiner llm) + gate local → SIM Brain → lưu DB + feedback → lặp
@@ -821,7 +827,7 @@ def closed_loop_cmd(
         patience=patience, max_ideas=(max_ideas or None),
         neutralization=neutralization, decay=decay, truncation=truncation,
         base_seed=(base_seed or None), refiner_kind=refiner,
-        include_alt_data=alt_data,
+        include_alt_data=alt_data, include_combiner=combine,
     )
     if not ok:
         raise typer.Exit(code=1)

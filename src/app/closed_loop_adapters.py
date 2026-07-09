@@ -19,12 +19,14 @@ from src.generation.alt_data_seeds import (
     neutralization_for_expr,
     pp_neutralization_for_expr,
 )
+from src.generation.combiner import SubSignal
 from src.gp.engine import GPEngine
 from src.lang.parser import parse
 from src.lang.registry import default_registry
 from src.lang.visitors import CanonicalHasher, FieldCollector, OperatorCollector
 from src.pipeline.closed_loop import IdeaOutcome, QuotaExhausted
-from src.pipeline.runner import generate_many
+from src.pipeline.combine_stage import combine_stage
+from src.pipeline.runner import _score_one_full, generate_many
 from src.pipeline.shortlist import ShortlistCandidate
 from src.scoring.filter import passes as _default_filter
 from src.scoring.vector import score_vector as _score_vector
@@ -386,6 +388,61 @@ class GPIdeaSource:
         return []
 
 
+class CombinerIdeaSource:
+    """Nối tiếp mỗi batch bằng các ALPHA GHÉP: gom tín hiệu con của batch (có PnL local) +
+    kho alpha tốt trong DB, chọn greedy khử tương quan (spec 2026-07-09), dựng biểu thức
+    add(rank(...)) trọng số đều, chấm local, chỉ THÊM combo qua gate & vượt tín hiệu con tốt
+    nhất. Combo = tổ hợp tín hiệu ít tương quan -> Sharpe ~√N (Grinold–Kahn) -> dễ chạm ngưỡng
+    nộp hơn alpha đơn. Bọc quanh fallback (GP/curated/alt-data) — combo không thay thế batch
+    gốc mà bổ sung; refiner tune 1 neutralization cho combo (biểu thức đã tước group_neutralize)."""
+
+    def __init__(
+        self, *, fallback, data: object, repo: object, config: object, registry: object,
+        tau: float = 0.30, n_min: int = 2, n_max: int = 4, max_combos: int = 5,
+        db_limit: int = 50,
+    ) -> None:
+        self._fallback = fallback
+        self._data: Any = data
+        self._repo: Any = repo
+        self._config: Any = config
+        self._registry: Any = registry
+        self.tau = tau
+        self.n_min = n_min
+        self.n_max = n_max
+        self.max_combos = max_combos
+        self.db_limit = db_limit
+
+    def _score_fn(self, pool):
+        def score(expr: str):
+            return _score_one_full(expr, self._config, self._data, pool)
+        return score
+
+    def _signals(self, batch: list[ShortlistCandidate]) -> list[SubSignal]:
+        """Tín hiệu con ứng viên = candidate batch CÓ PnL local (curated/alt-data pnl rỗng bị
+        bỏ) + kho alpha tốt DB. score = fitness để xếp seed."""
+        sigs: list[SubSignal] = []
+        for c in batch:
+            if c.metrics is not None and getattr(c.pnl, "size", 0) > 0:
+                sigs.append(SubSignal(c.expr, c.pnl, c.dates, c.metrics.fitness, source="run"))
+        for expr, dates, pnl, fitness in self._repo.good_signals_for_combine(limit=self.db_limit):
+            sigs.append(SubSignal(expr, pnl, dates, fitness, source="db"))
+        return sigs
+
+    def next_batch(self) -> list[ShortlistCandidate]:
+        batch = self._fallback.next_batch()
+        if not batch:
+            return batch
+        signals = self._signals(batch)
+        if len(signals) < self.n_min:
+            return batch
+        pool: Any = self._repo.load_pool() or None
+        combos = combine_stage(
+            signals, self._score_fn(pool), tau=self.tau, n_min=self.n_min,
+            n_max=self.n_max, max_combos=self.max_combos, registry=self._registry,
+        )
+        return batch + combos
+
+
 def build_closed_loop(
     *, data: object, repo: object, config: object, registry: object, loop: object,
     region: str = "USA", universe: str = "TOP3000",
@@ -394,6 +451,7 @@ def build_closed_loop(
     calibrate_every: int = 10, rho_bar: float = 0.5, max_ideas: int | None = None,
     refiner: object | None = None, curated_seeds: bool = True,
     include_alt_data: bool = False, alpha_logger: object | None = None,
+    include_combiner: bool = True,
 ) -> "ClosedLoop":
     """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
     bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
@@ -414,6 +472,12 @@ def build_closed_loop(
     # --max-ideas nhỏ vẫn chạm alt-data (đòn bẩy độ mới), không bị PV core nuốt hết quota.
     if include_alt_data:
         idea_source = AltDataIdeaSource(fallback=idea_source)
+    # Combiner bọc NGOÀI CÙNG: nối tiếp mỗi batch (sau curated/alt-data) bằng alpha ghép từ
+    # chính tín hiệu con batch đó + kho DB -> tự động chạy sau mỗi run (spec 2026-07-09).
+    if include_combiner:
+        idea_source = CombinerIdeaSource(
+            fallback=idea_source, data=data, repo=repo, config=config, registry=registry,
+        )
     if refiner is None:
         refiner = RefinementLoopRefiner(loop)
     tracker = CalibrationTracker(repo, every=calibrate_every, rho_bar=rho_bar)  # type: ignore[arg-type]
