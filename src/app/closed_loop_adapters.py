@@ -23,7 +23,8 @@ from src.generation.combiner import SubSignal
 from src.gp.engine import GPEngine
 from src.lang.parser import parse
 from src.lang.registry import default_registry
-from src.lang.visitors import CanonicalHasher, FieldCollector, OperatorCollector
+from src.lang.visitors import CanonicalHasher, DepthVisitor, FieldCollector, OperatorCollector
+from src.reporting.diagnostics import classify_family, fail_check_from_reasons
 from src.pipeline.closed_loop import IdeaOutcome, QuotaExhausted
 from src.pipeline.combine_stage import combine_stage
 from src.pipeline.runner import _score_one_full, generate_many
@@ -174,6 +175,8 @@ class LocalTunerRefiner:
     def _finalize(
         self, result, expr: str, canonical_hash: str, sim_cfg, *,
         stop_reason: str, source: str, description: str,
+        local_sharpe: float | None = None, backtest_ms: float | None = None,
+        sim_ms: float | None = None,
     ) -> IdeaOutcome:
         """Chấm điểm + lưu DB + xét Power Pool cho 1 kết quả sim Brain — DÙNG CHUNG cho đường
         tune (local_tuned) và đường alt-data (alt_data_direct) để không lặp logic."""
@@ -205,12 +208,24 @@ class LocalTunerRefiner:
                 passed = False
         # power_pool_eligible ĐỘC LẬP với `passed` Regular: cấu trúc đạt + self_corr<=0.5.
         power_pool = pp_structural and is_power_pool(expr, result.sharpe, self_corr, registry)
+        # Instrumentation Pha 0: stage đã sim; fail_check suy từ reasons hard_filter (KHÔNG vứt
+        # _reasons như trước) + self-corr; family/depth để phân bố funnel.
+        if passed:
+            fail_check = ""
+        elif self_corr is not None and abs(self_corr) >= self.max_pool_corr:
+            fail_check = "SELF_CORR"
+        else:
+            fail_check = fail_check_from_reasons(_reasons)
         return IdeaOutcome(
             expr=expr, canonical_hash=canonical_hash, passed=passed,
             wq_alpha_id=result.alpha_id, sharpe=result.sharpe, fitness=result.fitness,
             turnover=result.turnover, self_corr=self_corr, sims_used=1,
             stop_reason=stop_reason, power_pool_eligible=power_pool,
             sim_settings=sim_cfg.to_settings(), source=source,
+            stage_reached="passed" if passed else "simmed", fail_check=fail_check,
+            family=classify_family(expr), expr_depth=DepthVisitor().visit(parse(expr)),
+            dedup_key=canonical_hash, local_sharpe=local_sharpe,
+            backtest_ms=backtest_ms, sim_ms=sim_ms,
         )
 
     def refine_and_sim(self, candidate: ShortlistCandidate) -> IdeaOutcome:
@@ -219,8 +234,15 @@ class LocalTunerRefiner:
             return self._sim_direct(candidate)
         # Giai đoạn 1 (không mạng): coordinate descent quanh core + config, đánh giá bằng
         # đúng đường backtest local (Evaluator -> PortfolioBuilder -> Backtester -> Metrics).
+        import time
+
+        _t0 = time.perf_counter()
         tr = self._tune(candidate.expr, self.local_config, self.data, registry=self.registry)
+        backtest_ms = (time.perf_counter() - _t0) * 1000.0
         canonical_hash = CanonicalHasher().visit(parse(tr.best_expr))
+        node = parse(tr.best_expr)
+        _depth = DepthVisitor().visit(node)
+        _family = classify_family(tr.best_expr)
         # Lưu local-eval để calibration ρ khớp hash với Brain sim ghi sau (chỉ khi có kho + metrics).
         if self.calib_repo is not None and tr.local_metrics is not None:
             self._luu_local_eval_calibration(tr, canonical_hash)
@@ -230,6 +252,9 @@ class LocalTunerRefiner:
                 expr=tr.best_expr, canonical_hash=canonical_hash, passed=False,
                 wq_alpha_id=None, sharpe=None, fitness=None, turnover=None,
                 self_corr=None, sims_used=0, stop_reason="local_floor",
+                stage_reached="local_floor", fail_check="LOW_SHARPE", family=_family,
+                expr_depth=_depth, dedup_key=canonical_hash, local_sharpe=tr.local_sharpe,
+                backtest_ms=backtest_ms,
             )
 
         # Proxy robustness sub-universe (xấp xỉ sub-universe test của Brain): winner phải giữ
@@ -247,6 +272,9 @@ class LocalTunerRefiner:
                 expr=tr.best_expr, canonical_hash=canonical_hash, passed=False,
                 wq_alpha_id=None, sharpe=None, fitness=None, turnover=None,
                 self_corr=None, sims_used=0, stop_reason="sub_universe",
+                stage_reached="sub_universe", fail_check="LOW_SUB_UNIVERSE_SHARPE",
+                family=_family, expr_depth=_depth, dedup_key=canonical_hash,
+                local_sharpe=tr.local_sharpe, backtest_ms=backtest_ms,
             )
 
         # Giai đoạn 2 (1 lần gọi mạng): sim Brain đúng config tốt nhất tune() tìm được —
@@ -258,16 +286,19 @@ class LocalTunerRefiner:
             decay=tr.best_config.decay, truncation=tr.best_config.truncation,
             neutralization=tr.best_config.neutralization.name,
         )
+        _ts = time.perf_counter()
         try:
             result = self.simulator.simulate(tr.best_expr, settings=sim_cfg.to_settings())
         except (AuthExpiredError, QuotaExceededError) as exc:
             # Cùng lý do như RefinementLoopRefiner: session chết hoặc hết quota ngày ->
             # ClosedLoop cần dừng gọn, không coi là "sim lỗi" rồi thử thêm ứng viên khác.
             raise QuotaExhausted(str(exc)) from exc
+        sim_ms = (time.perf_counter() - _ts) * 1000.0
 
         return self._finalize(
             result, tr.best_expr, canonical_hash, sim_cfg,
             stop_reason="local_tuned", source="gp_local_tuner", description="local-tuned motif",
+            local_sharpe=tr.local_sharpe, backtest_ms=backtest_ms, sim_ms=sim_ms,
         )
 
 
@@ -451,7 +482,7 @@ def build_closed_loop(
     calibrate_every: int = 10, rho_bar: float = 0.5, max_ideas: int | None = None,
     refiner: object | None = None, curated_seeds: bool = True,
     include_alt_data: bool = False, alpha_logger: object | None = None,
-    include_combiner: bool = True,
+    include_combiner: bool = True, session_summary: object | None = None,
 ) -> "ClosedLoop":
     """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
     bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
@@ -485,4 +516,5 @@ def build_closed_loop(
         idea_source=idea_source, refiner=refiner, repo=repo,  # type: ignore[arg-type]
         region=region, universe=universe, max_ideas=max_ideas,
         calibration_tracker=tracker, alpha_logger=alpha_logger,
+        session_summary=session_summary,
     )

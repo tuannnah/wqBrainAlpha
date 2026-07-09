@@ -143,6 +143,7 @@ class ClosedLoop:
         max_ideas: int | None = None,
         calibration_tracker: CalibrationTracker | None = None,
         alpha_logger=None,
+        session_summary=None,
     ) -> None:
         self.idea_source = idea_source
         self.refiner = refiner
@@ -153,6 +154,8 @@ class ClosedLoop:
         self.calibration_tracker = calibration_tracker
         # Logger CSV mọi ý tưởng (Task 2 RunAlphaLogger); None -> bỏ qua, tương thích ngược.
         self.alpha_logger = alpha_logger
+        # Thu funnel cuối phiên (Pha 0 SessionSummary); None -> bỏ qua, tương thích ngược.
+        self.session_summary = session_summary
 
     def run(self) -> ClosedLoopReport:
         """Lặp: next_batch → mỗi ý tưởng refine_and_sim → record_brain_sim → đếm. Dừng khi
@@ -194,6 +197,8 @@ class ClosedLoop:
                     return _report("no_more_ideas")
                 if cand.expr in seen:
                     logger.info("↩︎ Bỏ ý tưởng trùng phiên/avoid-list: {}", _short(cand.expr))
+                    if self.session_summary is not None:
+                        self.session_summary.record_dup_blocked()
                     continue
                 seen.add(cand.expr)
                 logger.info("🔎 Ý tưởng #{}: refine+sim {}", ideas_tried + 1, _short(cand.expr))
@@ -213,6 +218,8 @@ class ClosedLoop:
                 # Log CSV mọi ý tưởng có outcome (kể cả bị gate 0-sim) — Task 3.
                 if self.alpha_logger is not None:
                     self.alpha_logger.log(ideas_tried, outcome)
+                if self.session_summary is not None:
+                    self.session_summary.record(outcome)
                 sims_used += outcome.sims_used
                 if outcome.passed:
                     n_passed += 1

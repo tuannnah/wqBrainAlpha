@@ -735,9 +735,11 @@ def _run_closed_loop_session(
         refiner = None  # build_closed_loop mặc định RefinementLoopRefiner(loop) (đường LLM cũ)
 
     from src.reporting.run_alpha_log import RunAlphaLogger, run_log_path
+    from src.reporting.session_summary import SessionSummary, summary_path
 
     _log_path = run_log_path()
     _alpha_logger = RunAlphaLogger(_log_path)
+    _summary = SessionSummary()
     console.print(f"[cyan]📄 Log công thức alpha phiên này: {_log_path}[/cyan]")
 
     cl = build_closed_loop(
@@ -745,7 +747,7 @@ def _run_closed_loop_session(
         region=region, universe=universe, pop_size=pop_size, n_generations=n_generations,
         top_k=top_k, max_corr=max_corr, max_ideas=max_ideas, base_seed=seed,
         refiner=refiner, include_alt_data=include_alt_data, alpha_logger=_alpha_logger,
-        include_combiner=include_combiner,
+        include_combiner=include_combiner, session_summary=_summary,
     )
     console.print(f"[cyan]Bắt đầu vòng kín (base_seed={seed}, Ctrl+C để dừng)…[/cyan]")
     # `finally` bao trùm mọi đường ra (chạy xong bình thường/QuotaExhausted/Ctrl+C) để
@@ -770,6 +772,15 @@ def _run_closed_loop_session(
         return True
     finally:
         _alpha_logger.close()
+        # Báo cáo funnel cuối phiên (Pha 0): in + ghi file để trả lời "chết ở đâu, vì sao,
+        # tốn bao lâu" mà không phải parse CSV thủ công.
+        try:
+            _sum_path = summary_path()
+            _summary.write(_sum_path)
+            console.print(_summary.render_markdown())
+            console.print(f"[cyan]📊 Tóm tắt phiên: {_sum_path}[/cyan]")
+        except Exception as _exc:  # noqa: BLE001 - báo cáo lỗi không được làm hỏng phiên
+            console.print(f"[yellow]Không ghi được session_summary: {_exc}[/yellow]")
 
 
 @app.command("closed-loop")

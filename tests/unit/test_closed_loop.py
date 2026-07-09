@@ -276,3 +276,18 @@ def test_closed_loop_goi_alpha_logger_moi_y_tuong():
     cl = ClosedLoop(_Src(), _Ref(), _Repo(), max_ideas=1, alpha_logger=_Logger())
     cl.run()
     assert logged == [(1, "rank(close)")]
+
+
+def test_closed_loop_feed_session_summary(repo) -> None:  # noqa: ANN001
+    """ClosedLoop record mỗi outcome vào session_summary + đếm dup bị chặn (Pha 0)."""
+    from src.reporting.session_summary import SessionSummary
+
+    src = _FakeIdeaSource([[_cand("close"), _cand("open"), _cand("close")]])  # "close" lặp
+    refiner = _FakeRefiner({"close": _passed("close")})
+    summary = SessionSummary()
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo, session_summary=summary)
+    loop.run()
+    d = summary.as_dict()
+    assert d["total"] == 2          # close + open (close lần 2 bị chặn, không refine)
+    assert d["dup_blocked"] == 1    # close lần 2 tính dup
+    assert d["passed"] == 1
