@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.simulation.config import SimConfig
+from src.simulation.config import RISK_NEUTRALIZATIONS, SimConfig
 
 
 def test_default_co_dinh_cau_hinh_hop_ly():
@@ -123,3 +123,24 @@ def test_default_tu_bat_max_trade_cho_region_bat_buoc(region):
 def test_default_khong_bat_max_trade_cho_region_khac(region):
     c = SimConfig.default(region=region)
     assert c.max_trade == "OFF"
+
+
+@pytest.mark.parametrize(
+    "neut",
+    ["STATISTICAL", "CROWDING", "REVERSION_AND_MOMENTUM", "SLOW", "FAST", "SLOW_AND_FAST"],
+)
+def test_simconfig_chap_nhan_risk_neutralization(neut):
+    cfg = SimConfig(neutralization=neut)
+    assert cfg.neutralization == neut
+    assert cfg.to_settings()["neutralization"] == neut
+
+
+def test_risk_neutralizations_du_6_gia_tri():
+    assert RISK_NEUTRALIZATIONS == frozenset(
+        {"STATISTICAL", "CROWDING", "REVERSION_AND_MOMENTUM", "SLOW", "FAST", "SLOW_AND_FAST"}
+    )
+
+
+def test_simconfig_van_tu_choi_neut_bay():
+    with pytest.raises(ValueError):
+        SimConfig(neutralization="KHONG_TON_TAI")

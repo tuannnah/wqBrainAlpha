@@ -15,15 +15,16 @@ DEFAULT_DECAY = 0
 DEFAULT_TRUNCATION = 0.08
 DEFAULT_DELAY = 1
 DEFAULT_TEST_PERIOD = "P0Y0M"  # ISO-8601 duration; P0Y0M = không dùng Test Period (mặc định WQ)
-VALID_NEUTRALIZATIONS = {
-    "NONE",
-    "MARKET",
-    "SECTOR",
-    "INDUSTRY",
-    "SUBINDUSTRY",
-    "COUNTRY",
-    "EXCHANGE",
-}
+# Neutralization nhóm (group-based) — chia theo phân loại ngành/thị trường.
+GROUP_NEUTRALIZATIONS = frozenset(
+    {"NONE", "MARKET", "SECTOR", "INDUSTRY", "SUBINDUSTRY", "COUNTRY", "EXCHANGE"}
+)
+# Neutralization rủi ro (risk-based) — bắt buộc cho Power Pool Theme; enum verbatim từ
+# docs/worldquantbrain/docs/advanced-topics/{statistical,crowding,ram}-risk-neutralized-alphas.md.
+RISK_NEUTRALIZATIONS = frozenset(
+    {"STATISTICAL", "CROWDING", "REVERSION_AND_MOMENTUM", "SLOW", "FAST", "SLOW_AND_FAST"}
+)
+VALID_NEUTRALIZATIONS = GROUP_NEUTRALIZATIONS | RISK_NEUTRALIZATIONS
 # Region BẮT BUỘC max_trade=ON theo tài liệu consultant-simulation-features/consultant-features
 # (sub-project E, docs/superpowers/specs/2026-07-02-submission-compliance-roadmap-design.md).
 REQUIRE_MAX_TRADE_REGIONS = {"ASI", "JPN", "HKG", "KOR", "TWN"}
