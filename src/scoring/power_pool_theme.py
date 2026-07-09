@@ -164,7 +164,14 @@ def check_theme_compliance(
     """Gate trước khi nộp Pure Power Pool: alpha (region/delay/universe/neutralization/datasets)
     có khớp theme của `on_date` không. Không có theme cho ngày đó -> (True, []) (không chặn ở
     đây; việc có nộp Pure Power Pool hay không do nơi gọi quyết). Lệch -> (False, reasons) để
-    log rõ (tránh để Brain trả 'does not match any Power Pool Theme')."""
+    log rõ (tránh để Brain trả 'does not match any Power Pool Theme').
+
+    LƯU Ý TRẠNG THÁI (2026-07-09): đây là utility gọi THỦ CÔNG — người dùng tự gọi hàm này
+    trước khi nộp một alpha Pure Power Pool (qua menu/wqb-mcp). Hàm này HIỆN CHƯA được gắn
+    (wire) vào bất kỳ đường tự động nộp nào trong `main.py`/closed-loop, vì repo CHƯA có luồng
+    "auto nộp Pure Power Pool" — mọi lần nộp Pure Power Pool hiện tại đều là nộp thủ công. Khi
+    nào có đường auto-submit cho Pure Power Pool, cần wire gate này vào đó trước khi gọi
+    submit_alpha; đừng nhầm là gate đã tự động chặn ở phiên hiện tại."""
     week = theme_for_date(on_date, calendar)
     if week is None:
         return (True, [])

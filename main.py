@@ -686,6 +686,9 @@ def _run_closed_loop_session(
     if _res.theme is not None:
         sim_config = _res.sim_config
         region, universe = _res.region, _res.universe
+        delay = sim_config.delay  # đồng bộ delay CLI theo theme (mọi theme hiện tại delay=1,
+        # cứng hoá để tránh lệch nếu sau này có theme delay khác, vì `delay` còn được đẩy vào
+        # _make_research_loop bên dưới)
         console.print(
             f"[cyan]Power Pool Theme {_res.theme.start_date}..{_res.theme.end_date}: "
             f"sim {region}/{universe}/delay={sim_config.delay}, "
