@@ -112,3 +112,31 @@ def test_theme_tuan_hien_tai_2026_07_09():
     assert week.allowed_neutralizations == frozenset(
         {"SLOW", "FAST", "SLOW_AND_FAST", "REVERSION_AND_MOMENTUM", "STATISTICAL", "CROWDING"}
     )
+
+
+def test_matches_theme_chan_khi_neut_ngoai_tap():
+    week = theme_for_date(date(2026, 7, 9))
+    ok, reasons = matches_theme(
+        week, region="USA", delay=1, universe="TOP1000",
+        datasets_used={"option8"}, neutralization="SUBINDUSTRY",
+    )
+    assert ok is False
+    assert any("neutralization" in r.lower() for r in reasons)
+
+
+def test_matches_theme_cho_qua_khi_neut_trong_tap():
+    week = theme_for_date(date(2026, 7, 9))
+    ok, reasons = matches_theme(
+        week, region="USA", delay=1, universe="TOP1000",
+        datasets_used={"option8"}, neutralization="STATISTICAL",
+    )
+    assert ok is True
+    assert reasons == []
+
+
+def test_matches_theme_khong_truyen_neut_thi_khong_chan_neut():
+    week = theme_for_date(date(2026, 7, 9))
+    ok, reasons = matches_theme(
+        week, region="USA", delay=1, universe="TOP1000", datasets_used={"option8"},
+    )
+    assert ok is True  # neutralization=None -> giữ tương thích ngược, không xét neut

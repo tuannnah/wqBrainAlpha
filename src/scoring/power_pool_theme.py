@@ -127,11 +127,13 @@ def theme_for_date(
 
 def matches_theme(
     week: PowerPoolThemeWeek, *, region: str, delay: int, universe: str, datasets_used: set[str],
+    neutralization: str | None = None,
 ) -> tuple[bool, list[str]]:
     """Kiểm 1 alpha có khớp `week` không — CHỈ kiểm phần đã parse chắc chắn (region/delay/
-    universe/datasets_excluded). Field nào của `week` là None thì KHÔNG chặn (chưa biết để so,
-    không phải "match tất cả"). `week.unparsed_constraints` (nếu có) KHÔNG ảnh hưởng kết quả ở
-    đây — người gọi tự đọc `week.unparsed_constraints` để xem lại thủ công."""
+    universe/datasets_excluded/allowed_neutralizations). Field nào của `week` là None thì KHÔNG
+    chặn (chưa biết để so, không phải "match tất cả"). `week.unparsed_constraints` (nếu có) KHÔNG
+    ảnh hưởng kết quả ở đây — người gọi tự đọc `week.unparsed_constraints` để xem lại thủ công.
+    `neutralization=None` -> KHÔNG xét neut (giữ tương thích ngược cho nơi gọi cũ chưa truyền)."""
     reasons: list[str] = []
     if week.region is not None and region.upper() != week.region.upper():
         reasons.append(f"region {region} != theme yêu cầu {week.region}")
@@ -142,4 +144,13 @@ def matches_theme(
     excluded_used = datasets_used & set(week.datasets_excluded)
     if excluded_used:
         reasons.append(f"dùng dataset bị loại trừ theo theme: {sorted(excluded_used)}")
+    if (
+        neutralization is not None
+        and week.allowed_neutralizations
+        and neutralization.upper() not in week.allowed_neutralizations
+    ):
+        reasons.append(
+            f"neutralization {neutralization} không thuộc tập theme cho phép "
+            f"{sorted(week.allowed_neutralizations)}"
+        )
     return (not reasons, reasons)
