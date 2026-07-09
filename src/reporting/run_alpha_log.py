@@ -5,6 +5,7 @@ cho ý tưởng ĐẠT) để người dùng soi độ lặp công thức giữa
 from __future__ import annotations
 
 import csv
+from datetime import datetime
 from pathlib import Path
 
 COLUMNS = [
@@ -12,6 +13,12 @@ COLUMNS = [
     "neutralization", "decay", "truncation", "sharpe", "fitness", "turnover",
     "self_corr", "power_pool", "wq_alpha_id", "sims", "stop_reason",
 ]
+
+
+def run_log_path(now: datetime | None = None, log_dir: str | Path = "logs") -> Path:
+    """Đường dẫn file log per-run: <log_dir>/alphas_<YYYY-MM-DD_HHMM>.csv."""
+    ts = (now or datetime.now()).strftime("%Y-%m-%d_%H%M")
+    return Path(log_dir) / f"alphas_{ts}.csv"
 
 
 def _s(v) -> str:

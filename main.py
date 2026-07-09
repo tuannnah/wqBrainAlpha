@@ -734,11 +734,17 @@ def _run_closed_loop_session(
     else:
         refiner = None  # build_closed_loop mặc định RefinementLoopRefiner(loop) (đường LLM cũ)
 
+    from src.reporting.run_alpha_log import RunAlphaLogger, run_log_path
+
+    _log_path = run_log_path()
+    _alpha_logger = RunAlphaLogger(_log_path)
+    console.print(f"[cyan]📄 Log công thức alpha phiên này: {_log_path}[/cyan]")
+
     cl = build_closed_loop(
         data=data, repo=repo, config=cfg, registry=default_registry(), loop=loop,
         region=region, universe=universe, pop_size=pop_size, n_generations=n_generations,
         top_k=top_k, max_corr=max_corr, max_ideas=max_ideas, base_seed=seed,
-        refiner=refiner, include_alt_data=include_alt_data,
+        refiner=refiner, include_alt_data=include_alt_data, alpha_logger=_alpha_logger,
     )
     console.print(f"[cyan]Bắt đầu vòng kín (base_seed={seed}, Ctrl+C để dừng)…[/cyan]")
     try:

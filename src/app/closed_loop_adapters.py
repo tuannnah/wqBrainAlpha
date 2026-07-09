@@ -393,7 +393,7 @@ def build_closed_loop(
     top_k: int = 10, max_corr: float = 0.70,
     calibrate_every: int = 10, rho_bar: float = 0.5, max_ideas: int | None = None,
     refiner: object | None = None, curated_seeds: bool = True,
-    include_alt_data: bool = False,
+    include_alt_data: bool = False, alpha_logger: object | None = None,
 ) -> "ClosedLoop":
     """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
     bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
@@ -420,5 +420,5 @@ def build_closed_loop(
     return ClosedLoop(
         idea_source=idea_source, refiner=refiner, repo=repo,  # type: ignore[arg-type]
         region=region, universe=universe, max_ideas=max_ideas,
-        calibration_tracker=tracker,
+        calibration_tracker=tracker, alpha_logger=alpha_logger,
     )

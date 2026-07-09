@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+from datetime import datetime
 
-from src.reporting.run_alpha_log import COLUMNS, RunAlphaLogger
+from src.reporting.run_alpha_log import COLUMNS, RunAlphaLogger, run_log_path
 
 
 @dataclass
@@ -88,3 +89,9 @@ def test_append_nhieu_dong(tmp_path):
     lg.log(2, _FakeOutcome(expr="b", passed=False))
     rows = _read(p)
     assert len(rows) == 3  # header + 2
+
+
+def test_run_log_path_theo_timestamp():
+    p = run_log_path(datetime(2026, 7, 9, 16, 20))
+    assert p.name == "alphas_2026-07-09_1620.csv"
+    assert p.parent.name == "logs"
