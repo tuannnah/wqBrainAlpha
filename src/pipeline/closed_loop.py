@@ -127,6 +127,7 @@ class ClosedLoop:
         universe: str = "TOP3000",
         max_ideas: int | None = None,
         calibration_tracker: CalibrationTracker | None = None,
+        alpha_logger=None,
     ) -> None:
         self.idea_source = idea_source
         self.refiner = refiner
@@ -135,6 +136,8 @@ class ClosedLoop:
         self.universe = universe
         self.max_ideas = max_ideas
         self.calibration_tracker = calibration_tracker
+        # Logger CSV mọi ý tưởng (Task 2 RunAlphaLogger); None -> bỏ qua, tương thích ngược.
+        self.alpha_logger = alpha_logger
 
     def run(self) -> ClosedLoopReport:
         """Lặp: next_batch → mỗi ý tưởng refine_and_sim → record_brain_sim → đếm. Dừng khi
@@ -192,6 +195,9 @@ class ClosedLoop:
                     status="passed" if outcome.passed else "failed",
                 )
                 ideas_tried += 1
+                # Log CSV mọi ý tưởng có outcome (kể cả bị gate 0-sim) — Task 3.
+                if self.alpha_logger is not None:
+                    self.alpha_logger.log(ideas_tried, outcome)
                 sims_used += outcome.sims_used
                 if outcome.passed:
                     n_passed += 1

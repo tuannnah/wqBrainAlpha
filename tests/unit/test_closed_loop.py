@@ -233,3 +233,46 @@ def test_run_logs_local_gate_block_when_zero_sims(repo) -> None:  # noqa: ANN001
     finally:
         logger.remove(sink_id)
     assert "gate local chặn" in "\n".join(msgs)
+
+
+def test_closed_loop_goi_alpha_logger_moi_y_tuong():
+    """ClosedLoop gọi alpha_logger.log cho mỗi ý tưởng có outcome (index tăng dần)."""
+    from src.pipeline.closed_loop import ClosedLoop, IdeaOutcome
+    from src.pipeline.shortlist import ShortlistCandidate
+    import numpy as np
+
+    cand = ShortlistCandidate(
+        expr="rank(close)", metrics=None, pnl=np.zeros(2),
+        dates=np.arange("2020-01-01", "2020-01-03", dtype="datetime64[D]"),
+    )
+
+    class _Src:
+        def __init__(self):
+            self.done = False
+        def next_batch(self):
+            if self.done:
+                return []
+            self.done = True
+            return [cand]
+
+    class _Ref:
+        def refine_and_sim(self, c):
+            return IdeaOutcome(
+                expr=c.expr, canonical_hash="h", passed=True, wq_alpha_id="wq",
+                sharpe=1.5, fitness=1.1, turnover=0.3, self_corr=0.2, sims_used=1,
+                stop_reason="ok",
+            )
+
+    class _Repo:
+        def avoided_exprs(self): return set()
+        def record_brain_sim(self, **kw): return None
+
+    logged = []
+
+    class _Logger:
+        def log(self, index, outcome):
+            logged.append((index, outcome.expr))
+
+    cl = ClosedLoop(_Src(), _Ref(), _Repo(), max_ideas=1, alpha_logger=_Logger())
+    cl.run()
+    assert logged == [(1, "rank(close)")]
