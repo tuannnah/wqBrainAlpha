@@ -747,20 +747,28 @@ def _run_closed_loop_session(
         refiner=refiner, include_alt_data=include_alt_data, alpha_logger=_alpha_logger,
     )
     console.print(f"[cyan]Bắt đầu vòng kín (base_seed={seed}, Ctrl+C để dừng)…[/cyan]")
+    # `finally` bao trùm mọi đường ra (chạy xong bình thường/QuotaExhausted/Ctrl+C) để
+    # RunAlphaLogger LUÔN được đóng tường minh, tránh rò rỉ file handle khi vòng kín dừng
+    # giữa chừng.
     try:
-        report = cl.run()
-    except QuotaExhausted:
-        console.print("[yellow]Hết quota Brain — vòng kín dừng tự động. Kết quả đã lưu DB.[/yellow]")
+        try:
+            report = cl.run()
+        except QuotaExhausted:
+            console.print(
+                "[yellow]Hết quota Brain — vòng kín dừng tự động. Kết quả đã lưu DB.[/yellow]"
+            )
+            return True
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Đã dừng tay (Ctrl+C). Kết quả đã lưu DB.[/yellow]")
+            return True
+        console.print(
+            f"[green]Vòng kín xong[/green] ({report.stop_reason}): ý tưởng={report.ideas_tried} "
+            f"sim={report.sims_used} pass={report.n_passed} bỏ={report.n_abandoned} "
+            f"ρ={report.rho_sharpe}"
+        )
         return True
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Đã dừng tay (Ctrl+C). Kết quả đã lưu DB.[/yellow]")
-        return True
-    console.print(
-        f"[green]Vòng kín xong[/green] ({report.stop_reason}): ý tưởng={report.ideas_tried} "
-        f"sim={report.sims_used} pass={report.n_passed} bỏ={report.n_abandoned} "
-        f"ρ={report.rho_sharpe}"
-    )
-    return True
+    finally:
+        _alpha_logger.close()
 
 
 @app.command("closed-loop")

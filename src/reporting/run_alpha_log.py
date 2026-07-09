@@ -16,8 +16,13 @@ COLUMNS = [
 
 
 def run_log_path(now: datetime | None = None, log_dir: str | Path = "logs") -> Path:
-    """Đường dẫn file log per-run: <log_dir>/alphas_<YYYY-MM-DD_HHMM>.csv."""
-    ts = (now or datetime.now()).strftime("%Y-%m-%d_%H%M")
+    """Đường dẫn file log per-run: <log_dir>/alphas_<YYYY-MM-DD_HHMMSS>.csv.
+
+    Phân giải đến GIÂY (không chỉ phút) để tránh trùng tên file khi người dùng
+    Ctrl+C rồi khởi động lại phiên mới trong cùng phút -> tránh việc mở file mode
+    "w" (truncate) ghi đè mất dữ liệu phiên trước.
+    """
+    ts = (now or datetime.now()).strftime("%Y-%m-%d_%H%M%S")
     return Path(log_dir) / f"alphas_{ts}.csv"
 
 

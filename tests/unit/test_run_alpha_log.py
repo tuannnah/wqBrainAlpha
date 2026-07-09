@@ -93,5 +93,5 @@ def test_append_nhieu_dong(tmp_path):
 
 def test_run_log_path_theo_timestamp():
     p = run_log_path(datetime(2026, 7, 9, 16, 20))
-    assert p.name == "alphas_2026-07-09_1620.csv"
+    assert p.name == "alphas_2026-07-09_162000.csv"
     assert p.parent.name == "logs"
