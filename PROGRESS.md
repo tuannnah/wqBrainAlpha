@@ -2,19 +2,21 @@
 
 ## Current state
 - **Phase:** Triển khai `docs/tailieu/IMPROVEMENT_SPEC.md` (5 pha, tuần tự). **[2026-07-10
-  Session 08] PHA 0 (Instrumentation) XONG code+test** trên `main`. Design ánh xạ spec→code:
-  `docs/superpowers/specs/2026-07-10-improvement-spec-implementation-design.md`. Đã thêm:
-  IdeaOutcome +9 trường chẩn đoán, `RunAlphaLogger` schema cố định luôn điền đủ (tách local_/
-  brain_ sharpe, không nuốt metric khi failed), `src/reporting/diagnostics.py`
-  (fail_check_from_reasons + classify_family), `src/reporting/session_summary.py` (funnel theo
-  stage/fail_check/family + median timing + dup → ghi `logs/session_summary_*.md`).
-  `LocalTunerRefiner` giữ `_reasons` (trước bị vứt) + đo timing + điền field mọi đường return.
-- **Next (Pha 1 — throughput):** canonical fold hằng số DƯƠNG trong `CanonicalHasher` + golden
-  test bất biến; dedup dùng hash TRƯỚC backtest ở `ClosedLoop`; depth guard trước backtest;
-  parsimony + hằng số rời rạc trong GP. Rồi Pha 2 (chuyển họ nhân tố — yield), 3 (regression_neut
-  ở config stage), 4 (floor calibrated).
-- **Acceptance Pha 0 còn treo:** cần USER chạy menu-5 (QR-login terminal thật) lấy
-  `session_summary` baseline — Claude Code không login QR được (memory `project_luong5_vanhanh`).
+  Session 08] PHA 0 (Instrumentation) + PHA 1 (throughput) XONG code+test** trên `main`.
+  Design: `docs/superpowers/specs/2026-07-10-improvement-spec-implementation-design.md`.
+  - Pha 0: IdeaOutcome +9 trường chẩn đoán, RunAlphaLogger schema cố định luôn điền đủ (tách
+    local_/brain_), `src/reporting/{diagnostics,session_summary}.py`, LocalTunerRefiner giữ
+    `_reasons` + đo timing.
+  - Pha 1: canonical fold scale dương ở gốc (golden chứng minh bất biến), dedup theo hash
+    TRƯỚC backtest + `avoided_hashes()` cross-session, depth guard trước backtest, hằng số GP
+    rời rạc {-2,-1,-0.5,0.5,1,2}.
+- **Next (Pha 2 — yield, đòn quyết định):** `include_alt_data=True` mặc định + thêm nguồn
+  fundamental (ts_backfill, verify field LIVE get_datafields); family budget/exhaustion trong
+  vòng kín (dùng `classify_family` đã có); hypothesis-first cho LLM. Rồi Pha 3 (regression_neut/
+  vector_neut ở config stage hạ self-corr), Pha 4 (floor calibrated thay đơn-ngưỡng 0.5).
+- **Acceptance Pha 0+1 còn treo:** cần USER chạy menu-5 (QR-login terminal thật) lấy
+  `session_summary` baseline + đo "median độ dài giảm ≥30%" — Claude Code không login QR được
+  (memory `project_luong5_vanhanh`).
 - **Phase (trước):** Đã (1) nâng chất lượng alpha từ docs WQ, (2) CHẠY THẬT Auto SIM + cải
   thiện. **e2e ĐÃ có alpha đạt chất lượng submit** — 3 alpha (`rKlkG9O8`/`kq0RY2G8`/`E5E3NKZJ`,
   VWAP intraday-reversal) Sharpe ~1.5, `failed_checks=[]`, self-corr 0.49/0.47/0.50 < 0.70.
@@ -317,3 +319,34 @@
   Thêm test: `test_idea_outcome_fields`, `test_run_alpha_log` (viết lại), `test_session_summary`,
   `test_diagnostics`, `test_local_refiner_instrumentation`, +1 case `test_closed_loop`.
   Commits: `cf525ce` (design) → `3dd94f3` → `d03f75c` → `94459e3`.
+
+### [2026-07-10] Session 08 (tiếp) — IMPROVEMENT_SPEC Pha 1: Chặn rác sớm & rẻ (throughput)
+- **Phase:** Pha 1 (throughput) XONG cả 4 mục trên `main`. Đích: đổi thứ tự gate sang rẻ→đắt
+  (syntax/depth/canonical-dedup TRƯỚC backtest) + cắt bloat/biến thể trùng.
+- **Done (verified, pytest xanh 1198 passed, 1 fail postgres pre-existing):**
+  - **1.1 Canonical fold (`d235515`):** `CanonicalHasher._fold_positive_scale_at_root` bóc
+    multiply/divide hằng DƯƠNG toàn-alpha Ở GỐC → `multiply(4,X)≡multiply(2,X)≡X`. Golden
+    `tests/golden/test_fold_scale_invariant.py` chứng minh bất biến positions trên
+    PortfolioBuilder THẬT (3 config) — cơ sở: `_scale` chia L1-norm nên (k·s)/Σ|k·s|=s/Σ|s|.
+    KHÔNG fold hằng âm / divide(k,X) phi tuyến / scale chôn trong add (trọng số tương đối).
+  - **1.2 Dedup hash trước backtest (`fa094df`):** `ClosedLoop.dedup_key_fn` (inject, giữ B1)
+    — seen chứa canonical key, nạp `repo.avoided_hashes()` (hash cross-session, mới). Biến
+    thể scale chặn ở dedup, 0 backtest. `build_closed_loop` tiêm CanonicalHasher thật.
+  - **1.3 Depth guard (`b9a5b39`):** loại cây trần > MAX_DEPTH(7) ngay đầu `refine_and_sim`,
+    stage=depth/fail_check=DEPTH, 0 sim (trước cả `_tune`).
+  - **1.4 Hằng số rời rạc (`45695b6`):** `DISCRETE_SCALARS {-2,-1,-0.5,0.5,1,2}` thay
+    `rng.uniform` ở init + mutate resample rời rạc thay Gaussian.
+- **Decisions:** (1) Fold CHỈ ở gốc (whole-alpha), KHÔNG toàn cục — phân tích lại thấy fold
+  toàn cục gộp nhầm 2 VERIFIED_CORES (`add(multiply(2,C1),...)` vs `add(multiply(1,C1),...)`
+  là trọng số tương đối khác = alpha khác). Thu hẹp về tập chứng minh được. (2) Tinh chỉnh hệ
+  số `complexity_penalty` (parsimony mạnh hơn) KHÔNG làm ở đây — để làm biến A/B đo phiên thật
+  (§6), tránh áp mù hại NSGA-II Pareto; depth-guard + hằng rời rạc + hoist đã cắt bloat an toàn.
+- **In progress:** Pha 2 (chuyển họ nhân tố — yield) chưa bắt đầu.
+- **Blockers / open risks:** Cùng Pha 0 — cần USER chạy menu-5 baseline. Acceptance Pha 1
+  ("median độ dài giảm ≥30%") cần đo phiên thật; phần "không còn float 15 chữ số" đã đảm bảo
+  bằng DISCRETE_SCALARS.
+- **Next step:** Pha 2.1 — `include_alt_data=True` mặc định + thêm nguồn fundamental (ts_backfill,
+  verify field LIVE qua get_datafields) vào idea source của closed-loop.
+- **Tests:** `pytest -q` 1198 passed, 1 fail pre-existing (psycopg). Thêm:
+  `test_fold_scale_invariant` (golden), `test_gp_discrete_scalars`, +cases hasher/brain_sim_link/
+  closed_loop/local_refiner_instrumentation. Commits `d235515`→`45695b6`.
