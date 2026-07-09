@@ -16,3 +16,7 @@ build/
 dist/
 *.spec
 data/market*/
+
+# Log files sinh khi chay engine/sim
+*.log
+wq_*.meta
