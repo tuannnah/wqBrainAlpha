@@ -26,23 +26,22 @@ from src.lang.visitors import FieldCollector
 
 # Mỗi core: signal core THUẦN (không wrapper neutralization/decay — Brain áp qua settings).
 # Kèm giả thuyết kinh tế 1 dòng (nền tảng học thuật) — bắt buộc để nộp/Power Pool mô tả được.
+# XEN KẼ option8 ↔ socialmedia8 để phiên ngắn (--max-ideas nhỏ) vẫn chạm CẢ HAI nguồn.
 ALT_DATA_CORES: tuple[str, ...] = (
-    # --- option8: bề mặt vol ẩn (crash-fear / variance risk premium / term-structure) ---
-    # Skew put-call (fear): put IV cao hơn call IV = phòng thủ downside đắt → mean-revert, fade.
+    # [option8] Skew put-call (fear): put IV > call IV = phòng thủ downside đắt → mean-revert, fade.
     "multiply(-1, subtract(ts_backfill(implied_volatility_put_30, 22), "
     "ts_backfill(implied_volatility_call_30, 22)))",
-    # Variance risk premium: IV ẩn >> vol thực = bảo hiểm đắt → thường overpriced, fade.
+    # [socialmedia8] Fade mức sentiment xã hội (hype bán lẻ mean-revert).
+    "multiply(-1, ts_mean(snt_social_value, 5))",
+    # [option8] Variance risk premium: IV ẩn >> vol thực = bảo hiểm đắt → thường overpriced, fade.
     "multiply(-1, subtract(ts_backfill(implied_volatility_mean_30, 22), "
     "ts_backfill(historical_volatility_30, 22)))",
-    # Độ dốc term-structure IV: 90d − 30d; contango (dương) ổn định hơn backwardation (stress).
+    # [socialmedia8] Fade THAY ĐỔI sentiment gần đây (overextension ngắn hạn).
+    "multiply(-1, ts_delta(snt_social_value, 5))",
+    # [option8] Độ dốc term-structure IV: 90d − 30d; contango (dương) ổn định hơn backwardation.
     "subtract(ts_backfill(implied_volatility_mean_90, 22), "
     "ts_backfill(implied_volatility_mean_30, 22))",
-    # --- socialmedia8: chú ý/tin đồn bán lẻ (attention-driven mispricing) ---
-    # Fade mức sentiment xã hội (hype bán lẻ mean-revert).
-    "multiply(-1, ts_mean(snt_social_value, 5))",
-    # Fade THAY ĐỔI sentiment gần đây (overextension ngắn hạn).
-    "multiply(-1, ts_delta(snt_social_value, 5))",
-    # Sentiment fade khuếch đại theo chú ý (tweet-volume rank cao) — xấp xỉ GATE bằng scaling.
+    # [socialmedia8] Sentiment fade khuếch đại theo chú ý (tweet-volume rank cao) — GATE xấp xỉ.
     "multiply(-1, multiply(ts_mean(snt_social_value, 5), ts_rank(snt_social_volume, 22)))",
 )
 
@@ -80,3 +79,44 @@ def neutralization_for_expr(expr: str, registry=None) -> str:
     if any(_is_analyst(f) for f in fields):
         return "INDUSTRY"
     return "SUBINDUSTRY"
+
+
+# Map category dataset -> neutralization RỦI RO ưu tiên (Power Pool Theme chỉ cho risk-neut).
+# Khác `neutralization_for_expr` (group-neut cho đường non-PP).
+_PP_CATEGORY_DEFAULT = {
+    "option": "STATISTICAL",
+    "social": "CROWDING",
+    "analyst": "SLOW",
+}
+
+
+def pp_neutralization_for_expr(expr: str, allowed: frozenset[str], registry=None) -> str:
+    """Chọn 1 neutralization RỦI RO cho biểu thức alt-data theo category dataset, GIAO với tập
+    `allowed` của theme. option→STATISTICAL, social/sentiment→CROWDING, analyst/fundamental→SLOW,
+    price-derived/mặc định→REVERSION_AND_MOMENTUM/STATISTICAL. Lựa chọn không thuộc `allowed` ->
+    phần tử đầu (sorted, ổn định) của `allowed`. `allowed` rỗng -> STATISTICAL (an toàn chung)."""
+    reg = registry or default_registry()
+    fields = FieldCollector(reg).visit(parse(expr))
+    if any(_is_option(f) for f in fields):
+        choice = _PP_CATEGORY_DEFAULT["option"]
+    elif any(_is_social(f) for f in fields):
+        choice = _PP_CATEGORY_DEFAULT["social"]
+    elif any(_is_analyst(f) for f in fields):
+        choice = _PP_CATEGORY_DEFAULT["analyst"]
+    else:
+        choice = "STATISTICAL"
+    if not allowed:
+        return choice
+    if choice in allowed:
+        return choice
+    return sorted(allowed)[0]
+
+
+def pp_neut_candidates(
+    expr: str, allowed: frozenset[str], registry=None, sweep: bool = False
+) -> list[str]:
+    """Danh sách neutralization để refiner sim. Mặc định 1× (chỉ lựa chọn map theo category);
+    `sweep=True` -> toàn bộ `allowed` (sorted ổn định) để quét con giữ config tốt nhất."""
+    if sweep and allowed:
+        return sorted(allowed)
+    return [pp_neutralization_for_expr(expr, allowed, registry)]
