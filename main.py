@@ -1825,6 +1825,26 @@ def _print_menu(state: _MenuState) -> None:
         data = "[dim](đăng nhập để xem số fields/operators)[/dim]"
     console.print("\n[bold cyan]=== WQ Auto-Alpha ===[/bold cyan]")
     console.print(f"Scope: [cyan]{state.region}/{state.universe}/delay={state.delay}[/cyan] | {status}")
+    # Power Pool Theme hôm nay (nếu có) — Auto SIM (mục 5) sẽ TỰ override scope sim theo theme này
+    # để nộp được Pure Power Pool; dòng "Scope" trên chỉ là mặc định menu, không phải config sim thật.
+    from datetime import date as _date
+
+    from src.scoring.power_pool_theme import theme_for_date as _theme_for_date
+
+    _theme = _theme_for_date(_date.today())
+    if _theme is not None:
+        _neut = sorted(_theme.allowed_neutralizations) if _theme.allowed_neutralizations else []
+        console.print(
+            f"Power Pool Theme {_theme.start_date}..{_theme.end_date} → Auto SIM dùng "
+            f"[green]{_theme.region or state.region}/{_theme.universe or state.universe}/"
+            f"delay={_theme.delay if _theme.delay is not None else state.delay}[/green]"
+            + (f", neutralization ∈ [green]{_neut}[/green]" if _neut else "")
+        )
+    else:
+        console.print(
+            f"[yellow]Không có Power Pool Theme cho {_date.today()} trong lịch[/yellow] — Auto SIM "
+            "giữ scope Regular; cập nhật lịch trong src/scoring/power_pool_theme.py nếu muốn nộp Pure Power Pool."
+        )
     console.print(data)
     console.print(" 1) Đăng nhập (tự tải data fields + operators)")
     console.print(" 2) Tải lại data fields (ghi đè cache)")
