@@ -8,6 +8,7 @@ from datetime import date
 
 from src.scoring.power_pool_theme import (
     JUNE_JULY_2026_CALENDAR,
+    check_theme_compliance,
     matches_theme,
     parse_allowed_neutralizations,
     parse_theme_filter,
@@ -140,3 +141,28 @@ def test_matches_theme_khong_truyen_neut_thi_khong_chan_neut():
         week, region="USA", delay=1, universe="TOP1000", datasets_used={"option8"},
     )
     assert ok is True  # neutralization=None -> giữ tương thích ngược, không xét neut
+
+
+def test_check_theme_compliance_khop():
+    ok, reasons = check_theme_compliance(
+        region="USA", delay=1, universe="TOP1000", neutralization="STATISTICAL",
+        datasets_used={"option8"}, on_date=date(2026, 7, 9),
+    )
+    assert ok is True and reasons == []
+
+
+def test_check_theme_compliance_lech_neut_va_universe():
+    ok, reasons = check_theme_compliance(
+        region="USA", delay=1, universe="TOP3000", neutralization="SUBINDUSTRY",
+        datasets_used={"pv1"}, on_date=date(2026, 7, 9),
+    )
+    assert ok is False
+    assert len(reasons) >= 2  # universe + neutralization (+ pv1)
+
+
+def test_check_theme_compliance_khong_co_theme_khong_chan():
+    ok, reasons = check_theme_compliance(
+        region="USA", delay=1, universe="TOP3000", neutralization="SUBINDUSTRY",
+        datasets_used={"pv1"}, on_date=date(2026, 8, 15),
+    )
+    assert ok is True and reasons == []

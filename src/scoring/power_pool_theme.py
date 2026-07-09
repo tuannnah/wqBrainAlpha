@@ -154,3 +154,21 @@ def matches_theme(
             f"{sorted(week.allowed_neutralizations)}"
         )
     return (not reasons, reasons)
+
+
+def check_theme_compliance(
+    *, region: str, delay: int, universe: str, neutralization: str,
+    datasets_used: set[str], on_date: date,
+    calendar: list[PowerPoolThemeWeek] | None = None,
+) -> tuple[bool, list[str]]:
+    """Gate trước khi nộp Pure Power Pool: alpha (region/delay/universe/neutralization/datasets)
+    có khớp theme của `on_date` không. Không có theme cho ngày đó -> (True, []) (không chặn ở
+    đây; việc có nộp Pure Power Pool hay không do nơi gọi quyết). Lệch -> (False, reasons) để
+    log rõ (tránh để Brain trả 'does not match any Power Pool Theme')."""
+    week = theme_for_date(on_date, calendar)
+    if week is None:
+        return (True, [])
+    return matches_theme(
+        week, region=region, delay=delay, universe=universe,
+        datasets_used=datasets_used, neutralization=neutralization,
+    )
