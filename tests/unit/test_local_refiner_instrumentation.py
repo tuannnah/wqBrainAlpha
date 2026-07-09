@@ -79,6 +79,34 @@ def test_simmed_failed_giu_fail_check_tu_hard_filter():
     assert o.sim_ms is not None
 
 
+def test_depth_guard_chan_truoc_backtest():
+    """Pha 1.3: biểu thức depth > MAX_DEPTH bị loại TRƯỚC backtest (0 sim, không gọi tune)."""
+    from config.thresholds import MAX_DEPTH
+
+    # Cây lồng sâu > MAX_DEPTH (7): ts_delta lồng nhiều tầng.
+    deep = "close"
+    for _ in range(MAX_DEPTH + 2):
+        deep = f"ts_delta({deep}, 5)"
+
+    tune_called = {"n": 0}
+
+    def fake_tune(e, cfg, data, **kw):
+        tune_called["n"] += 1
+        from src.backtest.local_tuner import TuneResult
+        return TuneResult(best_expr=e, best_config=PortfolioConfig(decay=4, truncation=0.08),
+                          local_sharpe=1.6)
+
+    r = LocalTunerRefiner(simulator=_SimPass(), repo=_Repo(), data=object(),
+                          local_config=PortfolioConfig(decay=4, truncation=0.08),
+                          sim_config=SimConfig.default(), tune_fn=fake_tune)
+    o = r.refine_and_sim(_cand(deep))
+    assert o.sims_used == 0
+    assert o.stop_reason == "depth"
+    assert o.stage_reached == "depth"
+    assert o.fail_check == "DEPTH"
+    assert tune_called["n"] == 0          # KHÔNG backtest
+
+
 def test_passed_stage_la_passed():
     expr = "ts_delta(close, 60)"
 

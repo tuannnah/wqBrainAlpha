@@ -229,6 +229,27 @@ class LocalTunerRefiner:
         )
 
     def refine_and_sim(self, candidate: ShortlistCandidate) -> IdeaOutcome:
+        # Depth guard (Pha 1.3): loại biểu thức quá sâu TRƯỚC mọi backtest (rẻ->đắt). Cây trần
+        # đã > MAX_DEPTH thì cộng wrapper stack Brain (decay/neut/scale) chắc chắn vượt trần
+        # depth -> WQ loại; backtest nó chỉ tốn thời gian vô ích. Sửa depth = làm phẳng core,
+        # KHÔNG swap field (theo skill) — việc đó ở tầng generation, không phải ở đây.
+        from config.thresholds import MAX_DEPTH
+
+        try:
+            _cand_node = parse(candidate.expr)
+            _cand_depth = DepthVisitor().visit(_cand_node)
+        except Exception:
+            _cand_depth = None
+        if _cand_depth is not None and _cand_depth > MAX_DEPTH:
+            return IdeaOutcome(
+                expr=candidate.expr,
+                canonical_hash=CanonicalHasher().visit(_cand_node), passed=False,
+                wq_alpha_id=None, sharpe=None, fitness=None, turnover=None,
+                self_corr=None, sims_used=0, stop_reason="depth",
+                stage_reached="depth", fail_check="DEPTH",
+                family=classify_family(candidate.expr), expr_depth=_cand_depth,
+                dedup_key=CanonicalHasher().visit(_cand_node),
+            )
         # Seed alt-data (field ngoài panel local) đi thẳng Brain — không tune/floor local được.
         if self._is_alt_data(candidate.expr):
             return self._sim_direct(candidate)
