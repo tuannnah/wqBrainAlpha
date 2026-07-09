@@ -81,6 +81,12 @@ def test_pp_neut_fallback_khi_lua_chon_ngoai_allowed():
     assert pp_neutralization_for_expr(expr, allowed) == "CROWDING"  # sorted(["CROWDING","SLOW"])[0]
 
 
+def test_pp_neut_allowed_rong_ra_statistical():
+    # `allowed` rỗng -> luôn STATISTICAL (an toàn chung), kể cả expr social vốn map CROWDING.
+    expr = "ts_mean(snt_social_value, 5)"  # social -> CROWDING nếu có allowed
+    assert pp_neutralization_for_expr(expr, frozenset()) == "STATISTICAL"
+
+
 def test_pp_neut_candidates_mac_dinh_1x_va_sweep():
     expr = "ts_mean(snt_social_value, 5)"
     assert pp_neut_candidates(expr, _ALLOWED) == ["CROWDING"]

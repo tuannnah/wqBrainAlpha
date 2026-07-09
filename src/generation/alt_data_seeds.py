@@ -93,7 +93,7 @@ _PP_CATEGORY_DEFAULT = {
 def pp_neutralization_for_expr(expr: str, allowed: frozenset[str], registry=None) -> str:
     """Chọn 1 neutralization RỦI RO cho biểu thức alt-data theo category dataset, GIAO với tập
     `allowed` của theme. option→STATISTICAL, social/sentiment→CROWDING, analyst/fundamental→SLOW,
-    price-derived/mặc định→REVERSION_AND_MOMENTUM/STATISTICAL. Lựa chọn không thuộc `allowed` ->
+    price-derived/mặc định→STATISTICAL. Lựa chọn không thuộc `allowed` ->
     phần tử đầu (sorted, ổn định) của `allowed`. `allowed` rỗng -> STATISTICAL (an toàn chung)."""
     reg = registry or default_registry()
     fields = FieldCollector(reg).visit(parse(expr))
@@ -106,7 +106,7 @@ def pp_neutralization_for_expr(expr: str, allowed: frozenset[str], registry=None
     else:
         choice = "STATISTICAL"
     if not allowed:
-        return choice
+        return "STATISTICAL"
     if choice in allowed:
         return choice
     return sorted(allowed)[0]
