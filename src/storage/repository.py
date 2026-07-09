@@ -540,6 +540,21 @@ class MiniBrainRepository:
         finally:
             session.close()
 
+    def avoided_hashes(self) -> set[str]:
+        """Trả {canonical_hash} của các link Brain SIM status='failed' — avoid-list CROSS-
+        SESSION theo hash (Pha 1.2). Bắt được cả biến thể fold scale dương (multiply(4,X) vs
+        multiply(2,X)) mà avoided_exprs (so chuỗi thô) bỏ lọt."""
+        session = self.session_factory()
+        try:
+            rows = (
+                session.query(BrainSimLinkModel.canonical_hash)
+                .filter(BrainSimLinkModel.status == "failed")
+                .all()
+            )
+            return {r[0] for r in rows if r[0]}
+        finally:
+            session.close()
+
     def brain_local_sharpe_pairs(self) -> list[tuple[float, float]]:
         """Trả [(local_sharpe, brain_sharpe)] cho expression có CẢ local evaluation lẫn Brain
         sim (match theo canonical_hash), cả hai sharpe != None. Phục vụ calibrate ρ Spearman

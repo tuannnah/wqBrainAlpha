@@ -144,6 +144,7 @@ class ClosedLoop:
         calibration_tracker: CalibrationTracker | None = None,
         alpha_logger=None,
         session_summary=None,
+        dedup_key_fn=None,
     ) -> None:
         self.idea_source = idea_source
         self.refiner = refiner
@@ -156,6 +157,10 @@ class ClosedLoop:
         self.alpha_logger = alpha_logger
         # Thu funnel cuối phiên (Pha 0 SessionSummary); None -> bỏ qua, tương thích ngược.
         self.session_summary = session_summary
+        # Hàm chuẩn hoá expr -> dedup key (canonical fold, Pha 1.2). None -> identity (dùng
+        # chuỗi thô như cũ). Giữ B1: ClosedLoop KHÔNG import src.lang; composition root
+        # (main/adapter) tiêm CanonicalHasher thật vào đây.
+        self.dedup_key_fn = dedup_key_fn or (lambda expr: expr)
 
     def run(self) -> ClosedLoopReport:
         """Lặp: next_batch → mỗi ý tưởng refine_and_sim → record_brain_sim → đếm. Dừng khi
@@ -165,8 +170,14 @@ class ClosedLoop:
         sims_used = 0
         n_passed = 0
         n_abandoned = 0
+        # seen chứa DEDUP KEY (canonical fold Pha 1.2), không phải chuỗi thô. Nạp avoid-list
+        # bền: ưu tiên hash cross-session (avoided_hashes) nếu repo có; fallback chuỗi thô
+        # (đưa qua dedup_key_fn để cùng không gian key).
         seen: set[str] = set()
-        seen |= self.repo.avoided_exprs()
+        avoided_hashes = getattr(self.repo, "avoided_hashes", None)
+        if callable(avoided_hashes):
+            seen |= set(avoided_hashes())
+        seen |= {self.dedup_key_fn(e) for e in self.repo.avoided_exprs()}
         # Thu thập expr đạt Power Pool nhưng KHÔNG đạt Regular — để tóm tắt cuối phiên (không
         # đổi ClosedLoopReport public: chỉ log, tránh rủi ro cho consumer đang đọc report).
         power_pool_only: list[str] = []
@@ -195,12 +206,13 @@ class ClosedLoop:
                 if self.max_ideas is not None and ideas_tried >= self.max_ideas:
                     logger.info("Đạt trần max_ideas={} — dừng.", self.max_ideas)
                     return _report("no_more_ideas")
-                if cand.expr in seen:
+                key = self.dedup_key_fn(cand.expr)
+                if key in seen:
                     logger.info("↩︎ Bỏ ý tưởng trùng phiên/avoid-list: {}", _short(cand.expr))
                     if self.session_summary is not None:
                         self.session_summary.record_dup_blocked()
                     continue
-                seen.add(cand.expr)
+                seen.add(key)
                 logger.info("🔎 Ý tưởng #{}: refine+sim {}", ideas_tried + 1, _short(cand.expr))
                 try:
                     outcome = self.refiner.refine_and_sim(cand)

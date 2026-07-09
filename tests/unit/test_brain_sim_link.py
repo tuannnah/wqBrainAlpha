@@ -85,6 +85,18 @@ def test_avoided_exprs_returns_failed_expr_strings(repo) -> None:  # noqa: ANN00
     assert repo.avoided_exprs() == {"rank(volume)"}  # chỉ cái failed
 
 
+def test_avoided_hashes_returns_failed_canonical_hashes(repo) -> None:  # noqa: ANN001
+    """avoid-list theo canonical_hash (Pha 1.2): dedup cross-session bắt cả biến thể fold
+    scale, không chỉ chuỗi y hệt như avoided_exprs."""
+    repo.record_brain_sim("hf", "rank(volume)", wq_alpha_id=None, region="USA",
+                          universe="TOP3000", sharpe=0.0, fitness=0.0, turnover=0.0,
+                          self_corr=None, status="failed")
+    repo.record_brain_sim("hp", "rank(close)", wq_alpha_id="W", region="USA",
+                          universe="TOP3000", sharpe=1.5, fitness=1.2, turnover=0.2,
+                          self_corr=0.3, status="passed")
+    assert repo.avoided_hashes() == {"hf"}  # chỉ hash của cái failed
+
+
 def test_brain_local_sharpe_pairs_matches_by_canonical_hash(repo) -> None:  # noqa: ANN001
     # 1 expression có cả local eval + brain sim -> ghép cặp; 1 chỉ có brain -> bỏ.
     expr_id = repo.upsert_expression("rank(close)", "hX", 2, 3, {"close"})

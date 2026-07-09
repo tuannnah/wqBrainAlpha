@@ -512,9 +512,19 @@ def build_closed_loop(
     if refiner is None:
         refiner = RefinementLoopRefiner(loop)
     tracker = CalibrationTracker(repo, every=calibrate_every, rho_bar=rho_bar)  # type: ignore[arg-type]
+    # Dedup key = canonical hash đã fold scale dương (Pha 1.2). Tiêm vào ClosedLoop để dedup
+    # TRƯỚC refine bắt cả biến thể scale; parse lỗi -> fallback chuỗi thô (không chặn oan).
+    _hasher = CanonicalHasher(registry if registry is not None else default_registry())
+
+    def _dedup_key(expr: str) -> str:
+        try:
+            return _hasher.visit(parse(expr))
+        except Exception:
+            return expr
+
     return ClosedLoop(
         idea_source=idea_source, refiner=refiner, repo=repo,  # type: ignore[arg-type]
         region=region, universe=universe, max_ideas=max_ideas,
         calibration_tracker=tracker, alpha_logger=alpha_logger,
-        session_summary=session_summary,
+        session_summary=session_summary, dedup_key_fn=_dedup_key,
     )

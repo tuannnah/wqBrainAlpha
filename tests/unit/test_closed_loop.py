@@ -278,6 +278,45 @@ def test_closed_loop_goi_alpha_logger_moi_y_tuong():
     assert logged == [(1, "rank(close)")]
 
 
+def test_dedup_theo_canonical_key_chan_bien_the_scale(repo) -> None:  # noqa: ANN001
+    """Pha 1.2: dedup dùng dedup_key_fn (canonical) TRƯỚC refine -> multiply(2,X) và
+    multiply(4,X) coi là trùng, chỉ refine 1 lần (không tốn 2 backtest)."""
+    src = _FakeIdeaSource([[_cand("multiply(2, close)"), _cand("multiply(4, close)")]])
+    refiner = _FakeRefiner({})
+
+    def dedup_key(expr: str) -> str:
+        # Giả canonical: strip hệ số multiply dương -> cùng key.
+        import re
+        return re.sub(r"multiply\(\d+(\.\d+)?,\s*", "", expr).rstrip(")")
+
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo, dedup_key_fn=dedup_key)
+    loop.run()
+    assert len(refiner.calls) == 1  # biến thể scale thứ 2 bị chặn ở dedup
+
+
+def test_dedup_nap_avoided_hashes_cross_session(repo) -> None:  # noqa: ANN001
+    """Pha 1.2: avoid-list cross-session dùng hash. Expr có key nằm trong avoided_hashes ->
+    chặn ngay, không refine."""
+    src = _FakeIdeaSource([[_cand("multiply(2, close)")]])
+    refiner = _FakeRefiner({})
+
+    class _RepoAvoid:
+        def avoided_exprs(self):
+            return set()
+        def avoided_hashes(self):
+            return {"close"}  # key đã fail phiên trước
+        def record_brain_sim(self, **kw):
+            return None
+
+    def dedup_key(expr: str) -> str:
+        import re
+        return re.sub(r"multiply\(\d+(\.\d+)?,\s*", "", expr).rstrip(")")
+
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=_RepoAvoid(), dedup_key_fn=dedup_key)
+    loop.run()
+    assert refiner.calls == []  # bị chặn bởi avoid-list hash cross-session
+
+
 def test_closed_loop_feed_session_summary(repo) -> None:  # noqa: ANN001
     """ClosedLoop record mỗi outcome vào session_summary + đếm dup bị chặn (Pha 0)."""
     from src.reporting.session_summary import SessionSummary
