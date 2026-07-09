@@ -11,7 +11,7 @@ import numpy as np
 
 from config.thresholds import MAX_DEPTH
 from src.gp.individual import Individual
-from src.gp.init import random_tree
+from src.gp.init import _random_scalar, random_tree
 from src.lang.ast import Call, Constant, Field, Node
 from src.lang.registry import ArgKind, OperatorRegistry, OperatorSpec, default_registry
 from src.lang.visitors import DepthVisitor, all_subtrees
@@ -130,7 +130,9 @@ def point_mutation(
             replacement = Constant(float(choices[rng.integers(0, len(choices))]))
             return _replace_subtree(node, target, replacement)
         if kind is ArgKind.SCALAR or kind is None:
-            replacement = Constant(float(target.value) + float(rng.normal(0, 0.5)))
+            # Resample rời rạc (Pha 1.4) thay perturb Gaussian -> giữ scalar trong tập có
+            # nghĩa kinh tế, không trôi thành float 15 chữ số qua nhiều thế hệ mutation.
+            replacement = Constant(_random_scalar(rng))
             return _replace_subtree(node, target, replacement)
         # Constant ở GROUP/PANEL slot (hiếm — vd group literal): không perturb
         return node

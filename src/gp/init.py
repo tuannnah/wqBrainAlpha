@@ -18,6 +18,15 @@ from src.lang.visitors import DepthVisitor
 logger = logging.getLogger(__name__)
 
 _SCALAR_RANGE = (-3.0, 3.0)  # biên độ hợp lý cho threshold/hệ số trong cây seed ngẫu nhiên
+# Tập hằng số RỜI RẠC (IMPROVEMENT_SPEC §3 Pha 1.3): thay float uniform ngẫu nhiên bằng bộ
+# hệ số/threshold có ý nghĩa kinh tế. Tránh winsorize(open, -1.9423623924877862) vô nghĩa vừa
+# tốn backtest vừa khó dedup. Không chứa 0 (nhân 0 = triệt tín hiệu).
+DISCRETE_SCALARS: tuple[float, ...] = (-2.0, -1.0, -0.5, 0.5, 1.0, 2.0)
+
+
+def _random_scalar(rng: np.random.Generator) -> float:
+    """Một hằng số rời rạc từ DISCRETE_SCALARS (thay rng.uniform liên tục)."""
+    return float(DISCRETE_SCALARS[rng.integers(0, len(DISCRETE_SCALARS))])
 
 
 def random_tree(
@@ -61,7 +70,7 @@ def random_tree(
                 choice = spec.window_choices[rng.integers(0, len(spec.window_choices))]
                 args.append(Constant(float(choice)))
             case ArgKind.SCALAR:
-                args.append(Constant(float(rng.uniform(*_SCALAR_RANGE))))
+                args.append(Constant(_random_scalar(rng)))
             case ArgKind.GROUP:
                 raise NotImplementedError(
                     f"operator core '{spec.name}' dùng ArgKind.GROUP nhưng init.py chưa "
@@ -77,7 +86,7 @@ def _random_leaf(
     """Leaf cho cây ngẫu nhiên. Ở slot PANEL CHỈ trả ``Field`` (tín hiệu thật — Constant là
     literal số, không phải PANEL signal). Ở slot SCALAR mới được trả ``Constant`` float."""
     if kind is ArgKind.SCALAR:
-        return Constant(float(rng.uniform(*_SCALAR_RANGE)))
+        return Constant(_random_scalar(rng))
     return Field(fields[rng.integers(0, len(fields))])
 
 
