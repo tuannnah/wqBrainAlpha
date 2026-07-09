@@ -7,7 +7,10 @@ alpha chính. Các test ở đây kiểm: lệnh `simulate` truyền đúng sim 
 
 from __future__ import annotations
 
+from datetime import date
+
 import main
+from src.app.power_pool_config import resolve_theme_sim_config
 from src.simulation.config import SimConfig
 
 
@@ -133,3 +136,11 @@ def test_research_truyen_fixed_sim_config_xuong_loop_builder(monkeypatch):
         truncation=0.12,
         neutralization="INDUSTRY",
     )
+
+
+def test_wiring_theme_ap_top1000_cho_hom_nay_trong_lich():
+    base = SimConfig.default(region="USA", universe="TOP3000", delay=1)
+    res = resolve_theme_sim_config(base, date(2026, 7, 9))
+    # Đây là hợp đồng main.py dựa vào: có theme -> TOP1000 + tập risk-neut không rỗng.
+    assert res.sim_config.universe == "TOP1000"
+    assert res.allowed_neutralizations

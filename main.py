@@ -659,7 +659,10 @@ def _run_closed_loop_session(
     Trả False nếu không load được MarketData (lỗi cấu hình, chưa kịp chạy); True nếu đã chạy
     xong (kể cả dừng do hết quota/Ctrl+C — kết quả vẫn lưu DB)."""
     import src.operators_local  # noqa: F401
+    from datetime import date as _date
+
     from src.app.closed_loop_adapters import build_closed_loop
+    from src.app.power_pool_config import resolve_theme_sim_config
     from src.data.adapters.parquet_source import ParquetSource
     from src.lang.registry import default_registry
     from src.pipeline.closed_loop import QuotaExhausted
@@ -676,6 +679,20 @@ def _run_closed_loop_session(
         neutralization, decay, truncation, delay, region, universe,
         set(data.groups.keys()),
     )
+    # MẶC ĐỊNH đọc Power Pool Theme hôm nay: có theme -> sim đúng region/universe/delay theme
+    # (nộp được Pure Power Pool); không có -> giữ config Regular + cảnh báo.
+    _res = resolve_theme_sim_config(sim_config, _date.today())
+    pp_allowed = _res.allowed_neutralizations
+    if _res.theme is not None:
+        sim_config = _res.sim_config
+        region, universe = _res.region, _res.universe
+        console.print(
+            f"[cyan]Power Pool Theme {_res.theme.start_date}..{_res.theme.end_date}: "
+            f"sim {region}/{universe}/delay={sim_config.delay}, "
+            f"neutralization ∈ {sorted(pp_allowed)}[/cyan]"
+        )
+    else:
+        console.print(f"[yellow]{_res.warning}[/yellow]")
     loop, _deepseek = _make_research_loop(
         session_factory, client, region, universe, delay,
         max_sims=10**9, patience=patience, marathon=True, sim_config=sim_config,
@@ -709,6 +726,7 @@ def _run_closed_loop_session(
             # repo (MiniBrainRepository) là kho calibration: lưu local-eval expr đã tune để
             # CalibrationTracker đo ρ local↔Brain (join theo hash với record_brain_sim).
             calib_repo=repo,
+            pp_allowed_neutralizations=pp_allowed,
         )
     else:
         refiner = None  # build_closed_loop mặc định RefinementLoopRefiner(loop) (đường LLM cũ)
