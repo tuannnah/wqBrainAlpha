@@ -208,6 +208,7 @@ class LocalTunerRefiner:
             wq_alpha_id=result.alpha_id, sharpe=result.sharpe, fitness=result.fitness,
             turnover=result.turnover, self_corr=self_corr, sims_used=1,
             stop_reason=stop_reason, power_pool_eligible=power_pool,
+            sim_settings=sim_cfg.to_settings(), source=source,
         )
 
     def refine_and_sim(self, candidate: ShortlistCandidate) -> IdeaOutcome:

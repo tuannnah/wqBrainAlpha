@@ -112,3 +112,28 @@ def test_sim_direct_dung_risk_neut_khi_co_tap_theme(monkeypatch):
     monkeypatch.setattr(r, "_is_alt_data", lambda expr: True)
     r.refine_and_sim(_cand_gia("ts_backfill(implied_volatility_call_30, 22)"))
     assert captured["neutralization"] == "STATISTICAL"
+
+
+def test_sim_direct_gan_sim_settings_va_source(monkeypatch):
+    """Nhánh alt-data (_sim_direct) phải điền sim_settings (dict settings Brain) + source='alt_data'
+    vào IdeaOutcome để logger CSV ghi được setting thật."""
+    monkeypatch.setattr("src.backtest.sub_universe.sub_universe_ok", lambda *a, **kw: True)
+
+    class _SimGia2:
+        def simulate(self, expr, settings=None):
+            return SimulationResult(
+                expression=expr, alpha_id="wq-s", status="passed",
+                sharpe=1.2, fitness=1.1, turnover=0.3, drawdown=0.1, raw={},
+            )
+
+    r = LocalTunerRefiner(
+        simulator=_SimGia2(), repo=_RepoGia(), data=object(),
+        local_config=PortfolioConfig(decay=4, truncation=0.08),
+        sim_config=SimConfig.default(),
+    )
+    monkeypatch.setattr(r, "_is_alt_data", lambda expr: True)
+    out = r.refine_and_sim(_cand_gia("ts_backfill(implied_volatility_call_30, 22)"))
+    assert out.source == "alt_data"
+    assert isinstance(out.sim_settings, dict)
+    assert out.sim_settings["region"] == "USA"
+    assert "neutralization" in out.sim_settings

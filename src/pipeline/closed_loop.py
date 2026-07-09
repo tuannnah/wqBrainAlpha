@@ -52,6 +52,10 @@ class IdeaOutcome:
     # Cờ Power Pool (docs Brain): Sharpe>=1.0, <=8 operator, <=3 field (trừ grouping),
     # self_corr<=0.5. Default False để tương thích ngược với nơi tạo IdeaOutcome cũ.
     power_pool_eligible: bool = False
+    # Settings Brain thật đã dùng khi sim (dict từ SimConfig.to_settings) — None nếu ý tưởng bị
+    # gate local chặn (0 sim). Nguồn ý tưởng (alt_data/gp_local_tuner...) để soi độ lặp công thức.
+    sim_settings: dict | None = None
+    source: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
