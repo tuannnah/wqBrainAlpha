@@ -116,17 +116,46 @@ class Serializer(NodeVisitor[str]):
         return f"{node.op}({args})"
 
 
+def _fold_positive_scale_at_root(node: Node) -> Node:
+    """Bóc scale DƯƠNG toàn-alpha ở GỐC cho mục đích dedup (IMPROVEMENT_SPEC §3 Pha 1.1).
+
+    WQ rank/normalize book ở tầng alpha -> nhân CẢ tín hiệu với hằng dương k>0 (hoặc chia cho
+    k>0) KHÔNG đổi thứ hạng/positions -> cùng alpha. Chỉ áp ở GỐC: `multiply(k, X)`,
+    `multiply(X, k)`, `divide(X, k)` với k>0 -> trả X (đệ quy bóc tiếp lớp scale lồng).
+
+    KHÔNG fold khi: k<=0 (đổi/triệt dấu = alpha khác), `divide(k, X)` (k/X phi tuyến, không
+    phải scale), hay scale nằm CHÔN trong add/subtract (trọng số tương đối, không bất biến —
+    chỉ hàm này ở gốc nên tự nhiên không đụng tới)."""
+    while isinstance(node, Call):
+        if node.op == "multiply" and len(node.args) == 2:
+            a, b = node.args
+            if isinstance(a, Constant) and a.value > 0:
+                node = b
+                continue
+            if isinstance(b, Constant) and b.value > 0:
+                node = a
+                continue
+        elif node.op == "divide" and len(node.args) == 2:
+            a, b = node.args
+            if isinstance(b, Constant) and b.value > 0:  # X / k, k>0 -> scale dương
+                node = a
+                continue
+        break
+    return node
+
+
 class CanonicalHasher(NodeVisitor[str]):
     """Hash sha256-hex ổn định sau canonicalize: literal normalize qua repr(float),
     args của operator commutative (theo registry) được sort trước khi ghép — đảm bảo
-    add(a,b) và add(b,a) cho cùng hash. Dùng cho sub-expression cache, result cache,
-    dedup quần thể GP (B12)."""
+    add(a,b) và add(b,a) cho cùng hash. Fold scale DƯƠNG toàn-alpha ở gốc (Pha 1.1) để
+    multiply(4,X)≡multiply(2,X)≡X. Dùng cho sub-expression cache, result cache, dedup
+    quần thể GP (B12) và dedup cross-session (Pha 1.2)."""
 
     def __init__(self, registry: OperatorRegistry | None = None) -> None:
         self._registry = registry if registry is not None else default_registry()
 
     def visit(self, node: Node) -> str:
-        return node.accept(self)
+        return _fold_positive_scale_at_root(node).accept(self)
 
     def visit_constant(self, node: Constant) -> str:
         return self._digest(f"const:{repr(float(node.value))}")
