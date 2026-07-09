@@ -85,3 +85,30 @@ def test_power_pool_eligible_doc_lap_voi_passed_regular(monkeypatch):
     out = r.refine_and_sim(_cand_gia())
     assert out.passed is False               # fail Regular (Sharpe 1.1 < 1.25, fitness 0.9 <= 1.0)
     assert out.power_pool_eligible is True    # nhưng vẫn đạt Power Pool (Sharpe >= 1.0)
+
+
+def test_sim_direct_dung_risk_neut_khi_co_tap_theme(monkeypatch):
+    """Có pp_allowed_neutralizations -> nhánh alt-data sim với risk-neut (STATISTICAL cho option),
+    KHÔNG dùng group-neut (SECTOR) như đường non-theme."""
+    monkeypatch.setattr("src.backtest.sub_universe.sub_universe_ok", lambda *a, **kw: True)
+
+    captured = {}
+
+    class _SimGhi:
+        def simulate(self, expr, settings=None):
+            captured["neutralization"] = settings["neutralization"]
+            return SimulationResult(
+                expression=expr, alpha_id="wq-x", status="passed",
+                sharpe=1.2, fitness=1.1, turnover=0.3, drawdown=0.1, raw={},
+            )
+
+    r = LocalTunerRefiner(
+        simulator=_SimGhi(), repo=_RepoGia(), data=object(),
+        local_config=PortfolioConfig(decay=4, truncation=0.08),
+        sim_config=SimConfig.default(),
+        pp_allowed_neutralizations=frozenset({"STATISTICAL", "CROWDING"}),
+    )
+    # ép _is_alt_data=True để đi nhánh sim thẳng
+    monkeypatch.setattr(r, "_is_alt_data", lambda expr: True)
+    r.refine_and_sim(_cand_gia("ts_backfill(implied_volatility_call_30, 22)"))
+    assert captured["neutralization"] == "STATISTICAL"

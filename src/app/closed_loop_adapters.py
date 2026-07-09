@@ -14,7 +14,11 @@ if TYPE_CHECKING:
 from config.thresholds import PRE_SIM_LOCAL_SHARPE_FLOOR
 from src.backtest.gate import local_usable
 from src.backtest.local_tuner import tune as _tune
-from src.generation.alt_data_seeds import ALT_DATA_CORES, neutralization_for_expr
+from src.generation.alt_data_seeds import (
+    ALT_DATA_CORES,
+    neutralization_for_expr,
+    pp_neutralization_for_expr,
+)
 from src.gp.engine import GPEngine
 from src.lang.parser import parse
 from src.lang.registry import default_registry
@@ -91,6 +95,7 @@ class LocalTunerRefiner:
         hard_filter_fn=_default_filter, score_vector_fn=_score_vector,
         region: str = "USA", universe: str = "TOP3000", registry=None, tune_fn=None,
         max_pool_corr: float = 0.70, calib_repo=None,
+        pp_allowed_neutralizations: frozenset[str] = frozenset(),
     ) -> None:
         self.simulator = simulator
         self.repo = repo
@@ -108,6 +113,8 @@ class LocalTunerRefiner:
         # Kho calibration (MiniBrainRepository): lưu local-eval của expr ĐÃ tune theo hash để
         # join local↔Brain (brain_local_sharpe_pairs) thu được ρ. None -> bỏ qua (test/không cần).
         self.calib_repo = calib_repo
+        # Tập neutralization theo Power Pool Theme (rỗng -> đường non-theme, dùng group-neut cũ).
+        self.pp_allowed_neutralizations = pp_allowed_neutralizations
         self._tune = tune_fn or _tune
 
     def _luu_local_eval_calibration(self, tr, canonical_hash: str) -> None:
@@ -146,7 +153,12 @@ class LocalTunerRefiner:
         neutralization chọn theo category dataset (docs WQ), rồi chấm/lưu như đường tune."""
         expr = candidate.expr
         canonical_hash = CanonicalHasher().visit(parse(expr))
-        neut = neutralization_for_expr(expr, self.registry)
+        if self.pp_allowed_neutralizations:
+            neut = pp_neutralization_for_expr(
+                expr, self.pp_allowed_neutralizations, self.registry
+            )
+        else:
+            neut = neutralization_for_expr(expr, self.registry)
         sim_cfg = self.sim_config.with_overrides(neutralization=neut)
         try:
             result = self.simulator.simulate(expr, settings=sim_cfg.to_settings())
