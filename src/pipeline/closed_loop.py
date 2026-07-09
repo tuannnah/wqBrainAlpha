@@ -56,6 +56,21 @@ class IdeaOutcome:
     # gate local chặn (0 sim). Nguồn ý tưởng (alt_data/gp_local_tuner...) để soi độ lặp công thức.
     sim_settings: dict | None = None
     source: str | None = None
+    # --- Instrumentation Pha 0 (IMPROVEMENT_SPEC §3): trả lời "chết ở đâu, vì sao, tốn bao lâu".
+    # stage_reached: chặng cuối cùng ứng viên đi tới (idea|syntax|depth|dedup|local_floor|
+    #   sub_universe|simmed|corr_checked|passed). fail_check: mã check thất bại (LOW_SHARPE/
+    #   SELF_CORR/DEPTH/DUP/...). family: họ nhân tố. expr_depth: độ sâu cây. *_ms: thời gian
+    #   mỗi mốc. dedup_key: canonical hash (đã fold). local_sharpe: Sharpe backtest local (TÁCH
+    #   khỏi `sharpe` vốn là Brain sharpe — spec: đừng gộp local/brain vào 1 cột).
+    stage_reached: str = ""
+    fail_check: str = ""
+    family: str = ""
+    expr_depth: int | None = None
+    gen_ms: float | None = None
+    backtest_ms: float | None = None
+    sim_ms: float | None = None
+    dedup_key: str | None = None
+    local_sharpe: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,6 +1,12 @@
-"""Ghi log mỗi phiên Auto SIM ra CSV: một dòng/ý tưởng (công thức + setting; Sharpe/fitness chỉ
-cho ý tưởng ĐẠT) để người dùng soi độ lặp công thức giữa các lần chạy. Mỗi phiên một file
-`logs/alphas_<timestamp>.csv`; append + flush từng dòng để Ctrl+C/hết quota vẫn giữ dữ liệu."""
+"""Ghi log mỗi phiên Auto SIM ra CSV: một dòng/ý tưởng với schema CỐ ĐỊNH, LUÔN điền đủ cột
+(IMPROVEMENT_SPEC §3 Pha 0). Tách local_sharpe/brain_sharpe/brain_fitness (đừng gộp local với
+Brain), thêm trường chẩn đoán funnel: stage_reached, fail_check, family, expr_depth, *_ms,
+dedup_key. Mỗi phiên một file `logs/alphas_<timestamp>.csv`; append + flush từng dòng để
+Ctrl+C/hết quota vẫn giữ dữ liệu.
+
+Khác bản cũ: brain_sharpe/brain_fitness ghi BẤT KỂ passed (sim đã chạy thì luôn có số) — để
+phân biệt "sim rồi trượt" với "chưa sim"; log cũ nuốt sharpe khi failed nên không phân tích
+tự động được (spec §1)."""
 
 from __future__ import annotations
 
@@ -9,9 +15,12 @@ from datetime import datetime
 from pathlib import Path
 
 COLUMNS = [
-    "#", "status", "source", "expression", "region", "universe", "delay",
-    "neutralization", "decay", "truncation", "sharpe", "fitness", "turnover",
-    "self_corr", "power_pool", "wq_alpha_id", "sims", "stop_reason",
+    "#", "status", "stage_reached", "fail_check", "family", "source",
+    "expression", "expr_depth", "dedup_key",
+    "region", "universe", "delay", "neutralization", "decay", "truncation",
+    "local_sharpe", "brain_sharpe", "brain_fitness", "turnover", "self_corr",
+    "power_pool", "wq_alpha_id", "sims",
+    "gen_ms", "backtest_ms", "sim_ms", "stop_reason",
 ]
 
 
@@ -32,7 +41,10 @@ def _s(v) -> str:
 
 
 class RunAlphaLogger:
-    """Mở CSV per-run + ghi header ngay; `.log(index, outcome)` append 1 dòng và flush."""
+    """Mở CSV per-run + ghi header ngay; `.log(index, outcome)` append 1 dòng và flush.
+
+    Mọi dòng có đúng len(COLUMNS) field (không lệch cột). Trường thiếu -> ô trống,
+    KHÔNG bỏ qua metric có sẵn."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -46,16 +58,17 @@ class RunAlphaLogger:
         s = outcome.sim_settings or {}
         passed = bool(outcome.passed)
         status = "passed" if passed else ("error" if outcome.stop_reason == "error" else "failed")
-        # passed -> điền Sharpe/fitness; không đạt -> để trống theo yêu cầu người dùng.
-        sharpe = _s(outcome.sharpe) if passed else ""
-        fitness = _s(outcome.fitness) if passed else ""
+        g = lambda name: getattr(outcome, name, None)  # noqa: E731 - đọc trường Pha 0 an toàn
         self._w.writerow([
-            index, status, _s(outcome.source), _s(outcome.expr),
+            index, status, _s(g("stage_reached")), _s(g("fail_check")), _s(g("family")),
+            _s(outcome.source), _s(outcome.expr), _s(g("expr_depth")), _s(g("dedup_key")),
             _s(s.get("region")), _s(s.get("universe")), _s(s.get("delay")),
             _s(s.get("neutralization")), _s(s.get("decay")), _s(s.get("truncation")),
-            sharpe, fitness, _s(outcome.turnover), _s(outcome.self_corr),
+            _s(g("local_sharpe")), _s(outcome.sharpe), _s(outcome.fitness),
+            _s(outcome.turnover), _s(outcome.self_corr),
             _s(getattr(outcome, "power_pool_eligible", False)),
-            _s(outcome.wq_alpha_id), _s(outcome.sims_used), _s(outcome.stop_reason),
+            _s(outcome.wq_alpha_id), _s(outcome.sims_used),
+            _s(g("gen_ms")), _s(g("backtest_ms")), _s(g("sim_ms")), _s(outcome.stop_reason),
         ])
         self._f.flush()
 
