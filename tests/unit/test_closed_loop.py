@@ -278,6 +278,36 @@ def test_closed_loop_goi_alpha_logger_moi_y_tuong():
     assert logged == [(1, "rank(close)")]
 
 
+def test_family_budget_dong_ho_khi_can_ma_khong_pass(repo) -> None:  # noqa: ANN001
+    """Pha 2.2: family budget — họ sinh >= max_per_family ứng viên mà 0 pass -> ĐÓNG họ,
+    candidate cùng họ sau đó bị bỏ (chuyển ngân sách sang họ khác)."""
+    src = _FakeIdeaSource([[_cand("pv_a"), _cand("pv_b"), _cand("pv_c"), _cand("mom_a")]])
+    refiner = _FakeRefiner({})  # tất cả fail mặc định
+
+    def family_fn(expr: str) -> str:
+        return "pv" if expr.startswith("pv") else "mom"
+
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=family_fn, max_per_family=2)
+    loop.run()
+    # pv: chỉ 2 đầu được refine (pv_c bị đóng họ); mom_a vẫn refine (họ khác còn ngân sách)
+    assert refiner.calls == ["pv_a", "pv_b", "mom_a"]
+
+
+def test_family_budget_khong_dong_khi_co_pass(repo) -> None:  # noqa: ANN001
+    """Họ có ít nhất 1 pass thì KHÔNG đóng dù vượt max_per_family (họ còn tiềm năng)."""
+    src = _FakeIdeaSource([[_cand("pv_a"), _cand("pv_b"), _cand("pv_c")]])
+    refiner = _FakeRefiner({"pv_a": _passed("pv_a")})  # pv_a pass
+
+    def family_fn(expr: str) -> str:
+        return "pv"
+
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=family_fn, max_per_family=2)
+    loop.run()
+    assert refiner.calls == ["pv_a", "pv_b", "pv_c"]  # không đóng vì đã có pass
+
+
 def test_dedup_theo_canonical_key_chan_bien_the_scale(repo) -> None:  # noqa: ANN001
     """Pha 1.2: dedup dùng dedup_key_fn (canonical) TRƯỚC refine -> multiply(2,X) và
     multiply(4,X) coi là trùng, chỉ refine 1 lần (không tốn 2 backtest)."""

@@ -505,7 +505,7 @@ def build_closed_loop(
     refiner: object | None = None, curated_seeds: bool = True,
     include_alt_data: bool = True, alpha_logger: object | None = None,
     include_combiner: bool = True, session_summary: object | None = None,
-    include_fundamental: bool = True,
+    include_fundamental: bool = True, max_per_family: int | None = 8,
 ) -> "ClosedLoop":
     """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
     bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
@@ -553,9 +553,14 @@ def build_closed_loop(
         except Exception:
             return expr
 
+    # Family-aware budget (Pha 2.2): classify_family suy họ từ field/cấu trúc; ClosedLoop đóng
+    # họ khi cạn max_per_family mà 0 pass -> chuyển ngân sách sang họ orthogonal (yield).
+    from src.reporting.diagnostics import classify_family
+
     return ClosedLoop(
         idea_source=idea_source, refiner=refiner, repo=repo,  # type: ignore[arg-type]
         region=region, universe=universe, max_ideas=max_ideas,
         calibration_tracker=tracker, alpha_logger=alpha_logger,
         session_summary=session_summary, dedup_key_fn=_dedup_key,
+        family_fn=classify_family, max_per_family=max_per_family,
     )

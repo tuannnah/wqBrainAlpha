@@ -145,6 +145,8 @@ class ClosedLoop:
         alpha_logger=None,
         session_summary=None,
         dedup_key_fn=None,
+        family_fn=None,
+        max_per_family: int | None = None,
     ) -> None:
         self.idea_source = idea_source
         self.refiner = refiner
@@ -161,6 +163,12 @@ class ClosedLoop:
         # chuỗi thô như cũ). Giữ B1: ClosedLoop KHÔNG import src.lang; composition root
         # (main/adapter) tiêm CanonicalHasher thật vào đây.
         self.dedup_key_fn = dedup_key_fn or (lambda expr: expr)
+        # Family-aware budget + exhaustion guard (Pha 2.2). family_fn: expr -> nhãn họ (None =
+        # tắt, không giới hạn theo họ). max_per_family: trần ứng viên/họ/phiên; khi một họ đã
+        # refine >= trần mà 0 pass -> ĐÓNG họ trong phiên (chuyển ngân sách sang họ khác). Họ có
+        # >=1 pass thì không đóng (còn tiềm năng). Giữ B1: family_fn tiêm từ composition root.
+        self.family_fn = family_fn
+        self.max_per_family = max_per_family
 
     def run(self) -> ClosedLoopReport:
         """Lặp: next_batch → mỗi ý tưởng refine_and_sim → record_brain_sim → đếm. Dừng khi
@@ -181,6 +189,10 @@ class ClosedLoop:
         # Thu thập expr đạt Power Pool nhưng KHÔNG đạt Regular — để tóm tắt cuối phiên (không
         # đổi ClosedLoopReport public: chỉ log, tránh rủi ro cho consumer đang đọc report).
         power_pool_only: list[str] = []
+        # Family budget state (Pha 2.2): đếm số ứng viên đã refine + số pass mỗi họ.
+        fam_tried: dict[str, int] = {}
+        fam_passed: dict[str, int] = {}
+        closed_families: set[str] = set()
 
         def _report(stop_reason: str) -> ClosedLoopReport:
             if power_pool_only:
@@ -213,6 +225,13 @@ class ClosedLoop:
                         self.session_summary.record_dup_blocked()
                     continue
                 seen.add(key)
+                # Family budget: bỏ candidate thuộc họ đã ĐÓNG (đã cạn ngân sách mà 0 pass).
+                fam = self.family_fn(cand.expr) if self.family_fn is not None else None
+                if fam is not None and fam in closed_families:
+                    logger.info("↩︎ Bỏ ý tưởng thuộc họ đã đóng [{}]: {}", fam, _short(cand.expr))
+                    if self.session_summary is not None:
+                        self.session_summary.record_dup_blocked()
+                    continue
                 logger.info("🔎 Ý tưởng #{}: refine+sim {}", ideas_tried + 1, _short(cand.expr))
                 try:
                     outcome = self.refiner.refine_and_sim(cand)
@@ -239,6 +258,21 @@ class ClosedLoop:
                     n_abandoned += 1
                     if getattr(outcome, "power_pool_eligible", False):
                         power_pool_only.append(outcome.expr)
+                # Family budget (Pha 2.2): cập nhật đếm + đóng họ nếu đã cạn ngân sách mà 0 pass.
+                if fam is not None:
+                    fam_tried[fam] = fam_tried.get(fam, 0) + 1
+                    if outcome.passed:
+                        fam_passed[fam] = fam_passed.get(fam, 0) + 1
+                    if (
+                        self.max_per_family is not None
+                        and fam_tried[fam] >= self.max_per_family
+                        and fam_passed.get(fam, 0) == 0
+                    ):
+                        closed_families.add(fam)
+                        logger.info(
+                            "🚪 Đóng họ [{}]: đã thử {} ứng viên, 0 pass — chuyển ngân sách.",
+                            fam, fam_tried[fam],
+                        )
                 # Kết quả 1 dòng: 0 sim = bị gate local chặn trước khi đốt quota Brain. In kèm
                 # lý do (stop_reason) để phân biệt local_floor (Sharpe/turnover) vs sub_universe.
                 if outcome.sims_used == 0:
