@@ -51,7 +51,7 @@ def test_local_floor_dien_stage_va_family():
                           local_config=PortfolioConfig(decay=4, truncation=0.08),
                           sim_config=SimConfig.default(), tune_fn=fake_tune)
     o = r.refine_and_sim(_cand(expr))
-    assert o.stop_reason == "local_floor"
+    assert o.stop_reason.startswith("local_floor")  # nay kèm ngưỡng calibrated để audit
     assert o.stage_reached == "local_floor"
     assert o.fail_check == "LOW_SHARPE"        # local sharpe dưới sàn
     assert o.family == "pv_reversal"

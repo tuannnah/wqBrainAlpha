@@ -73,7 +73,7 @@ def test_refiner_duoi_floor_thi_khong_sim():
     assert r.simulator.calls == 0
     assert out.passed is False
     assert out.sims_used == 0
-    assert out.stop_reason == "local_floor"
+    assert out.stop_reason.startswith("local_floor")  # nay kèm ngưỡng calibrated để audit
 
 
 def test_refiner_quota_thi_nem_QuotaExhausted():

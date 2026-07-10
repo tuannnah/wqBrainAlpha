@@ -36,3 +36,16 @@ CALIBRATION_RHO_BAR: float = 0.5  # Spearman ρ tối thiểu để tin ranking 
 # 0.5 -> Brain ~0.64: chỉ loại rác (đã quan sát loop sim Sharpe 0.39/-0.02/-0.13), KHÔNG
 # đụng ứng viên tốt (local ~1.2+). Bảo thủ để không đói loop; nới lên nếu muốn siết quota.
 PRE_SIM_LOCAL_SHARPE_FLOOR: float = 0.5
+
+# Tỉ lệ hiệu chỉnh local->Brain đo trực tiếp: Brain sharpe ≈ local × 1.28 (winner local 1.23
+# -> Brain 1.57). Dùng để suy floor từ MỤC TIÊU Brain thay vì hằng số cứng (Pha 4).
+CALIBRATION_LOCAL_TO_BRAIN: float = 1.28
+# Mục tiêu Brain sharpe mặc định để suy pre-sim floor: 0.64 -> floor local 0.5 (khớp floor cũ,
+# nhưng nay DERIVED, chỉnh 1 chỗ). Nâng target -> siết quota (loại nhiều ứng viên yếu hơn).
+PRE_SIM_TARGET_BRAIN_SHARPE: float = 0.64
+
+
+def calibrated_floor(target_brain_sharpe: float = PRE_SIM_TARGET_BRAIN_SHARPE) -> float:
+    """Floor local sharpe suy từ mục tiêu Brain: local >= target/1.28 thì Brain kỳ vọng >=
+    target. Thay ngưỡng cứng 0.5 (Pha 4) — chỉnh mục tiêu Brain, floor tự suy theo hiệu chỉnh."""
+    return target_brain_sharpe / CALIBRATION_LOCAL_TO_BRAIN

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.pipeline.closed_loop import ClosedLoop
 
-from config.thresholds import PRE_SIM_LOCAL_SHARPE_FLOOR
+from config.thresholds import calibrated_floor
 from src.backtest.gate import local_usable
 from src.backtest.local_tuner import tune as _tune
 from src.generation.alt_data_seeds import (
@@ -95,7 +95,7 @@ class LocalTunerRefiner:
 
     def __init__(
         self, *, simulator, repo, data, local_config, sim_config,
-        pool_corr_fn=None, min_local_sharpe: float = PRE_SIM_LOCAL_SHARPE_FLOOR,
+        pool_corr_fn=None, min_local_sharpe: float = calibrated_floor(),
         hard_filter_fn=_default_filter, score_vector_fn=_score_vector,
         region: str = "USA", universe: str = "TOP3000", registry=None, tune_fn=None,
         max_pool_corr: float = 0.70, calib_repo=None,
@@ -275,11 +275,14 @@ class LocalTunerRefiner:
         if self.calib_repo is not None and tr.local_metrics is not None:
             self._luu_local_eval_calibration(tr, canonical_hash)
         if tr.local_sharpe < self.min_local_sharpe:
-            # Dưới sàn pre-sim: KHÔNG gọi simulator -> sims_used=0, không tốn quota Brain.
+            # Dưới sàn pre-sim CALIBRATED: KHÔNG gọi simulator -> sims_used=0, không tốn quota
+            # Brain. Ghi cả local_sharpe ĐẠT ĐƯỢC và NGƯỠNG áp dụng vào stop_reason để audit
+            # (Pha 4: floor là calibrated_floor(target/1.28), không còn hằng cứng).
             return IdeaOutcome(
                 expr=tr.best_expr, canonical_hash=canonical_hash, passed=False,
                 wq_alpha_id=None, sharpe=None, fitness=None, turnover=None,
-                self_corr=None, sims_used=0, stop_reason="local_floor",
+                self_corr=None, sims_used=0,
+                stop_reason=f"local_floor(<{self.min_local_sharpe:.2f})",
                 stage_reached="local_floor", fail_check="LOW_SHARPE", family=_family,
                 expr_depth=_depth, dedup_key=canonical_hash, local_sharpe=tr.local_sharpe,
                 backtest_ms=backtest_ms,
