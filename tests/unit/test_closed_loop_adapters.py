@@ -251,6 +251,36 @@ def test_build_closed_loop_include_alt_data(small_panel, repo) -> None:  # noqa:
     assert [c.expr for c in batch] == list(ALT_DATA_CORES)
 
 
+def test_build_closed_loop_noi_on_family_closed_toi_generator(small_panel, repo) -> None:  # noqa: ANN001
+    """Fix gap Pha 2.3: khi truyền idea_generator, build_closed_loop phải nối on_family_closed
+    -> generator.set_saturated_families (để họ bão hoà tiêm vào prompt LLM lượt sau)."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.lang.registry import default_registry
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _Gen:
+        def __init__(self):
+            self.received = None
+        def set_saturated_families(self, fams):
+            self.received = set(fams)
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    gen = _Gen()
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=1,
+                             idea_generator=gen)
+    assert loop.on_family_closed is not None
+    loop.on_family_closed({"pv_reversal"})
+    assert gen.received == {"pv_reversal"}
+
+
 def test_build_closed_loop_fundamental_mac_dinh(small_panel, repo) -> None:  # noqa: ANN001
     """Pha 2.1: fundamental cores có mặt trong batch đầu khi include_fundamental (mặc định True).
     Field fundamental ngoài panel local -> refiner sim thẳng Brain (như alt-data)."""

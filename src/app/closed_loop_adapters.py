@@ -515,6 +515,7 @@ def build_closed_loop(
     include_alt_data: bool = True, alpha_logger: object | None = None,
     include_combiner: bool = True, session_summary: object | None = None,
     include_fundamental: bool = True, max_per_family: int | None = 8,
+    idea_generator: object | None = None,
 ) -> "ClosedLoop":
     """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
     bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
@@ -566,10 +567,17 @@ def build_closed_loop(
     # họ khi cạn max_per_family mà 0 pass -> chuyển ngân sách sang họ orthogonal (yield).
     from src.reporting.diagnostics import classify_family
 
+    # Nối exhaustion guard -> generator (Pha 2.3): khi đóng họ, tiêm danh sách họ bão hoà vào
+    # prompt LLM lượt sau. Chỉ khi có idea_generator (đường LLM re-seed) + nó hỗ trợ setter.
+    on_family_closed = None
+    if idea_generator is not None and hasattr(idea_generator, "set_saturated_families"):
+        on_family_closed = idea_generator.set_saturated_families
+
     return ClosedLoop(
         idea_source=idea_source, refiner=refiner, repo=repo,  # type: ignore[arg-type]
         region=region, universe=universe, max_ideas=max_ideas,
         calibration_tracker=tracker, alpha_logger=alpha_logger,
         session_summary=session_summary, dedup_key_fn=_dedup_key,
         family_fn=classify_family, max_per_family=max_per_family,
+        on_family_closed=on_family_closed,
     )

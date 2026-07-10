@@ -360,6 +360,25 @@ def test_dedup_nap_avoided_hashes_cross_session(repo) -> None:  # noqa: ANN001
     assert refiner.calls == []  # bị chặn bởi avoid-list hash cross-session
 
 
+def test_gen_ms_duoc_dien_vao_outcome(repo) -> None:  # noqa: ANN001
+    """Fix gap Pha 0: ClosedLoop đo thời gian next_batch (GP generation) và điền gen_ms vào
+    outcome (refiner không biết chi phí sinh batch). Trước đây gen_ms luôn None -> cột 'gen'
+    trong funnel luôn '—'."""
+    src = _FakeIdeaSource([[_cand("close"), _cand("open")]])
+    refiner = _FakeRefiner({})
+    logged = []
+
+    class _Logger:
+        def log(self, index, outcome):
+            logged.append(outcome)
+
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo, alpha_logger=_Logger())
+    loop.run()
+    assert logged
+    for o in logged:
+        assert o.gen_ms is not None and o.gen_ms >= 0.0
+
+
 def test_closed_loop_feed_session_summary(repo) -> None:  # noqa: ANN001
     """ClosedLoop record mỗi outcome vào session_summary + đếm dup bị chặn (Pha 0)."""
     from src.reporting.session_summary import SessionSummary

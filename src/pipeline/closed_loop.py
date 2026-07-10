@@ -10,7 +10,8 @@ injected qua Protocol structural; việc dựng cụ thể nằm ở `main.py`/a
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 import numpy as np
@@ -213,10 +214,15 @@ class ClosedLoop:
 
         while True:
             logger.info("⏳ Sinh batch ý tưởng (GP + decorrelate)…")
+            _gen_t0 = time.perf_counter()
             batch = self.idea_source.next_batch()
+            gen_batch_ms = (time.perf_counter() - _gen_t0) * 1000.0
             if not batch:
                 logger.info("Cạn ý tưởng (batch rỗng) — dừng vòng kín.")
                 return _report("no_more_ideas")
+            # Chi phí sinh (GP/decorrelate) là của CẢ batch; phân bổ đều cho mỗi ứng viên để
+            # điền gen_ms (refiner không biết chi phí này). Xấp xỉ đủ tốt cho funnel timing.
+            gen_ms_each = gen_batch_ms / len(batch)
             logger.info("📦 Batch: {} ứng viên qua sàng lọc/decorrelate.", len(batch))
             for cand in batch:
                 if self.max_ideas is not None and ideas_tried >= self.max_ideas:
@@ -242,6 +248,10 @@ class ClosedLoop:
                 except QuotaExhausted:
                     logger.info("Hết quota Brain — dừng vòng kín ({} sim đã dùng).", sims_used)
                     return _report("quota")
+                # Điền gen_ms (chi phí sinh batch phân bổ) nếu refiner chưa set — refiner đo
+                # backtest_ms/sim_ms, còn gen_ms thuộc tầng ClosedLoop (Fix gap Pha 0).
+                if getattr(outcome, "gen_ms", None) is None:
+                    outcome = replace(outcome, gen_ms=gen_ms_each)
                 self.repo.record_brain_sim(
                     canonical_hash=outcome.canonical_hash, expr_string=outcome.expr,
                     wq_alpha_id=outcome.wq_alpha_id, region=self.region,

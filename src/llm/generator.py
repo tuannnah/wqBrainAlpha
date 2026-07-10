@@ -354,6 +354,15 @@ class LLMAlphaGenerator:
             f"{saturated_line}"
             "Mỗi ý tưởng là một câu ngắn nêu rõ NGUỒN DỮ LIỆU + hiện tượng kinh tế "
             "khai thác (không phải tên operator). Đa dạng nguồn, không lặp một mạch.\n"
+            # Hypothesis-first (IMPROVEMENT_SPEC §2.3): ép mỗi ý tưởng có nền tảng kinh tế rõ,
+            # không phải công thức mò -> alpha bền, dễ mô tả khi nộp/Power Pool.
+            "MỖI ý tưởng phải theo cấu trúc GIẢ THUYẾT 4 phần (viết gọn trong 1-2 câu, đủ 4 ý):\n"
+            "  1) QUAN SÁT: bất thường/hiện tượng thị trường cụ thể.\n"
+            "  2) NỀN TẢNG HỌC THUẬT: lý thuyết/nghiên cứu ủng hộ (vd Novy-Marx, Sloan, "
+            "behavioral finance...).\n"
+            "  3) CƠ CHẾ KINH TẾ: vì sao tín hiệu này có alpha (ai giao dịch sai, vì sao dai dẳng).\n"
+            "  4) CÁCH KHAI THÁC: nguồn dữ liệu + phép biến đổi (gap/normalize/reversal), KHÔNG "
+            "phải momentum giá thuần.\n"
             'Trả JSON đúng định dạng: {"ideas": ["...", "..."]}.'
         )
 

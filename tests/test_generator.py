@@ -97,6 +97,19 @@ def test_prompt_khong_tiem_khi_khong_co_ho_bao_hoa():
     assert "BÃO HOÀ" not in prompt
 
 
+def test_prompt_hypothesis_first_4_phan():
+    """Fix gap Pha 2.3: prompt ép cấu trúc hypothesis-first 4 phần (observation -> theoretical
+    basis -> economic mechanism -> specification) thay vì chỉ 'một câu ngắn'."""
+    gen = _make_generator()
+    prompt = gen.build_ideas_system_prompt()
+    # 4 mốc cấu trúc (không phân biệt hoa thường)
+    low = prompt.lower()
+    assert "quan sát" in low          # observation
+    assert "học thuật" in low or "nền tảng" in low  # theoretical basis
+    assert "cơ chế" in low            # economic mechanism
+    assert "cách khai thác" in low or "cụ thể hoá" in low or "specification" in low
+
+
 def test_parse_ideas_loai_bo_metric_bia():
     """LLM hay nhét metric BỊA (sharpe=2.1, fitness=0.92) vào text hướng — đó là
     số tự bịa, không phải đo thật; phải bị tước để không nhiễm xuống downstream."""
