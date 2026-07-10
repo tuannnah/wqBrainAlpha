@@ -50,6 +50,17 @@ _OPTION_PREFIXES = ("implied_volatility", "historical_volatility", "opt", "pcr")
 _SOCIAL_PREFIXES = ("snt_", "snt1", "scl", "nws", "event_")
 _SOCIAL_SUBSTR = ("sentiment", "social", "novelty", "buzz")
 _ANALYST_PREFIXES = ("anl", "est", "fnd", "is_", "bs_", "cf_")
+# Field fundamental (income/balance/cashflow) verify LIVE trên fundamental6 — neutralize theo
+# INDUSTRY (docs WQ). Nhận diện qua tên field chuẩn hoá + tiền tố fnd6_.
+_FUNDAMENTAL_FIELDS = frozenset({
+    "assets", "cashflow_op", "revenue", "sales", "operating_income", "operating_expense",
+    "return_assets", "sales_growth", "cash", "cash_st", "inventory", "sales_ps",
+})
+_FUNDAMENTAL_PREFIXES = ("fnd6_", "cashflow_")
+
+
+def _is_fundamental(f: str) -> bool:
+    return f in _FUNDAMENTAL_FIELDS or f.startswith(_FUNDAMENTAL_PREFIXES)
 
 
 def _is_option(f: str) -> bool:
@@ -77,6 +88,8 @@ def neutralization_for_expr(expr: str, registry=None) -> str:
     if any(_is_social(f) for f in fields):
         return "SUBINDUSTRY"
     if any(_is_analyst(f) for f in fields):
+        return "INDUSTRY"
+    if any(_is_fundamental(f) for f in fields):
         return "INDUSTRY"
     return "SUBINDUSTRY"
 

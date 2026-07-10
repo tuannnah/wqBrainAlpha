@@ -245,6 +245,56 @@ def test_build_closed_loop_include_alt_data(small_panel, repo) -> None:  # noqa:
     loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
                              registry=default_registry(), loop=_NoopLoop(),
                              pop_size=6, n_generations=0, top_k=3, max_ideas=2,
-                             curated_seeds=False, include_alt_data=True)
+                             curated_seeds=False, include_alt_data=True,
+                             include_fundamental=False)
     batch = loop.idea_source.next_batch()
     assert [c.expr for c in batch] == list(ALT_DATA_CORES)
+
+
+def test_build_closed_loop_fundamental_mac_dinh(small_panel, repo) -> None:  # noqa: ANN001
+    """Pha 2.1: fundamental cores có mặt trong batch đầu khi include_fundamental (mặc định True).
+    Field fundamental ngoài panel local -> refiner sim thẳng Brain (như alt-data)."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
+    from src.lang.registry import default_registry
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2,
+                             curated_seeds=False)  # KHÔNG truyền include_fundamental
+    exprs = [c.expr for c in loop.idea_source.next_batch()]
+    for core in FUNDAMENTAL_CORES:
+        assert core in exprs
+
+
+def test_build_closed_loop_alt_data_bat_mac_dinh(small_panel, repo) -> None:  # noqa: ANN001
+    """Pha 2.1: alt-data BẬT mặc định (đòn bẩy yield #1) — không cần truyền include_alt_data.
+    AltDataIdeaSource bọc ngoài nên các core alt-data nằm trong batch đầu (combiner có thể
+    nối thêm combo phía sau, nên dùng superset thay vì bằng tuyệt đối)."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.generation.alt_data_seeds import ALT_DATA_CORES
+    from src.lang.registry import default_registry
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2,
+                             curated_seeds=False)  # KHÔNG truyền include_alt_data
+    exprs = [c.expr for c in loop.idea_source.next_batch()]
+    for core in ALT_DATA_CORES:
+        assert core in exprs

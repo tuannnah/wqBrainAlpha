@@ -19,6 +19,7 @@ from src.generation.alt_data_seeds import (
     neutralization_for_expr,
     pp_neutralization_for_expr,
 )
+from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
 from src.generation.combiner import SubSignal
 from src.gp.engine import GPEngine
 from src.lang.parser import parse
@@ -502,8 +503,9 @@ def build_closed_loop(
     top_k: int = 10, max_corr: float = 0.70,
     calibrate_every: int = 10, rho_bar: float = 0.5, max_ideas: int | None = None,
     refiner: object | None = None, curated_seeds: bool = True,
-    include_alt_data: bool = False, alpha_logger: object | None = None,
+    include_alt_data: bool = True, alpha_logger: object | None = None,
     include_combiner: bool = True, session_summary: object | None = None,
+    include_fundamental: bool = True,
 ) -> "ClosedLoop":
     """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
     bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
@@ -522,8 +524,16 @@ def build_closed_loop(
         idea_source = CuratedIdeaSource(fallback=idea_source)
     # Alt-data đặt NGOÀI CÙNG -> phục vụ ở batch đầu (trước cả curated PV) để phiên ngắn/
     # --max-ideas nhỏ vẫn chạm alt-data (đòn bẩy độ mới), không bị PV core nuốt hết quota.
+    # Alt-data + fundamental: field ngoài panel local -> refiner sim thẳng Brain. GỘP cores vào
+    # MỘT batch đầu (không bọc lồng nhiều tầng) để phiên ngắn (--max-ideas nhỏ) chạm cả hai họ
+    # mới cùng lúc (IMPROVEMENT_SPEC §2.1: thoát cụm PV/VWAP bão hòa bằng nhiều họ orthogonal).
+    direct_cores: tuple[str, ...] = ()
     if include_alt_data:
-        idea_source = AltDataIdeaSource(fallback=idea_source)
+        direct_cores += ALT_DATA_CORES
+    if include_fundamental:
+        direct_cores += FUNDAMENTAL_CORES
+    if direct_cores:
+        idea_source = AltDataIdeaSource(fallback=idea_source, cores=direct_cores)
     # Combiner bọc NGOÀI CÙNG: nối tiếp mỗi batch (sau curated/alt-data) bằng alpha ghép từ
     # chính tín hiệu con batch đó + kho DB -> tự động chạy sau mỗi run (spec 2026-07-09).
     if include_combiner:
