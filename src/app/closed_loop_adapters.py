@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.pipeline.closed_loop import ClosedLoop
 
+from loguru import logger
+
 from config.thresholds import calibrated_floor
 from src.backtest.gate import local_usable
 from src.backtest.local_tuner import tune as _tune
@@ -598,6 +600,12 @@ class CombinerIdeaSource:
         # Task 4: combo tự dựng cũng có thể rơi vào họ đã đóng (vd toàn tín hiệu con pv_reversal
         # ghép lại) -> lọc chính combo của mình, đồng thời ủy quyền xuống fallback.
         self._saturated: set[str] = set()
+        # Task 7: instrumentation — thống kê CUỘC GỌI next_batch() gần nhất (n_run/n_db/
+        # total tín hiệu, có bị skip vì < n_min hay không, số combo sinh ra). Log qua loguru
+        # NGOÀI ra để soi trực tiếp trong CSV/console; `last_stats` cho test/tool đọc lại mà
+        # không cần bắt log — CombinerIdeaSource từng "0 combo" âm thầm vì _signals() vứt
+        # oan candidate curated pnl rỗng (xem _signals) mà không ai biết TẠI SAO.
+        self.last_stats: dict[str, int | bool] = {}
 
     def set_saturated_families(self, fams: "set[str] | frozenset[str]") -> None:
         self._saturated = set(fams)
@@ -610,12 +618,41 @@ class CombinerIdeaSource:
         return score
 
     def _signals(self, batch: list[ShortlistCandidate]) -> list[SubSignal]:
-        """Tín hiệu con ứng viên = candidate batch CÓ PnL local (curated/alt-data pnl rỗng bị
-        bỏ) + kho alpha tốt DB. score = fitness để xếp seed."""
+        """Tín hiệu con ứng viên = candidate batch CÓ PnL local + kho alpha tốt DB.
+
+        Candidate batch CHƯA có pnl local (kiểu curated/alt-data: `metrics=None`, `pnl`
+        rỗng — `CuratedIdeaSource`/`AltDataIdeaSource` yield thẳng core KHÔNG tự backtest)
+        KHÔNG còn bị vứt thẳng như trước (bug gốc khiến combo luôn = 0 khi DB rỗng): nếu
+        expr local-usable (field nằm trong panel) thì backtest NGAY bằng đúng đường
+        `_score_one_full` (parse->eval->portfolio->backtest->metrics — CÙNG đường tuner/
+        generate_many dùng, không tự chế lại) để lấy pnl/fitness làm tín hiệu con. Alt-data
+        thật (field ngoài panel local, vd option8/socialmedia8) vẫn bị loại — không có cách
+        chấm local. score = fitness để xếp seed."""
         sigs: list[SubSignal] = []
         for c in batch:
             if c.metrics is not None and getattr(c.pnl, "size", 0) > 0:
                 sigs.append(SubSignal(c.expr, c.pnl, c.dates, c.metrics.fitness, source="run"))
+                continue
+            try:
+                # data thiếu field_names() thật (fake/object() trong test cũ) -> coi như
+                # local-usable, GIỮ hành vi cũ (khớp `_is_alt_data` của LocalTunerRefiner).
+                usable = local_usable(c.expr, self._data)
+            except Exception:
+                usable = True
+            if not usable:
+                continue
+            try:
+                res = _score_one_full(c.expr, self._config, self._data)
+            except Exception as exc:
+                # Backtest lỗi (config/data giả trong test, hoặc expr rơi vào nhánh lỗi
+                # hiếm) -> bỏ qua candidate này, KHÔNG crash cả next_batch vì 1 ứng viên xấu.
+                logger.debug(
+                    "CombinerIdeaSource._signals: backtest lỗi cho {!r}: {}", c.expr, exc,
+                )
+                continue
+            if res.pnl.size == 0:
+                continue
+            sigs.append(SubSignal(c.expr, res.pnl, res.dates, res.metrics.fitness, source="run"))
         for expr, dates, pnl, fitness in self._repo.good_signals_for_combine(limit=self.db_limit):
             sigs.append(SubSignal(expr, pnl, dates, fitness, source="db"))
         return sigs
@@ -625,7 +662,17 @@ class CombinerIdeaSource:
         if not batch:
             return batch
         signals = self._signals(batch)
+        n_run = sum(1 for s in signals if s.source == "run")
+        n_db = sum(1 for s in signals if s.source == "db")
         if len(signals) < self.n_min:
+            self.last_stats = {
+                "n_run_signals": n_run, "n_db_signals": n_db,
+                "total_signals": len(signals), "skipped": True, "n_combos": 0,
+            }
+            logger.info(
+                "CombinerIdeaSource: n_run={} n_db={} total={} < n_min={} -> bỏ qua (0 combo)",
+                n_run, n_db, len(signals), self.n_min,
+            )
             return batch
         pool: Any = self._repo.load_pool() or None
         combos = combine_stage(
@@ -634,6 +681,14 @@ class CombinerIdeaSource:
         )
         if self._saturated:
             combos = [c for c in combos if classify_family(c.expr) not in self._saturated]
+        self.last_stats = {
+            "n_run_signals": n_run, "n_db_signals": n_db,
+            "total_signals": len(signals), "skipped": False, "n_combos": len(combos),
+        }
+        logger.info(
+            "CombinerIdeaSource: n_run={} n_db={} total={} -> {} combo",
+            n_run, n_db, len(signals), len(combos),
+        )
         return batch + combos
 
 
