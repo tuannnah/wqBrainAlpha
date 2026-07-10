@@ -186,3 +186,43 @@ def test_enforce_gp_vocab_against_catalog_no_mismatch_returns_empty():
 
     assert enforce_gp_vocab_against_catalog(reg, {"rank", "extra_catalog_op"}) == []
     assert {s.name for s in reg.gp_function_set()} == {"rank"}
+
+
+def test_enforce_gp_vocab_against_catalog_reevaluates_not_compounds():
+    """REGRESSION (follow-up commit d3ad0e3, review Task 2): guard KHÔNG được dồn tích
+    (compound) qua nhiều lần gọi trên cùng một registry — đúng tình huống menu tương tác
+    `while True` của main.py, nơi `_run_closed_loop_session` có thể chạy nhiều lần và
+    catalog operator được nạp lại giữa các lần chạy.
+
+    Kịch bản: lần gọi đầu dùng catalog THOÁNG QUA (transient) thiếu "x_op" -> "x_op" bị
+    loại khỏi vocab GP. Lần gọi SAU dùng catalog ĐẦY ĐỦ hơn (có "x_op") -> "x_op" phải
+    được ĐƯA TRỞ LẠI gp_function_set(), KHÔNG bị kẹt loại vĩnh viễn vì snapshot catalog
+    thoáng qua ở lần gọi trước. Gọi lặp lại lần 3 với catalog giống lần 2 phải ổn định
+    (idempotent no-op)."""
+    reg = OperatorRegistry()
+    x_op = OperatorSpec(
+        name="x_op", category=OpCategory.TIME_SERIES,
+        signature=(ArgKind.PANEL, ArgKind.WINDOW), impl=_placeholder, bounded=False,
+        gp_usable=True,
+    )
+    rank = OperatorSpec(
+        name="rank", category=OpCategory.CROSS_SECTIONAL,
+        signature=(ArgKind.PANEL,), impl=_placeholder, bounded=True, gp_usable=True,
+    )
+    reg.register(x_op)
+    reg.register(rank)
+
+    # Lần 1: catalog thoáng qua thiếu "x_op" -> bị loại khỏi vocab GP.
+    offending1 = enforce_gp_vocab_against_catalog(reg, {"rank"})
+    assert offending1 == ["x_op"]
+    assert {s.name for s in reg.gp_function_set()} == {"rank"}
+
+    # Lần 2: catalog đầy đủ hơn (có "x_op") -> phải được PHỤC HỒI, không loại vĩnh viễn.
+    offending2 = enforce_gp_vocab_against_catalog(reg, {"rank", "x_op"})
+    assert offending2 == []
+    assert {s.name for s in reg.gp_function_set()} == {"rank", "x_op"}
+
+    # Lần 3: gọi lặp lại với catalog giống hệt lần 2 -> idempotent, ổn định.
+    offending3 = enforce_gp_vocab_against_catalog(reg, {"rank", "x_op"})
+    assert offending3 == []
+    assert {s.name for s in reg.gp_function_set()} == {"rank", "x_op"}
