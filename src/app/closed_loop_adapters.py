@@ -410,6 +410,14 @@ class CuratedIdeaSource:
         self._fallback = fallback
         self._cores = tuple(cores)
         self._served_curated = False
+        # Task 4: giống GPIdeaSource — lọc core của CHÍNH mình theo họ đã đóng, đồng thời ủy
+        # quyền xuống fallback để cả chuỗi (GP ở cuối) cũng học tín hiệu này.
+        self._saturated: set[str] = set()
+
+    def set_saturated_families(self, fams: "set[str] | frozenset[str]") -> None:
+        self._saturated = set(fams)
+        if hasattr(self._fallback, "set_saturated_families"):
+            self._fallback.set_saturated_families(fams)
 
     def next_batch(self):
         if not self._served_curated:
@@ -418,10 +426,15 @@ class CuratedIdeaSource:
 
             empty = np.zeros(0, dtype=np.float64)
             dates = np.zeros(0, dtype="datetime64[ns]")
-            return [
-                ShortlistCandidate(expr=e, metrics=None, pnl=empty, dates=dates)
-                for e in self._cores
-            ]
+            cores = [e for e in self._cores if classify_family(e) not in self._saturated]
+            if cores:
+                return [
+                    ShortlistCandidate(expr=e, metrics=None, pnl=empty, dates=dates)
+                    for e in cores
+                ]
+            # Toàn bộ core curated thuộc họ đã đóng -> rơi thẳng xuống fallback thay vì trả
+            # rỗng (rỗng ở đây KHÔNG có nghĩa "cạn ý tưởng", chỉ là curated không còn gì hợp).
+            return self._fallback.next_batch()
         return self._fallback.next_batch()
 
 
@@ -435,6 +448,13 @@ class AltDataIdeaSource:
         self._fallback = fallback
         self._cores = tuple(cores)
         self._served = False
+        # Task 4: cùng cơ chế lọc + ủy quyền như CuratedIdeaSource.
+        self._saturated: set[str] = set()
+
+    def set_saturated_families(self, fams: "set[str] | frozenset[str]") -> None:
+        self._saturated = set(fams)
+        if hasattr(self._fallback, "set_saturated_families"):
+            self._fallback.set_saturated_families(fams)
 
     def next_batch(self):
         if not self._served:
@@ -443,10 +463,13 @@ class AltDataIdeaSource:
 
             empty = np.zeros(0, dtype=np.float64)
             dates = np.zeros(0, dtype="datetime64[ns]")
-            return [
-                ShortlistCandidate(expr=e, metrics=None, pnl=empty, dates=dates)
-                for e in self._cores
-            ]
+            cores = [e for e in self._cores if classify_family(e) not in self._saturated]
+            if cores:
+                return [
+                    ShortlistCandidate(expr=e, metrics=None, pnl=empty, dates=dates)
+                    for e in cores
+                ]
+            return self._fallback.next_batch()
         return self._fallback.next_batch()
 
 
@@ -471,6 +494,14 @@ class GPIdeaSource:
         self.max_corr = max_corr
         self.max_empty_retries = max_empty_retries
         self._batch = 0
+        # Task 4: họ đã đóng (ClosedLoop báo qua on_family_closed) -> lọc bỏ candidate cùng họ
+        # TRƯỚC khi trả, tránh sinh mãi pv_reversal rồi bị ClosedLoop loại sau (tốn ~2 phút/batch).
+        self._saturated: set[str] = set()
+
+    def set_saturated_families(self, fams: "set[str] | frozenset[str]") -> None:
+        """Nhận tập họ vừa đóng (ClosedLoop truyền TOÀN BỘ closed_families mỗi lần, tích luỹ
+        dần) -> thay thế set hiện tại (không union thủ công vì nguồn đã là snapshot đầy đủ)."""
+        self._saturated = set(fams)
 
     def _run_one_batch(self) -> list[ShortlistCandidate]:
         seed = self.base_seed + self._batch
@@ -496,6 +527,11 @@ class GPIdeaSource:
         # max_empty_retries lô (seed khác nhau) rồi mới trả rỗng thật sự.
         for _ in range(max(1, self.max_empty_retries)):
             batch = self._run_one_batch()
+            if self._saturated:
+                # Lọc SAU sinh (đủ rẻ — sinh đã xong, lọc chỉ là classify_family theo chuỗi):
+                # nếu lọc hết sạch, coi như lô này "rỗng" -> thử seed khác thay vì trả candidate
+                # thuộc họ đã đóng.
+                batch = [c for c in batch if classify_family(c.expr) not in self._saturated]
             if batch:
                 return batch
         return []
@@ -524,6 +560,14 @@ class CombinerIdeaSource:
         self.n_max = n_max
         self.max_combos = max_combos
         self.db_limit = db_limit
+        # Task 4: combo tự dựng cũng có thể rơi vào họ đã đóng (vd toàn tín hiệu con pv_reversal
+        # ghép lại) -> lọc chính combo của mình, đồng thời ủy quyền xuống fallback.
+        self._saturated: set[str] = set()
+
+    def set_saturated_families(self, fams: "set[str] | frozenset[str]") -> None:
+        self._saturated = set(fams)
+        if hasattr(self._fallback, "set_saturated_families"):
+            self._fallback.set_saturated_families(fams)
 
     def _score_fn(self, pool):
         def score(expr: str):
@@ -553,6 +597,8 @@ class CombinerIdeaSource:
             signals, self._score_fn(pool), tau=self.tau, n_min=self.n_min,
             n_max=self.n_max, max_combos=self.max_combos, registry=self._registry,
         )
+        if self._saturated:
+            combos = [c for c in combos if classify_family(c.expr) not in self._saturated]
         return batch + combos
 
 
@@ -618,11 +664,18 @@ def build_closed_loop(
     # họ khi cạn max_per_family mà 0 pass -> chuyển ngân sách sang họ orthogonal (yield).
     from src.reporting.diagnostics import classify_family
 
-    # Nối exhaustion guard -> generator (Pha 2.3): khi đóng họ, tiêm danh sách họ bão hoà vào
-    # prompt LLM lượt sau. Chỉ khi có idea_generator (đường LLM re-seed) + nó hỗ trợ setter.
-    on_family_closed = None
-    if idea_generator is not None and hasattr(idea_generator, "set_saturated_families"):
-        on_family_closed = idea_generator.set_saturated_families
+    # Nối exhaustion guard -> ĐƯỜNG THẬT (Task 4, sửa bug Pha 2.3): idea_source LÀ chuỗi
+    # generator chạy thật (GPIdeaSource/CuratedIdeaSource/AltDataIdeaSource/CombinerIdeaSource
+    # dựng ở trên) — bug cũ chỉ nối on_family_closed khi truyền `idea_generator` (LLM re-seed
+    # riêng, mặc định None ở đường research) nên tín hiệu đóng họ KHÔNG BAO GIỜ tới chuỗi thật,
+    # cứ sinh mãi pv_reversal rồi bị ClosedLoop loại sau khi đã tốn ~2 phút/batch. `idea_source`
+    # (wrapper ngoài cùng) LUÔN có `set_saturated_families` (mọi wrapper đều tự lọc + ủy quyền
+    # xuống fallback) nên gọi thẳng, không cần hasattr guard; vẫn gọi thêm idea_generator nếu có
+    # để giữ tương thích ngược với đường LLM re-seed (test Pha 2.3).
+    def on_family_closed(fams: set[str]) -> None:
+        idea_source.set_saturated_families(fams)  # type: ignore[attr-defined]
+        if idea_generator is not None and hasattr(idea_generator, "set_saturated_families"):
+            idea_generator.set_saturated_families(fams)
 
     return ClosedLoop(
         idea_source=idea_source, refiner=refiner, repo=repo,  # type: ignore[arg-type]

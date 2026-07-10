@@ -305,6 +305,121 @@ def test_build_closed_loop_fundamental_mac_dinh(small_panel, repo) -> None:  # n
         assert core in exprs
 
 
+def test_gp_idea_source_loc_ho_da_dong(small_panel, repo) -> None:  # noqa: ANN001
+    """Task 4: set_saturated_families lọc candidate thuộc họ đã đóng khỏi next_batch — trước
+    fix, GPIdeaSource không có setter này nên tín hiệu đóng họ không bao giờ chặn được sinh."""
+    from unittest.mock import patch
+
+    from src.reporting.diagnostics import classify_family
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+    src = GPIdeaSource(small_panel, repo, cfg, default_registry(),
+                       pop_size=6, n_generations=0, base_seed=42, top_k=5, max_corr=0.99,
+                       max_empty_retries=1)
+
+    def _fake_generate_many(**_kw):
+        return [
+            _cand("multiply(-1, ts_mean(subtract(close, vwap), 10))"),  # pv_reversal
+            _cand("ts_rank(assets, 10)"),  # fundamental
+        ]
+
+    class _StubEngine:
+        def __init__(self, *a, **k) -> None: ...
+
+    src.set_saturated_families({"pv_reversal"})
+    with patch("src.app.closed_loop_adapters.GPEngine", _StubEngine), \
+         patch("src.app.closed_loop_adapters.generate_many", _fake_generate_many):
+        batch = src.next_batch()
+    assert batch and all(classify_family(c.expr) != "pv_reversal" for c in batch)
+
+
+def test_curated_idea_source_uy_quyen_saturated_xuong_fallback(small_panel, repo) -> None:  # noqa: ANN001
+    """Task 4: wrapper CuratedIdeaSource phải ủy quyền set_saturated_families xuống fallback
+    (GPIdeaSource) để CẢ CHUỖI học tín hiệu đóng họ, không chỉ dừng ở wrapper ngoài cùng."""
+    from src.app.closed_loop_adapters import CuratedIdeaSource
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+    gp = GPIdeaSource(small_panel, repo, cfg, default_registry(), pop_size=6, n_generations=0)
+    outer = CuratedIdeaSource(fallback=gp)
+
+    outer.set_saturated_families({"pv_reversal"})
+
+    assert gp._saturated == {"pv_reversal"}
+
+
+def test_chuoi_wrapper_lan_toa_loc_ho_dong_toi_gp(small_panel, repo) -> None:  # noqa: ANN001
+    """Task 4, verify (a): set_saturated_families gọi ở wrapper NGOÀI CÙNG (CuratedIdeaSource)
+    phải lan toả xuống GPIdeaSource — cores curated (đều pv_reversal) bị lọc sạch nên rơi
+    xuống GP fallback (đã stub trả 1 candidate fundamental), kết quả không còn pv_reversal."""
+    from unittest.mock import patch
+
+    from src.app.closed_loop_adapters import CuratedIdeaSource
+    from src.reporting.diagnostics import classify_family
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+    gp = GPIdeaSource(small_panel, repo, cfg, default_registry(),
+                       pop_size=6, n_generations=0, base_seed=42, top_k=5, max_corr=0.99,
+                       max_empty_retries=1)
+    outer = CuratedIdeaSource(fallback=gp)
+
+    def _fake_generate_many(**_kw):
+        return [_cand("ts_rank(assets, 10)")]  # fundamental, không pv
+
+    class _StubEngine:
+        def __init__(self, *a, **k) -> None: ...
+
+    outer.set_saturated_families({"pv_reversal"})
+    with patch("src.app.closed_loop_adapters.GPEngine", _StubEngine), \
+         patch("src.app.closed_loop_adapters.generate_many", _fake_generate_many):
+        batch = outer.next_batch()
+    assert batch and all(classify_family(c.expr) != "pv_reversal" for c in batch)
+
+
+def test_build_closed_loop_on_family_closed_noi_toi_idea_source(small_panel, repo) -> None:  # noqa: ANN001
+    """Task 4, verify (b): build_closed_loop phải nối on_family_closed -> idea_source (chuỗi
+    generator THẬT), không chỉ tới idea_generator (LLM re-seed riêng, mặc định None). Gọi
+    on_family_closed phải lọc được batch tiếp theo sinh từ idea_source."""
+    from unittest.mock import patch
+
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.reporting.diagnostics import classify_family
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    # Tắt hết wrapper khác -> idea_source CHÍNH LÀ GPIdeaSource, kiểm tra trực diện dây nối.
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2,
+                             curated_seeds=False, include_alt_data=False,
+                             include_fundamental=False, include_combiner=False)
+    assert loop.on_family_closed is not None
+
+    loop.on_family_closed({"pv_reversal"})
+    assert loop.idea_source._saturated == {"pv_reversal"}
+
+    def _fake_generate_many(**_kw):
+        return [
+            _cand("multiply(-1, ts_mean(subtract(close, vwap), 10))"),  # pv_reversal
+            _cand("ts_rank(assets, 10)"),  # fundamental
+        ]
+
+    class _StubEngine:
+        def __init__(self, *a, **k) -> None: ...
+
+    with patch("src.app.closed_loop_adapters.GPEngine", _StubEngine), \
+         patch("src.app.closed_loop_adapters.generate_many", _fake_generate_many):
+        batch = loop.idea_source.next_batch()
+    assert batch and all(classify_family(c.expr) != "pv_reversal" for c in batch)
+
+
 def test_build_closed_loop_alt_data_bat_mac_dinh(small_panel, repo) -> None:  # noqa: ANN001
     """Pha 2.1: alt-data BẬT mặc định (đòn bẩy yield #1) — không cần truyền include_alt_data.
     AltDataIdeaSource bọc ngoài nên các core alt-data nằm trong batch đầu (combiner có thể
