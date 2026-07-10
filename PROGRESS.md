@@ -13,6 +13,8 @@
   - Pha 3 (self-corr): tune() bọc regression_neut(expr, rank(volume)) hạ self-corr (golden
     chứng minh trực giao). Phần phụ ts_rank/turnover để lại làm A/B.
   - Pha 4 (floor): calibrated_floor(target/1.28) thay hằng cứng 0.5; audit local_sharpe+ngưỡng.
+- **Kiểm định độc lập (sub-agent) đã chạy:** đối chiếu code vs spec -> tìm+fix 3 gap (gen_ms
+  không đo, hypothesis-first thiếu, on_family_closed không wire) — commit `546e9d9`.
 - **Next: CẦN USER CHẠY MENU-5 để đo phiên thật** — không code thêm gì cho tới khi có số liệu.
   Đọc `logs/session_summary_*.md` để nghiệm thu acceptance từng pha (funnel/độ dài/đa dạng họ/
   self-corr/tỉ lệ local_floor). Có thể A/B `--no-alt-data` để đo đóng góp yield.
@@ -413,3 +415,23 @@
 - **Tests:** `pytest -q` 1218 passed, 1 fail pre-existing. Thêm: test_local_tuner_tune (3 case
   regression_neut), test_regression_neut_orthogonal (golden), test_calibrated_floor. Commits
   `407b50d`→`11b0614`.
+
+### [2026-07-10] Session 08 (tiếp) — Kiểm định độc lập + fix 3 gap
+- **Phase:** Sub-agent (general-purpose) đối chiếu code vs IMPROVEMENT_SPEC từng acceptance ->
+  phát hiện 3 gap thật; đã fix hết (`546e9d9`). pytest 1221 passed, 1 fail postgres pre-existing.
+- **Gap đã fix:**
+  - **gen_ms luôn None** (khai báo Pha 0 nhưng KHÔNG chỗ nào đo) -> cột funnel "gen" luôn "—".
+    ClosedLoop.run() đo perf_counter quanh next_batch, phân bổ đều/candidate, `replace(outcome,
+    gen_ms=...)` nếu refiner chưa set.
+  - **hypothesis-first thiếu** (§2.3): build_ideas_system_prompt thêm cấu trúc 4 phần bắt buộc
+    (quan sát -> nền tảng học thuật -> cơ chế kinh tế -> cách khai thác).
+  - **on_family_closed không wire**: build_closed_loop nhận idea_generator, nối callback ->
+    set_saturated_families. Đường closed-loop mặc định dùng GPIdeaSource (không LLM sinh ý
+    tưởng) nên main chưa dựng generator cho nó — cơ chế sẵn sàng khi thêm LLM idea source,
+    KHÔNG nối bừa (over-reach vào đường research riêng).
+- **Gap còn lại (cố ý để lại, KHÔNG phải thiếu sót):** hạ số lượng CuratedIdeaSource PV; ép
+  ts_rank>ts_zscore — đều là guidance mềm/micro-opt, để làm biến A/B đo phiên thật (§6), không
+  áp mù. Sub-agent xác nhận đây là lựa chọn, không tính gap chặn.
+- **Next step:** USER chạy menu-5 nghiệm thu acceptance định lượng (cần Brain session).
+- **Tests:** 1221 passed. Thêm test_closed_loop::test_gen_ms, test_closed_loop_adapters::
+  wire_on_family_closed, test_generator::hypothesis_first. Commit `546e9d9`.
