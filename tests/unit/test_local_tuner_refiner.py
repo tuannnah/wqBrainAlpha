@@ -181,6 +181,58 @@ def test_refiner_ap_neutralization_da_tune_vao_sim():
     assert seen["neut"] == "SECTOR"   # neutralization tune -> áp vào Brain sim
 
 
+class _FakeTracker:
+    """Fake CalibrationTracker tối thiểu (chỉ 2 attribute mà refiner đọc)."""
+
+    def __init__(self, last_rho, rho_bar=0.5):
+        self.last_rho = last_rho
+        self.rho_bar = rho_bar
+
+
+def test_refiner_rho_thap_thi_bo_qua_floor_local():
+    """Task 5: ρ hiện tại (0.3) < rho_bar (0.5) -> ranking local không tin -> refiner PHẢI
+    bỏ qua min_local_sharpe floor, đi tiếp sim Brain dù local_sharpe (0.1) dưới floor mặc định
+    (0.5) — floor hiệu lực = 0.0 khi ρ không tin."""
+    r = _refiner(_passed_result, tune_local_sharpe=0.1)
+    r.set_calibration_tracker(_FakeTracker(last_rho=0.3, rho_bar=0.5))
+    out = r.refine_and_sim(_cand())
+    assert r.simulator.calls == 1        # KHÔNG bị chặn ở local_floor -> tới simulate()
+    assert out.stage_reached != "local_floor"
+    assert out.is_brain_sim is True
+
+
+def test_refiner_rho_cao_thi_van_giu_floor_local():
+    """ρ hiện tại (0.8) >= rho_bar (0.5) -> ranking local vẫn tin -> floor local_sharpe áp
+    dụng như cũ (không đổi hành vi khi ρ đủ tin)."""
+    r = _refiner(_passed_result, tune_local_sharpe=0.1)
+    r.set_calibration_tracker(_FakeTracker(last_rho=0.8, rho_bar=0.5))
+    out = r.refine_and_sim(_cand())
+    assert r.simulator.calls == 0
+    assert out.sims_used == 0
+    assert out.stage_reached == "local_floor"
+
+
+def test_refiner_rho_none_thi_van_giu_floor_local():
+    """Chưa đo được ρ (last_rho=None, VD chưa đủ cặp local/Brain) -> hành vi mặc định KHÔNG
+    đổi: floor calibrated vẫn áp dụng như trước khi có Task 5 (backward-compat)."""
+    r = _refiner(_passed_result, tune_local_sharpe=0.1)
+    r.set_calibration_tracker(_FakeTracker(last_rho=None, rho_bar=0.5))
+    out = r.refine_and_sim(_cand())
+    assert r.simulator.calls == 0
+    assert out.sims_used == 0
+    assert out.stage_reached == "local_floor"
+
+
+def test_refiner_khong_co_tracker_thi_hanh_vi_nhu_cu():
+    """Không gắn tracker (mặc định None, drop-in cũ) -> floor calibrated vẫn áp dụng y hệt
+    trước Task 5 — bảo đảm tương thích ngược cho mọi call site chưa nối tracker."""
+    r = _refiner(_passed_result, tune_local_sharpe=0.1)
+    out = r.refine_and_sim(_cand())
+    assert r.simulator.calls == 0
+    assert out.sims_used == 0
+    assert out.stage_reached == "local_floor"
+
+
 def test_refiner_sub_universe_fail_thi_khong_sim(monkeypatch):
     """Winner KHÔNG đạt proxy sub-universe -> gate chặn TRƯỚC sim: không gọi simulator,
     sims_used=0, stop_reason='sub_universe'. (Phủ trực tiếp nhánh reject của gate Task 4.)"""

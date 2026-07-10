@@ -130,3 +130,37 @@ def test_build_closed_loop_dung_refiner_duoc_truyen_vao(small_panel, repo) -> No
     assert cl.refiner is stub        # refiner truyền vào được dùng nguyên vẹn, không bị bỏ qua
     cl.run()
     assert stub.calls >= 1           # refiner truyền vào thực sự được gọi khi run()
+
+
+def test_build_closed_loop_noi_tracker_vao_refiner_co_set_calibration_tracker(
+    small_panel, repo,
+) -> None:  # noqa: ANN001
+    """Task 5: nếu refiner truyền vào có `set_calibration_tracker` (vd LocalTunerRefiner),
+    `build_closed_loop` PHẢI gọi nó với ĐÚNG CalibrationTracker mà ClosedLoop dùng — cùng
+    object để last_rho cập nhật bởi ClosedLoop cũng là ρ mà refiner đọc khi quyết định floor."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.lang.registry import default_registry
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _StubRefinerWithTracker:
+        def __init__(self) -> None:
+            self.tracker = None
+
+        def set_calibration_tracker(self, tracker) -> None:
+            self.tracker = tracker
+
+        def refine_and_sim(self, candidate):
+            return IdeaOutcome(expr=candidate.expr, canonical_hash="h", passed=False,
+                               wq_alpha_id=None, sharpe=None, fitness=None, turnover=None,
+                               self_corr=None, sims_used=0, stop_reason="stub")
+
+    stub = _StubRefinerWithTracker()
+    cl = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                           registry=default_registry(), loop=None,
+                           pop_size=6, n_generations=0, top_k=3, max_ideas=1,
+                           refiner=stub)
+    assert stub.tracker is not None
+    assert stub.tracker is cl.calibration_tracker  # cùng object mà ClosedLoop cập nhật last_rho

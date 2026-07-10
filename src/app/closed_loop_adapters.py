@@ -137,6 +137,7 @@ class LocalTunerRefiner:
         max_pool_corr: float = 0.70, calib_repo=None,
         pp_allowed_neutralizations: frozenset[str] = frozenset(),
         neut_risk_factors: "list[str] | None" = None,
+        calibration_tracker: object | None = None,
     ) -> None:
         self.simulator = simulator
         self.repo = repo
@@ -159,6 +160,14 @@ class LocalTunerRefiner:
         self._tune = tune_fn or _tune
         # Risk factor để tune bọc regression_neut hạ self-corr (Pha 3.1); None -> không thử.
         self.neut_risk_factors = neut_risk_factors
+        # CalibrationTracker (src/pipeline/closed_loop.py) — cho biết ρ hiện tại giữa ranking
+        # local và Brain có đáng tin không (Task 5). None -> hành vi cũ y nguyên (floor cứng).
+        self.calibration_tracker = calibration_tracker
+
+    def set_calibration_tracker(self, tracker: object) -> None:
+        """Gắn CalibrationTracker SAU khi khởi tạo — dùng khi `build_closed_loop` dựng tracker
+        sau refiner (cùng object mà ClosedLoop cập nhật last_rho mỗi `maybe_calibrate`)."""
+        self.calibration_tracker = tracker
 
     def _luu_local_eval_calibration(self, tr, canonical_hash: str) -> None:
         """Ghi ExpressionModel + EvaluationModel cho expr đã tune (khớp hash với record_brain_sim
@@ -317,7 +326,20 @@ class LocalTunerRefiner:
         # Lưu local-eval để calibration ρ khớp hash với Brain sim ghi sau (chỉ khi có kho + metrics).
         if self.calib_repo is not None and tr.local_metrics is not None:
             self._luu_local_eval_calibration(tr, canonical_hash)
-        if tr.local_sharpe < self.min_local_sharpe:
+        # Sàn floor HIỆU LỰC phụ thuộc ρ (Task 5): ρ toàn cục đo độ tin ranking local so Brain.
+        # ρ < rho_bar (VD 0.36 log thật) nghĩa ranking local hết tin -> floor local_sharpe chỉ
+        # là NHIỄU, vừa giết oan ứng viên tốt (local thấp/Brain tốt) vừa không đáng dùng để lọc
+        # -> TẮT floor (0.0), để Brain tự phân xử thay vì local. ρ≥rho_bar hoặc chưa đo được
+        # (None) -> giữ floor calibrated như cũ (hành vi mặc định không đổi khi không có tracker).
+        # TODO(per-family ρ): brain_local_sharpe_pairs() (repository.py:558) chưa gắn nhãn family
+        # cho từng cặp -> chỉ làm được ρ TOÀN CỤC ở đây; ρ theo family cần schema DB mới (cột
+        # family trên bảng lưu cặp local/Brain sharpe) + validate bằng chạy thật, ngoài scope task này.
+        effective_floor = self.min_local_sharpe
+        tracker = self.calibration_tracker
+        if tracker is not None and getattr(tracker, "last_rho", None) is not None:
+            if tracker.last_rho < tracker.rho_bar:
+                effective_floor = 0.0
+        if tr.local_sharpe < effective_floor:
             # Dưới sàn pre-sim CALIBRATED: KHÔNG gọi simulator -> sims_used=0, không tốn quota
             # Brain. Ghi cả local_sharpe ĐẠT ĐƯỢC và NGƯỠNG áp dụng vào stop_reason để audit
             # (Pha 4: floor là calibrated_floor(target/1.28), không còn hằng cứng).
@@ -325,7 +347,7 @@ class LocalTunerRefiner:
                 expr=tr.best_expr, canonical_hash=canonical_hash, passed=False,
                 wq_alpha_id=None, sharpe=None, fitness=None, turnover=None,
                 self_corr=None, sims_used=0,
-                stop_reason=f"local_floor(<{self.min_local_sharpe:.2f})",
+                stop_reason=f"local_floor(<{effective_floor:.2f})",
                 stage_reached="local_floor", fail_check="LOW_SHARPE", family=_family,
                 expr_depth=_depth, dedup_key=canonical_hash, local_sharpe=tr.local_sharpe,
                 backtest_ms=backtest_ms, is_brain_sim=False,
@@ -650,6 +672,10 @@ def build_closed_loop(
     if refiner is None:
         refiner = RefinementLoopRefiner(loop)
     tracker = CalibrationTracker(repo, every=calibrate_every, rho_bar=rho_bar)  # type: ignore[arg-type]
+    # Task 5: nối tracker vào refiner (nếu refiner biết đọc ρ, vd LocalTunerRefiner) — CÙNG một
+    # object mà ClosedLoop cập nhật last_rho mỗi maybe_calibrate() nên refiner luôn thấy ρ mới nhất.
+    if hasattr(refiner, "set_calibration_tracker"):
+        refiner.set_calibration_tracker(tracker)  # type: ignore[attr-defined]
     # Dedup key = canonical hash đã fold scale dương (Pha 1.2). Tiêm vào ClosedLoop để dedup
     # TRƯỚC refine bắt cả biến thể scale; parse lỗi -> fallback chuỗi thô (không chặn oan).
     _hasher = CanonicalHasher(registry if registry is not None else default_registry())
