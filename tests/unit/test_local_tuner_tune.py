@@ -69,36 +69,58 @@ def test_tune_giu_local_metrics_tren_panel_that():
     assert np.isfinite(res.local_metrics.sharpe)
 
 
-def test_tune_thu_regression_neut_khi_co_risk_factor():
-    """Pha 3.1: tune thử biến thể regression_neut(expr, risk) để hạ self-corr; chọn nếu điểm
-    KHÔNG tệ hơn (bất biến đơn điệu)."""
+def test_tune_thu_vector_neut_khi_co_risk_factor():
+    """Pha 3.1 (Task 1 fix): tune thử biến thể vector_neut(expr, risk) để hạ self-corr; chọn
+    nếu điểm KHÔNG tệ hơn (bất biến đơn điệu). Dùng vector_neut (CÓ trong catalog operator
+    thật của account) thay regression_neut (KHÔNG có -> bị pre_sim_validator loại trước sim)."""
     def eval_fn(node, config):
         from src.lang.visitors import Serializer
-        # biến thể regression_neut tốt hơn hẳn -> phải được chọn
-        return 3.0 if "regression_neut" in Serializer().visit(node) else 1.0
+        # biến thể vector_neut tốt hơn hẳn -> phải được chọn
+        return 3.0 if "vector_neut" in Serializer().visit(node) else 1.0
     res = tune("rank(close)", _cfg(), data=None, budget=40, eval_fn=eval_fn,
                neut_risk_factors=["rank(volume)"])
-    assert "regression_neut" in res.best_expr
+    assert "vector_neut" in res.best_expr
+    assert "regression_neut" not in res.best_expr
     assert "rank(volume)" in res.best_expr
 
 
 def test_tune_khong_dung_neut_khi_hai_diem():
-    """regression_neut làm điểm TỆ hơn -> giữ gốc (bất biến đơn điệu, không ép neutralize)."""
+    """vector_neut làm điểm TỆ hơn -> giữ gốc (bất biến đơn điệu, không ép neutralize)."""
     def eval_fn(node, config):
         from src.lang.visitors import Serializer
-        return 0.2 if "regression_neut" in Serializer().visit(node) else 2.0
+        return 0.2 if "vector_neut" in Serializer().visit(node) else 2.0
     res = tune("rank(close)", _cfg(), data=None, budget=40, eval_fn=eval_fn,
                neut_risk_factors=["rank(volume)"])
-    assert "regression_neut" not in res.best_expr
+    assert "vector_neut" not in res.best_expr
 
 
 def test_tune_khong_co_risk_factor_giu_nguyen_hanh_vi():
     """Không truyền neut_risk_factors -> KHÔNG thử neutralize (tương thích ngược)."""
     def eval_fn(node, config):
         from src.lang.visitors import Serializer
-        return 3.0 if "regression_neut" in Serializer().visit(node) else 1.0
+        return 3.0 if "vector_neut" in Serializer().visit(node) else 1.0
     res = tune("rank(close)", _cfg(), data=None, budget=40, eval_fn=eval_fn)
+    assert "vector_neut" not in res.best_expr
+
+
+def test_tune_expr_neutralized_qua_pre_filter_voi_vector_neut():
+    """Verify Task 1: best_expr sau khi tune với neut_risk_factors chứa vector_neut (KHÔNG
+    regression_neut — operator này không có trong catalog thật của account) và biểu thức đó
+    PASS PreFilter với known_operators khớp catalog (có vector_neut, KHÔNG có regression_neut)."""
+    from src.simulation.pre_filter import PreFilter
+
+    def eval_fn(node, config):
+        from src.lang.visitors import Serializer
+        return 3.0 if "vector_neut" in Serializer().visit(node) else 1.0
+
+    res = tune("rank(close)", _cfg(), data=None, budget=40, eval_fn=eval_fn,
+               neut_risk_factors=["rank(volume)"])
+    assert "vector_neut" in res.best_expr
     assert "regression_neut" not in res.best_expr
+
+    pf = PreFilter(known_operators={"rank", "vector_neut"}, known_fields={"close", "volume"})
+    ok, reason = pf.check(res.best_expr)
+    assert ok, reason
 
 
 def test_tune_chon_config_tot_hon():

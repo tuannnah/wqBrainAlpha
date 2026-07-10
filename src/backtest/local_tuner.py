@@ -227,11 +227,13 @@ def tune(
                 if s > best:
                     best, best_config, best_metrics = s, cfg, m
 
-    # Giai đoạn 3 (Pha 3.1): thử bọc biểu thức bằng regression_neut(best, risk_factor) để trừ
-    # thành phần crowded -> hạ self-corr Brain. regression_neut/vector_neut là toán tử DUY NHẤT
-    # làm được điều này (self-corr là ràng buộc hạng nhất khi pool bão hòa). Bất biến đơn điệu:
-    # chỉ nhận nếu điểm KHÔNG tệ hơn best (không ép neutralize làm hỏng alpha tốt). neut_risk_
-    # factors inject từ composition root (khớp field panel); None/rỗng -> bỏ qua (tương thích ngược).
+    # Giai đoạn 3 (Pha 3.1): thử bọc biểu thức bằng vector_neut(best, risk_factor) để trừ
+    # thành phần crowded -> hạ self-corr Brain. Dùng vector_neut (KHÔNG phải regression_neut)
+    # vì đây là operator có thật trong catalog live của account (regression_neut không có,
+    # bị pre_sim_validator loại trước khi sim -> đòn bẩy hạ self-corr chết). Ngữ nghĩa tương
+    # đương: vector_neut(x, y) = x trừ phần chiếu của x lên y. Bất biến đơn điệu: chỉ nhận
+    # nếu điểm KHÔNG tệ hơn best (không ép neutralize làm hỏng alpha tốt). neut_risk_factors
+    # inject từ composition root (khớp field panel); None/rỗng -> bỏ qua (tương thích ngược).
     for factor_expr in neut_risk_factors or []:
         if evals >= budget:
             break
@@ -239,7 +241,7 @@ def tune(
             factor_node = parse(factor_expr)
         except (KeyError, ValueError):
             continue
-        neutralized = Call("regression_neut", (best_node, factor_node))
+        neutralized = Call("vector_neut", (best_node, factor_node))
         s, m = score(neutralized, best_config)
         evals += 1
         if s > best:
