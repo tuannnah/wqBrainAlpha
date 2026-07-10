@@ -1,8 +1,8 @@
 # MiniBrain — Progress log
 
 ## Current state
-- **Phase:** Triển khai `docs/tailieu/IMPROVEMENT_SPEC.md` (5 pha, tuần tự). **[2026-07-10
-  Session 08] PHA 0 + 1 + 2 XONG code+test** trên `main`. Design:
+- **Phase:** **HOÀN TẤT CẢ 5 PHA (0→4) của `docs/tailieu/IMPROVEMENT_SPEC.md`** — code+test
+  xong trên `main` [2026-07-10 Session 08]. Design:
   `docs/superpowers/specs/2026-07-10-improvement-spec-implementation-design.md`.
   - Pha 0 (instrumentation): IdeaOutcome +9 trường, RunAlphaLogger luôn điền đủ,
     diagnostics+session_summary, LocalTunerRefiner giữ _reasons + timing.
@@ -10,13 +10,18 @@
     avoided_hashes cross-session, depth guard, hằng số GP rời rạc.
   - Pha 2 (yield): alt-data+fundamental mặc định ON (field verify LIVE), family budget +
     exhaustion guard, tiêm họ bão hoà vào prompt LLM.
-- **Next (Pha 3 — config stage đúng lever self-corr):** thêm nhánh bọc regression_neut/
-  vector_neut trong LocalTuner để hạ self-corr (toán tử DUY NHẤT làm được); ưu tiên ts_rank
-  hơn ts_zscore; turnover-alpha không decay/hump. Rồi Pha 4 (floor percentile/calibrated thay
-  đơn-ngưỡng 0.5).
-- **Acceptance Pha 0-2 còn treo (cần USER chạy menu-5):** baseline session_summary; "median độ
-  dài giảm ≥30%"; ">=60% ứng viên KHÔNG pv_reversal, >=3 họ"; fundamental cores sim thật Brain
-  (MCP tool 400 nên chưa verify sim được — sim qua Simulator repo khi chạy menu-5).
+  - Pha 3 (self-corr): tune() bọc regression_neut(expr, rank(volume)) hạ self-corr (golden
+    chứng minh trực giao). Phần phụ ts_rank/turnover để lại làm A/B.
+  - Pha 4 (floor): calibrated_floor(target/1.28) thay hằng cứng 0.5; audit local_sharpe+ngưỡng.
+- **Next: CẦN USER CHẠY MENU-5 để đo phiên thật** — không code thêm gì cho tới khi có số liệu.
+  Đọc `logs/session_summary_*.md` để nghiệm thu acceptance từng pha (funnel/độ dài/đa dạng họ/
+  self-corr/tỉ lệ local_floor). Có thể A/B `--no-alt-data` để đo đóng góp yield.
+- **Acceptance TẤT CẢ pha còn treo (cần menu-5 QR-login):** baseline funnel; median độ dài -30%;
+  >=60% không pv_reversal + >=3 họ; self-corr giảm; tỉ lệ local_floor giảm. Fundamental cores +
+  regression_neut chưa sim thật (MCP create_simulation trả 400 = lỗi wrapper, KHÔNG phải field;
+  sim thật qua Simulator repo khi chạy menu-5).
+- **Tinh chỉnh để lại làm A/B (không áp mù):** complexity_penalty (Pha 1), ts_rank>ts_zscore +
+  turnover-alpha không decay (Pha 3) — chờ số liệu phiên thật.
 - **Phase (trước):** Đã (1) nâng chất lượng alpha từ docs WQ, (2) CHẠY THẬT Auto SIM + cải
   thiện. **e2e ĐÃ có alpha đạt chất lượng submit** — 3 alpha (`rKlkG9O8`/`kq0RY2G8`/`E5E3NKZJ`,
   VWAP intraday-reversal) Sharpe ~1.5, `failed_checks=[]`, self-corr 0.49/0.47/0.50 < 0.70.
@@ -381,3 +386,30 @@
 - **Tests:** `pytest -q` 1210 passed, 1 fail pre-existing. Thêm: test_fundamental_seeds,
   cases test_closed_loop_adapters (alt-data/fundamental default), test_closed_loop (family
   budget/callback), test_generator (saturated families). Commits `cd0a801`→`e2d62f4`.
+
+### [2026-07-10] Session 08 (tiếp) — IMPROVEMENT_SPEC Pha 3+4: self-corr lever + floor calibrated
+- **Phase:** Pha 3 (config stage đúng lever) + Pha 4 (floor calibrated) XONG trên `main`.
+  **HOÀN TẤT CẢ 5 PHA (0→4) của IMPROVEMENT_SPEC.**
+- **Done (verified, pytest 1218 passed, 1 fail postgres pre-existing):**
+  - **3.1 regression_neut lever (`407b50d`):** tune() Giai đoạn 3 thử bọc regression_neut(best,
+    risk_factor) trừ thành phần crowded -> hạ self-corr Brain (toán tử DUY NHẤT). Bất biến đơn
+    điệu (chỉ nhận nếu điểm không tệ hơn). neut_risk_factors inject; main dùng rank(volume).
+    Golden test_regression_neut_orthogonal: residual trực giao risk factor (corr<1e-6).
+  - **4 floor calibrated (`11b0614`):** calibrated_floor(target/1.28) suy floor từ MỤC TIÊU
+    Brain sharpe thay hằng cứng 0.5. stop_reason ghi kèm ngưỡng (local_floor(<0.50)) +
+    local_sharpe để audit. stage_reached giữ 'local_floor' -> funnel không đổi.
+- **Decisions:** (1) Pha 3 phần phụ (ưu tiên ts_rank>ts_zscore, turnover-alpha không decay) để
+  lại làm biến A/B đo thật — micro-opt cần đo, không phải lever chính; regression_neut là lever
+  quyết định đã xong. (2) Floor giữ giá trị 0.5 nhưng nay DERIVED từ target 0.64/1.28 — chỉnh 1
+  chỗ (target) thay vì hằng rải rác; nâng target để siết quota.
+- **In progress:** Không còn. Cả 5 pha code+test xong.
+- **Blockers / open risks:** TẤT CẢ acceptance cần USER chạy menu-5 để đo phiên thật (baseline
+  funnel; median độ dài -30%; >=60% không pv_reversal + >=3 họ; self-corr giảm nhờ regression_
+  neut; tỉ lệ chết local_floor giảm). Fundamental cores + regression_neut chưa sim thật trên
+  Brain (MCP create_simulation tool trả 400 — lỗi wrapper, sim thật qua Simulator repo menu-5).
+- **Next step:** USER chạy menu-5 (1 phiên) -> đọc logs/session_summary_*.md so baseline; nếu
+  đạt, cân nhắc chạy A/B --no-alt-data để đo đóng góp yield. Tùy chọn: tinh chỉnh complexity_
+  penalty (Pha 1) + ts_rank>ts_zscore (Pha 3) dựa trên số liệu phiên thật.
+- **Tests:** `pytest -q` 1218 passed, 1 fail pre-existing. Thêm: test_local_tuner_tune (3 case
+  regression_neut), test_regression_neut_orthogonal (golden), test_calibrated_floor. Commits
+  `407b50d`→`11b0614`.
