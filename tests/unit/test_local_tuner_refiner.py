@@ -271,3 +271,71 @@ def test_refiner_sub_universe_fail_thi_khong_sim(monkeypatch):
     assert out.sims_used == 0
     assert out.stop_reason == "sub_universe"
     assert out.passed is False
+
+
+def _refiner_local_metrics(simulate, *, tune_local_sharpe, sub_universe_result, monkeypatch):
+    """Refiner với local_metrics THẬT (không None) -> cả 2 gate (floor + sub_universe) có mặt
+    cùng lúc, đúng đường thật trong refine_and_sim (test cũ ở trên tách riêng từng gate bằng
+    local_metrics=None nên KHÔNG phủ được tương tác giữa 2 gate — đây là gap Finding 1 vá)."""
+    monkeypatch.setattr("src.backtest.sub_universe.sub_universe_ok",
+                         lambda *a, **kw: sub_universe_result)
+    from src.backtest.local_tuner import TuneResult
+    from src.backtest.metrics_local import AlphaMetrics
+
+    metrics = AlphaMetrics(
+        sharpe=tune_local_sharpe, annual_return=0.2, turnover=0.3, max_drawdown=0.1,
+        fitness=1.2, per_year_sharpe={2020: 1.5}, weight_concentration=0.05,
+    )
+
+    class _Sim:
+        def __init__(self):
+            self.calls = 0
+
+        def simulate(self, expr, settings=None):
+            self.calls += 1
+            return simulate(expr, settings)
+
+    def fake_tune(expr, cfg, data, **kw):
+        return TuneResult(
+            best_expr="rank(ts_delta(close, 20))",
+            best_config=PortfolioConfig(decay=3, truncation=0.02),
+            local_sharpe=tune_local_sharpe, local_metrics=metrics,
+        )
+
+    r = LocalTunerRefiner(
+        simulator=_Sim(), repo=_Repo(), data=object(),
+        local_config=PortfolioConfig(decay=4, truncation=0.08),
+        sim_config=SimConfig.default(), tune_fn=fake_tune,
+    )
+    return r
+
+
+def test_refiner_rho_thap_thi_bo_qua_ca_floor_va_sub_universe(monkeypatch):
+    """Finding 1 (follow-up a404874): ρ thấp (untrusted) -> floor VÀ sub_universe_ok PHẢI
+    cùng bị bỏ qua, không chỉ floor. Setup: local_metrics THẬT (không None) + local_sharpe
+    (0.1) dưới floor mặc định (0.5) + sub_universe_ok stub trả False (nếu chạy sẽ chặn) +
+    ρ untrusted (last_rho=0.3 < rho_bar=0.5). Nếu chỉ floor được tắt mà sub_universe_ok vẫn
+    chạy thật, ứng viên vẫn bị giết oan ở gate thứ hai -> simulate() KHÔNG được gọi, hỏng.
+    Assert PHẢI tới simulate() -> cả 2 gate cùng bị bypass đồng bộ."""
+    r = _refiner_local_metrics(_passed_result, tune_local_sharpe=0.1,
+                                sub_universe_result=False, monkeypatch=monkeypatch)
+    r.set_calibration_tracker(_FakeTracker(last_rho=0.3, rho_bar=0.5))
+    out = r.refine_and_sim(_cand())
+    assert r.simulator.calls == 1          # tới simulate() -> CẢ 2 gate đều bị bypass
+    assert out.stage_reached not in ("local_floor", "sub_universe")
+    assert out.is_brain_sim is True
+
+
+def test_refiner_rho_cao_thi_van_bi_sub_universe_chan(monkeypatch):
+    """Đối chứng: ρ CAO (trusted, last_rho=0.8 >= rho_bar=0.5) -> local vẫn tin -> local_sharpe
+    (1.6, TRÊN floor 0.5 nên không bị floor chặn) nhưng sub_universe_ok trả False -> ứng viên
+    PHẢI bị chặn ở gate sub_universe như hành vi cũ (test_refiner_sub_universe_fail_thi_khong_sim),
+    dù bây giờ có tracker gắn vào. simulate() KHÔNG được gọi."""
+    r = _refiner_local_metrics(_passed_result, tune_local_sharpe=1.6,
+                                sub_universe_result=False, monkeypatch=monkeypatch)
+    r.set_calibration_tracker(_FakeTracker(last_rho=0.8, rho_bar=0.5))
+    out = r.refine_and_sim(_cand())
+    assert r.simulator.calls == 0          # sub_universe chặn TRƯỚC simulate()
+    assert out.sims_used == 0
+    assert out.stop_reason == "sub_universe"
+    assert out.passed is False

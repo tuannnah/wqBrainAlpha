@@ -334,11 +334,21 @@ class LocalTunerRefiner:
         # TODO(per-family ρ): brain_local_sharpe_pairs() (repository.py:558) chưa gắn nhãn family
         # cho từng cặp -> chỉ làm được ρ TOÀN CỤC ở đây; ρ theo family cần schema DB mới (cột
         # family trên bảng lưu cặp local/Brain sharpe) + validate bằng chạy thật, ngoài scope task này.
+        # local_untrusted tính MỘT LẦN, dùng chung cho CẢ floor lẫn gate sub_universe bên dưới
+        # (Finding 1, follow-up a404874): sub_universe_ok cũng gate trên tr.local_metrics.sharpe —
+        # ĐÚNG local-panel metric mà ρ vừa tuyên bố không tin. Nếu chỉ tắt floor mà vẫn để
+        # sub_universe_ok chặn thì ρ-bypass bị vô hiệu hoá một nửa: ứng viên tốt Brain/xấu local
+        # vẫn bị giết oan ở gate thứ hai, đúng vấn đề mà Task 5 định sửa. getattr(...) cho CẢ
+        # last_rho lẫn rho_bar (Finding 2) để tracker duck-typed thiếu rho_bar không văng
+        # AttributeError; thiếu rho_bar mặc định = "chưa đủ dữ liệu để phán KHÔNG tin" -> not
+        # untrusted (dùng -inf làm ngưỡng để last_rho < rho_bar luôn False).
         effective_floor = self.min_local_sharpe
         tracker = self.calibration_tracker
-        if tracker is not None and getattr(tracker, "last_rho", None) is not None:
-            if tracker.last_rho < tracker.rho_bar:
-                effective_floor = 0.0
+        last_rho = getattr(tracker, "last_rho", None) if tracker is not None else None
+        rho_bar = getattr(tracker, "rho_bar", float("-inf")) if tracker is not None else float("-inf")
+        local_untrusted = last_rho is not None and last_rho < rho_bar
+        if local_untrusted:
+            effective_floor = 0.0
         if tr.local_sharpe < effective_floor:
             # Dưới sàn pre-sim CALIBRATED: KHÔNG gọi simulator -> sims_used=0, không tốn quota
             # Brain. Ghi cả local_sharpe ĐẠT ĐƯỢC và NGƯỠNG áp dụng vào stop_reason để audit
@@ -357,10 +367,13 @@ class LocalTunerRefiner:
         # Sharpe khi giới hạn về nhóm mã thanh khoản nhất -> không đạt thì KHÔNG đốt quota Brain.
         # Chỉ chạy khi có local_metrics thật (tr.local_metrics is not None) -> test refiner cũ
         # dùng eval_fn giả (data=object(), không backtest thật) không bị vỡ vì gate này.
+        # KHÔNG chạy khi local_untrusted (ρ thấp): gate này gate trên tr.local_metrics.sharpe —
+        # cùng loại metric local mà ρ vừa nói không tin, chạy nó sẽ giết oan y hệt floor phía
+        # trên -> phải bỏ qua ĐỒNG BỘ với floor, không chỉ tắt floor một mình.
         from src.backtest.sub_universe import sub_universe_ok
 
         registry = self.registry or default_registry()
-        if tr.local_metrics is not None and not sub_universe_ok(
+        if not local_untrusted and tr.local_metrics is not None and not sub_universe_ok(
             parse(tr.best_expr), tr.best_config, self.data, registry,
             full_sharpe=tr.local_metrics.sharpe,
         ):
