@@ -2,21 +2,21 @@
 
 ## Current state
 - **Phase:** Triển khai `docs/tailieu/IMPROVEMENT_SPEC.md` (5 pha, tuần tự). **[2026-07-10
-  Session 08] PHA 0 (Instrumentation) + PHA 1 (throughput) XONG code+test** trên `main`.
-  Design: `docs/superpowers/specs/2026-07-10-improvement-spec-implementation-design.md`.
-  - Pha 0: IdeaOutcome +9 trường chẩn đoán, RunAlphaLogger schema cố định luôn điền đủ (tách
-    local_/brain_), `src/reporting/{diagnostics,session_summary}.py`, LocalTunerRefiner giữ
-    `_reasons` + đo timing.
-  - Pha 1: canonical fold scale dương ở gốc (golden chứng minh bất biến), dedup theo hash
-    TRƯỚC backtest + `avoided_hashes()` cross-session, depth guard trước backtest, hằng số GP
-    rời rạc {-2,-1,-0.5,0.5,1,2}.
-- **Next (Pha 2 — yield, đòn quyết định):** `include_alt_data=True` mặc định + thêm nguồn
-  fundamental (ts_backfill, verify field LIVE get_datafields); family budget/exhaustion trong
-  vòng kín (dùng `classify_family` đã có); hypothesis-first cho LLM. Rồi Pha 3 (regression_neut/
-  vector_neut ở config stage hạ self-corr), Pha 4 (floor calibrated thay đơn-ngưỡng 0.5).
-- **Acceptance Pha 0+1 còn treo:** cần USER chạy menu-5 (QR-login terminal thật) lấy
-  `session_summary` baseline + đo "median độ dài giảm ≥30%" — Claude Code không login QR được
-  (memory `project_luong5_vanhanh`).
+  Session 08] PHA 0 + 1 + 2 XONG code+test** trên `main`. Design:
+  `docs/superpowers/specs/2026-07-10-improvement-spec-implementation-design.md`.
+  - Pha 0 (instrumentation): IdeaOutcome +9 trường, RunAlphaLogger luôn điền đủ,
+    diagnostics+session_summary, LocalTunerRefiner giữ _reasons + timing.
+  - Pha 1 (throughput): canonical fold scale dương (golden), dedup hash trước backtest +
+    avoided_hashes cross-session, depth guard, hằng số GP rời rạc.
+  - Pha 2 (yield): alt-data+fundamental mặc định ON (field verify LIVE), family budget +
+    exhaustion guard, tiêm họ bão hoà vào prompt LLM.
+- **Next (Pha 3 — config stage đúng lever self-corr):** thêm nhánh bọc regression_neut/
+  vector_neut trong LocalTuner để hạ self-corr (toán tử DUY NHẤT làm được); ưu tiên ts_rank
+  hơn ts_zscore; turnover-alpha không decay/hump. Rồi Pha 4 (floor percentile/calibrated thay
+  đơn-ngưỡng 0.5).
+- **Acceptance Pha 0-2 còn treo (cần USER chạy menu-5):** baseline session_summary; "median độ
+  dài giảm ≥30%"; ">=60% ứng viên KHÔNG pv_reversal, >=3 họ"; fundamental cores sim thật Brain
+  (MCP tool 400 nên chưa verify sim được — sim qua Simulator repo khi chạy menu-5).
 - **Phase (trước):** Đã (1) nâng chất lượng alpha từ docs WQ, (2) CHẠY THẬT Auto SIM + cải
   thiện. **e2e ĐÃ có alpha đạt chất lượng submit** — 3 alpha (`rKlkG9O8`/`kq0RY2G8`/`E5E3NKZJ`,
   VWAP intraday-reversal) Sharpe ~1.5, `failed_checks=[]`, self-corr 0.49/0.47/0.50 < 0.70.
@@ -350,3 +350,34 @@
 - **Tests:** `pytest -q` 1198 passed, 1 fail pre-existing (psycopg). Thêm:
   `test_fold_scale_invariant` (golden), `test_gp_discrete_scalars`, +cases hasher/brain_sim_link/
   closed_loop/local_refiner_instrumentation. Commits `d235515`→`45695b6`.
+
+### [2026-07-10] Session 08 (tiếp) — IMPROVEMENT_SPEC Pha 2: Chuyển họ nhân tố (yield)
+- **Phase:** Pha 2 (yield — đòn quyết định) XONG cả 3 mục trên `main`. User đã QR-login lại
+  nên verify được field LIVE (gỡ ràng buộc chính).
+- **Done (verified, pytest 1210 passed, 1 fail postgres pre-existing):**
+  - **2.1 alt-data default + fundamental (`cd0a801`):** `include_alt_data`+`include_fundamental`
+    mặc định True; gộp ALT_DATA_CORES + FUNDAMENTAL_CORES vào 1 batch đầu đi thẳng Brain. CLI
+    `--no-alt-data` để A/B. `FUNDAMENTAL_CORES` (src/generation/fundamental_seeds.py) trên field
+    fundamental6 ĐÃ VERIFY LIVE (assets/cashflow_op/revenue/operating_income/sales_growth):
+    gross-profitability, cash-flow yield, asset growth (fade), accruals, sales growth — mọi
+    field ts_backfill(,66), neutralization INDUSTRY.
+  - **2.2 family budget + exhaustion (`0af6cbe`):** ClosedLoop `family_fn`+`max_per_family`(8):
+    đóng họ khi cạn ngân sách mà 0 pass -> chuyển sang họ orthogonal. build_closed_loop tiêm
+    classify_family.
+  - **2.3 prompt họ bão hoà (`e2d62f4`):** LLMAlphaGenerator.set_saturated_families tiêm vào
+    prompt; ClosedLoop.on_family_closed callback phát set họ đóng.
+- **Decisions:** (1) Flip alt-data/fundamental mặc định True (spec §2.1) NHƯNG thêm --no-alt-data
+  giữ khả năng A/B single-variable §6. (2) Field fundamental verify LIVE qua get_datafields
+  (fundamental6, coverage 0.5) — KHÔNG bịa (cardinal rule #1); MCP create_simulation tool trả
+  400 cả với rank(close) => lỗi MCP wrapper, KHÔNG phải field; sim thật chạy qua Simulator repo
+  khi user chạy menu-5. (3) on_family_closed để ngỏ, không nối vào đường research (LocalTuner
+  mặc định không có idea_generator) — tránh over-reach.
+- **In progress:** Pha 3 (config stage đúng lever self-corr) chưa bắt đầu.
+- **Blockers / open risks:** Seed social trước đó SAI DẤU (memory) — theo dõi khi chạy thật.
+  Fundamental cores CHƯA sim thật trên Brain (MCP tool 400) — cần menu-5 xác nhận Sharpe/
+  failed_checks. Acceptance Pha 2 (">=60% ứng viên KHÔNG pv_reversal, >=3 họ") cần đo phiên thật.
+- **Next step:** Pha 3.1 — thêm nhánh cấu hình bọc regression_neut/vector_neut vào LocalTuner
+  để hạ self-corr (toán tử DUY NHẤT làm được điều này; self-corr là ràng buộc hạng nhất).
+- **Tests:** `pytest -q` 1210 passed, 1 fail pre-existing. Thêm: test_fundamental_seeds,
+  cases test_closed_loop_adapters (alt-data/fundamental default), test_closed_loop (family
+  budget/callback), test_generator (saturated families). Commits `cd0a801`→`e2d62f4`.
