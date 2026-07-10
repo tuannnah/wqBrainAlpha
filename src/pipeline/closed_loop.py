@@ -197,6 +197,14 @@ class ClosedLoop:
         avoided_hashes = getattr(self.repo, "avoided_hashes", None)
         if callable(avoided_hashes):
             seen |= set(avoided_hashes())
+        # Hash GỐC (pre-tune) đã thử ở phiên trước (Task 6 fix) — không gian hash NÀY khớp
+        # đúng với `key` tính ở dưới (dedup_key_fn trên cand.expr TRƯỚC tune), khác
+        # avoided_hashes() ở trên vốn lấy canonical_hash SAU tune từ BrainSimLinkModel nên
+        # không bao giờ khớp candidate mới sinh ra ở phiên sau. Guard getattr+callable: repo
+        # fake/cũ thiếu method này vẫn chạy được (tương thích ngược).
+        avoided_hashes_original = getattr(self.repo, "avoided_hashes_original", None)
+        if callable(avoided_hashes_original):
+            seen |= set(avoided_hashes_original())
         seen |= {self.dedup_key_fn(e) for e in self.repo.avoided_exprs()}
         # Thu thập expr đạt Power Pool nhưng KHÔNG đạt Regular — để tóm tắt cuối phiên (không
         # đổi ClosedLoopReport public: chỉ log, tránh rủi ro cho consumer đang đọc report).
@@ -266,6 +274,14 @@ class ClosedLoop:
                     turnover=outcome.turnover, self_corr=outcome.self_corr,
                     status="passed" if outcome.passed else "failed",
                 )
+                # Persist hash GỐC (pre-tune, `key` tính ở trên TRƯỚC khi refiner tune) để
+                # phiên SAU pre-check khớp đúng không gian hash (Task 6 fix). Ghi cho MỌI
+                # outcome (pass lẫn fail) — khớp semantics `seen.add(key)` trong-phiên ở trên,
+                # vốn cũng chặn trùng bất kể pass/fail. Guard: repo fake/cũ thiếu method vẫn
+                # chạy được (tương thích ngược).
+                record_avoided_hash = getattr(self.repo, "record_avoided_hash", None)
+                if callable(record_avoided_hash):
+                    record_avoided_hash(key)
                 ideas_tried += 1
                 # Log CSV mọi ý tưởng có outcome (kể cả bị gate 0-sim) — Task 3.
                 if self.alpha_logger is not None:

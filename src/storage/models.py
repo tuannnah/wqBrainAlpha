@@ -236,6 +236,23 @@ class BrainSimLinkModel(Base):
     created_at = Column(DateTime, default=_utcnow)
 
 
+class TriedHashModel(Base):
+    """Hash GỐC (pre-tune, trước khi tuner bọc decay/neutralize/scale) của một ứng viên đã
+    từng refine+sim ở BẤT KỲ phiên nào — phục vụ avoid-list CROSS-SESSION đúng không gian
+    hash (Task 6 fix). `BrainSimLinkModel.canonical_hash` lưu hash SAU tune (khác không gian
+    với `dedup_key_fn(cand.expr)` tính TRƯỚC tune ở ClosedLoop.run) nên không khớp được ứng
+    viên đã thử ở phiên trước — bảng này lưu đúng không gian hash mà pre-check dùng.
+
+    CỐ Ý TÁCH khỏi ExpressionModel/EvaluationModel/BrainSimLinkModel: bảng này CHỈ có 1 cột
+    hash, KHÔNG tham gia bất kỳ join calibration nào (brain_local_sharpe_pairs, brain_pnl_pool)
+    -- tránh làm nhiễm phép so sánh local↔Brain bằng hash chưa qua tune."""
+
+    __tablename__ = "tried_hashes"
+
+    hash = Column(String, primary_key=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+
 class BrainRecordModel(Base):
     """Ground truth Brain-sim cho CalibrationHarness (Phase 4.5): expression + metrics thật
     từ Brain, để so Spearman ρ với metrics local."""

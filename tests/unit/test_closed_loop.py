@@ -360,6 +360,49 @@ def test_dedup_nap_avoided_hashes_cross_session(repo) -> None:  # noqa: ANN001
     assert refiner.calls == []  # bị chặn bởi avoid-list hash cross-session
 
 
+def test_closed_loop_persists_original_hash_after_refine(repo) -> None:  # noqa: ANN001
+    """Task 6 fix: sau refine+sim, ClosedLoop ghi hash GỐC (key trước tune, ở đây dedup_key_fn
+    mặc định = identity nên key == expr) qua repo.record_avoided_hash — để phiên sau nạp lại."""
+    src = _FakeIdeaSource([[_cand("close")]])
+    refiner = _FakeRefiner({"close": _passed("close")})
+    ClosedLoop(idea_source=src, refiner=refiner, repo=repo).run()
+    assert "close" in repo.avoided_hashes_original()
+
+
+def test_closed_loop_skips_candidate_tried_in_previous_session_by_original_hash(
+    repo,
+) -> None:  # noqa: ANN001
+    """Task 6 fix — kịch bản gốc của bug: phiên trước đã refine 'core_expr' (dù pass hay fail,
+    persist qua record_avoided_hash); phiên SAU (fresh ClosedLoop, cùng repo/DB) phải BỎ QUA
+    candidate cùng hash gốc — KHÔNG gọi lại refine_and_sim (trước đây avoided_hashes() chỉ so
+    khớp hash SAU tune từ BrainSimLinkModel nên không bao giờ khớp -> sim lại lãng phí quota)."""
+    repo.record_avoided_hash("core_expr")  # mô phỏng phiên trước đã ghi hash gốc này
+    src = _FakeIdeaSource([[_cand("core_expr"), _cand("new_expr")]])
+    refiner = _FakeRefiner({"new_expr": _passed("new_expr")})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo)  # dedup_key_fn mặc định = identity
+    report = loop.run()
+    assert refiner.calls == ["new_expr"]  # core_expr bị chặn ngay từ đầu, không refine lại
+    assert report.ideas_tried == 1
+
+
+def test_closed_loop_works_without_original_hash_methods_on_repo() -> None:
+    """Repo tối giản (không có record_avoided_hash/avoided_hashes_original, vd fake cũ trong
+    test khác) vẫn chạy được — guard getattr+callable giữ tương thích ngược."""
+    class _MinimalRepo:
+        def avoided_exprs(self):
+            return set()
+
+        def record_brain_sim(self, **kw):
+            return None
+
+    src = _FakeIdeaSource([[_cand("x")]])
+    refiner = _FakeRefiner({"x": _passed("x")})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=_MinimalRepo())
+    report = loop.run()
+    assert report.ideas_tried == 1
+    assert refiner.calls == ["x"]
+
+
 def test_gen_ms_duoc_dien_vao_outcome(repo) -> None:  # noqa: ANN001
     """Fix gap Pha 0: ClosedLoop đo thời gian next_batch (GP generation) và điền gen_ms vào
     outcome (refiner không biết chi phí sinh batch). Trước đây gen_ms luôn None -> cột 'gen'

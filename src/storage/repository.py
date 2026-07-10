@@ -22,6 +22,7 @@ from src.storage.models import (
     InvalidFieldModel,
     PoolPnlModel,
     SimulationModel,
+    TriedHashModel,
 )
 
 
@@ -551,6 +552,29 @@ class MiniBrainRepository:
                 .filter(BrainSimLinkModel.status == "failed")
                 .all()
             )
+            return {r[0] for r in rows if r[0]}
+        finally:
+            session.close()
+
+    def record_avoided_hash(self, hash_value: str) -> None:
+        """Ghi hash GỐC (pre-tune) của một ứng viên đã refine+sim — phục vụ pre-check
+        cross-session đúng không gian hash (Task 6 fix). Idempotent theo PK `hash`; gọi lại
+        với cùng giá trị không lỗi, không nhân đôi row."""
+        session = self.session_factory()
+        try:
+            session.merge(TriedHashModel(hash=hash_value))
+            session.commit()
+        finally:
+            session.close()
+
+    def avoided_hashes_original(self) -> set[str]:
+        """Trả mọi hash GỐC (pre-tune) đã ghi qua `record_avoided_hash` — nạp vào `seen` ở
+        đầu phiên `ClosedLoop.run` để pre-check cross-session khớp đúng không gian hash gốc
+        (khác `avoided_hashes()` vốn trả hash SAU tune từ `BrainSimLinkModel`, chỉ khớp status
+        'failed')."""
+        session = self.session_factory()
+        try:
+            rows = session.query(TriedHashModel.hash).all()
             return {r[0] for r in rows if r[0]}
         finally:
             session.close()

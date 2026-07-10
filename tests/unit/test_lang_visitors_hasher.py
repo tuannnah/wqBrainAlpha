@@ -132,3 +132,40 @@ def test_KHONG_fold_divide_hang_o_tu_so():
     reg = _registry()
     t1 = Call(op="divide", args=(Constant(2.0), Field("close")))
     assert CanonicalHasher(reg).visit(t1) != CanonicalHasher(reg).visit(Field("close"))
+
+
+# --- Task 6 lock-in: dùng default_registry() THẬT (rank/add/multiply đăng ký như prod) —
+# khóa 2 bất biến mà fix avoid-list cross-session dựa vào: (1) scale-fold ĐÃ hoạt động đúng
+# khi phần tử bị scale là biểu thức phức (X = rank(...)), không chỉ Field trần; (2)
+# VERIFIED_CORES add(multiply(2,A),B) vs add(multiply(1,A),B) KHÔNG bị fold gộp nhầm (đây là
+# 2 tín hiệu KHÁC nhau — tỉ trọng tilt 2:1 vs 1:1 — không phải trùng lặp cần dedup).
+
+def test_scale_fold_bat_bien_khi_X_la_rank_voi_default_registry():
+    """multiply(4, rank(close)) và multiply(2, rank(close)) phải cùng hash (registry THẬT,
+    không phải registry rút gọn của test) -- khóa hành vi CanonicalHasher._fold_positive_
+    scale_at_root dùng bởi ClosedLoop.dedup_key_fn thật ở production."""
+    from src.lang.registry import default_registry
+
+    reg = default_registry()
+    x = Call(op="rank", args=(Field("close"),))
+    t4 = Call(op="multiply", args=(Constant(4.0), x))
+    t2 = Call(op="multiply", args=(Constant(2.0), x))
+    h = CanonicalHasher(reg)
+    assert h.visit(t4) == h.visit(t2)
+
+
+def test_verified_cores_tilt_khac_nhau_KHONG_bi_gop_voi_default_registry():
+    """add(multiply(2,A),B) vs add(multiply(1,A),B) — 2 VERIFIED_CORES tilt 2:1 vs 1:1 THẬT —
+    PHẢI khác hash (scale chôn trong add là trọng số tương đối, không phải scale toàn-alpha ở
+    gốc) -- xác nhận KHÔNG cần/KHÔNG được thêm dedup nào cho VERIFIED_CORES (đúng như brief)."""
+    from src.lang.registry import default_registry
+
+    reg = default_registry()
+    tilt_2_1 = Call(op="add", args=(
+        Call(op="multiply", args=(Constant(2.0), Field("close"))), Field("open"),
+    ))
+    tilt_1_1 = Call(op="add", args=(
+        Call(op="multiply", args=(Constant(1.0), Field("close"))), Field("open"),
+    ))
+    h = CanonicalHasher(reg)
+    assert h.visit(tilt_2_1) != h.visit(tilt_1_1)
