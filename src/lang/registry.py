@@ -11,10 +11,13 @@ decorator `@register(...)` đặt lên hàm trong `src/operators_local/*.py`.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import dataclasses
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Any
+
+from loguru import logger
 
 
 class ArgKind(Enum):
@@ -152,3 +155,39 @@ _register_phase1_minimal_ops()
 def default_registry() -> OperatorRegistry:
     """Registry toàn cục với tập operator tối thiểu Phase 1 đã đăng ký sẵn."""
     return REGISTRY
+
+
+def enforce_gp_vocab_against_catalog(
+    registry: OperatorRegistry, catalog_names: Iterable[str] | None,
+) -> list[str]:
+    """Lưới chặn TỔNG QUÁT: đối chiếu vocab GP hiện có (``registry.gp_function_set()``)
+    với catalog operator THẬT của tài khoản Brain (nạp qua
+    ``OperatorRepository.load_cached()`` ở main.py). Operator nào GP có thể emit nhưng
+    KHÔNG có trong catalog live sẽ luôn bị Brain từ chối khi sim (tốn phí pre-sim vô ích,
+    vd bug ``ts_std`` vs ``ts_std_dev`` đã gặp) — hàm này đánh ``gp_usable=False`` NGAY
+    TRÊN ``registry`` cho các op lệch (loại khỏi vocab GP từ lần gọi
+    ``gp_function_set()`` kế tiếp) và log cảnh báo nêu tên op lệch. Chặn được MỌI op-lệch
+    tương lai, không riêng ``ts_std`` — gọi hàm này mỗi khi catalog live sẵn sàng (vd đầu
+    closed-loop, sau khi nạp ``operators`` từ ``_cached_symbols``).
+
+    ``catalog_names`` rỗng/``None`` (chưa đăng nhập/chưa tải catalog/test offline) ->
+    KHÔNG làm gì và trả ``[]`` — hàm KHÔNG BAO GIỜ crash toàn app khi thiếu DB/catalog,
+    để test và chạy offline vẫn hoạt động bình thường.
+
+    Trả về danh sách tên operator đã bị loại (rỗng nếu vocab đã khớp catalog)."""
+    if not catalog_names:
+        return []
+    catalog = set(catalog_names)
+    offending = sorted(
+        spec.name for spec in registry.gp_function_set() if spec.name not in catalog
+    )
+    for name in offending:
+        spec = registry.get(name)
+        registry.register(dataclasses.replace(spec, gp_usable=False))
+    if offending:
+        logger.warning(
+            "GP vocab lệch catalog Brain live -> loại khỏi vocab GP (Brain sẽ từ chối "
+            "operator này khi sim): {}",
+            ", ".join(offending),
+        )
+    return offending

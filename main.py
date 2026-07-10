@@ -507,7 +507,7 @@ def generate(
     import src.operators_local  # noqa: F401  (side-effect: nạp 27 operator vào registry)
     from src.data.adapters.parquet_source import ParquetSource
     from src.gp.engine import GPEngine
-    from src.lang.registry import default_registry
+    from src.lang.registry import default_registry, enforce_gp_vocab_against_catalog
     from src.pipeline.runner import generate_many
     from src.storage.repository import MiniBrainRepository
 
@@ -517,6 +517,12 @@ def generate(
 
     engine_db = init_db(make_engine())
     session_factory = make_session_factory(engine_db)
+    # Guard tổng quát: loại khỏi vocab GP mọi operator KHÔNG có trong catalog Brain live
+    # (vd bug ts_std/ts_std_dev đã gặp) TRƯỚC khi GPEngine dựng cây — tránh sinh biểu thức
+    # Brain chắc chắn từ chối (tốn phí pre-sim). Catalog rỗng (chưa `wq load-operators`)
+    # -> hàm tự bỏ qua, không crash.
+    _, _catalog_ops, _, _, _ = _cached_symbols(session_factory)
+    enforce_gp_vocab_against_catalog(default_registry(), _catalog_ops)
 
     panel_source = ParquetSource(market_data_dir)
     try:
@@ -664,11 +670,16 @@ def _run_closed_loop_session(
     from src.app.closed_loop_adapters import build_closed_loop
     from src.app.power_pool_config import resolve_theme_sim_config
     from src.data.adapters.parquet_source import ParquetSource
-    from src.lang.registry import default_registry
+    from src.lang.registry import default_registry, enforce_gp_vocab_against_catalog
     from src.pipeline.closed_loop import QuotaExhausted
     from src.storage.repository import MiniBrainRepository
 
     repo = MiniBrainRepository(session_factory)
+    # Guard tổng quát (Task 2): loại khỏi vocab GP mọi operator KHÔNG có trong catalog
+    # Brain live TRƯỚC khi vòng kín sinh ý tưởng — né phí pre-sim vô ích khi GP emit
+    # operator Brain chắc chắn từ chối (vd ts_std trước đây). Catalog rỗng -> bỏ qua.
+    _, _catalog_ops, _, _, _ = _cached_symbols(session_factory)
+    enforce_gp_vocab_against_catalog(default_registry(), _catalog_ops)
     try:
         data = ParquetSource(market_data_dir).load("1900-01-01", "2999-12-31", universe)
     except (FileNotFoundError, AssertionError, OSError) as exc:

@@ -51,8 +51,13 @@ def ts_mean(ctx: EvalContext, x: Panel, d: int) -> Panel:
 
 
 @register(name="ts_std", category=OpCategory.TIME_SERIES,
-          signature=(ArgKind.PANEL, ArgKind.WINDOW), bounded=False, commutative=False)
+          signature=(ArgKind.PANEL, ArgKind.WINDOW), bounded=False, commutative=False,
+          gp_usable=False)
 def ts_std(ctx: EvalContext, x: Panel, d: int) -> Panel:
+    # gp_usable=False: catalog WQ THẬT không có operator tên "ts_std" (chỉ có
+    # "ts_std_dev", cùng công thức) -> GP sinh ts_std sẽ luôn bị Brain từ chối, tốn phí
+    # pre-sim ~20-30s. GIỮ định nghĩa này (không xoá) vì ts_std_dev (dưới) và ts_zscore
+    # (bên dưới) tái dùng trực tiếp — chỉ chặn GP EMIT tên "ts_std", không chặn dùng nội bộ.
     out = np.full_like(x, np.nan, dtype=np.float64)
     d = int(d)
     if d > x.shape[0]:

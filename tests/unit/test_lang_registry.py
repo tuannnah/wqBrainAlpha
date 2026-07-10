@@ -10,6 +10,7 @@ from src.lang.registry import (
     OperatorRegistry,
     OperatorSpec,
     default_registry,
+    enforce_gp_vocab_against_catalog,
 )
 
 
@@ -117,3 +118,71 @@ def test_neutralization_decay_delay_not_in_gp_function_set():
         assert excluded not in fn_names, (
             f"operator stage-wrapper {excluded!r} không được có trong gp_function_set()"
         )
+
+
+def test_ts_std_not_in_gp_function_set():
+    """Task 2: catalog WQ live không có operator tên "ts_std" (chỉ có "ts_std_dev", cùng
+    công thức) -> GP đưa ts_std vào expr sẽ luôn bị Brain từ chối, tốn phí pre-sim vô ích.
+    ts_std vẫn phải TỒN TẠI trong registry (ts_std_dev/ts_zscore tái dùng nội bộ) — chỉ
+    không được lọt vào vocab GP."""
+    import src.operators_local  # noqa: F401  (side-effect: nạp operator thật vào REGISTRY)
+
+    reg = default_registry()
+    assert reg.get("ts_std").name == "ts_std"  # định nghĩa vẫn còn, chỉ ẩn khỏi GP
+
+    fn_names = {spec.name for spec in reg.gp_function_set()}
+    assert "ts_std" not in fn_names
+    assert "ts_std_dev" in fn_names  # thay thế WQ-đúng tên vẫn emit được
+
+
+def test_enforce_gp_vocab_against_catalog_excludes_missing_op():
+    """Guard tổng quát: op nằm trong vocab GP nhưng KHÔNG có trong catalog live (giả lập)
+    bị loại khỏi gp_function_set() sau khi gọi guard, và tên op bị loại được trả về."""
+    reg = OperatorRegistry()
+    in_catalog = OperatorSpec(
+        name="rank", category=OpCategory.CROSS_SECTIONAL,
+        signature=(ArgKind.PANEL,), impl=_placeholder, bounded=True, gp_usable=True,
+    )
+    not_in_catalog = OperatorSpec(
+        name="fake_op", category=OpCategory.TIME_SERIES,
+        signature=(ArgKind.PANEL, ArgKind.WINDOW), impl=_placeholder, bounded=False,
+        gp_usable=True,
+    )
+    reg.register(in_catalog)
+    reg.register(not_in_catalog)
+
+    offending = enforce_gp_vocab_against_catalog(reg, {"rank"})
+
+    assert offending == ["fake_op"]
+    fn_names = {spec.name for spec in reg.gp_function_set()}
+    assert fn_names == {"rank"}
+    # Định nghĩa operator vẫn còn trong registry (chỉ ẩn khỏi GP, không xoá).
+    assert reg.get("fake_op").name == "fake_op"
+
+
+def test_enforce_gp_vocab_against_catalog_empty_catalog_is_noop():
+    """Catalog rỗng/None (chưa đăng nhập/chưa tải catalog/test offline) -> KHÔNG loại gì,
+    KHÔNG crash (test/offline vẫn chạy được như trước khi có guard)."""
+    reg = OperatorRegistry()
+    spec = OperatorSpec(
+        name="rank", category=OpCategory.CROSS_SECTIONAL,
+        signature=(ArgKind.PANEL,), impl=_placeholder, bounded=True, gp_usable=True,
+    )
+    reg.register(spec)
+
+    assert enforce_gp_vocab_against_catalog(reg, None) == []
+    assert enforce_gp_vocab_against_catalog(reg, set()) == []
+    assert {s.name for s in reg.gp_function_set()} == {"rank"}
+
+
+def test_enforce_gp_vocab_against_catalog_no_mismatch_returns_empty():
+    """Vocab GP đã khớp hoàn toàn catalog -> không loại gì, trả []."""
+    reg = OperatorRegistry()
+    spec = OperatorSpec(
+        name="rank", category=OpCategory.CROSS_SECTIONAL,
+        signature=(ArgKind.PANEL,), impl=_placeholder, bounded=True, gp_usable=True,
+    )
+    reg.register(spec)
+
+    assert enforce_gp_vocab_against_catalog(reg, {"rank", "extra_catalog_op"}) == []
+    assert {s.name for s in reg.gp_function_set()} == {"rank"}
