@@ -206,6 +206,14 @@ class LLMAlphaGenerator:
         self.repo = repo  # AlphaRepository để lấy phản hồi (top alpha / failures); None -> không feedback
         # Field WQ đã từ chối (chết/event) — cấm LLM nêu lại để khỏi tốn lượt sim.
         self.blacklist = set(blacklist or ())
+        # Họ nhân tố đã BÃO HOÀ trong phiên (từ exhaustion guard ClosedLoop, Pha 2.3) — tiêm
+        # vào prompt để LLM không tái sinh reversal/họ đã cạn. Cập nhật động qua setter.
+        self.saturated_families: list[str] = []
+
+    def set_saturated_families(self, families) -> None:
+        """Cập nhật danh sách họ đã bão hoà (ClosedLoop gọi khi đóng họ) để prompt kế tiếp
+        dẫn LLM tránh họ đó."""
+        self.saturated_families = list(dict.fromkeys(families))  # khử trùng, giữ thứ tự
 
     def _feedback_context(self) -> str:
         """Ngữ cảnh phản hồi từ DB: top alpha để khai thác + field yếu để tránh."""
@@ -324,6 +332,13 @@ class LLMAlphaGenerator:
                 "TUYỆT ĐỐI KHÔNG dùng field sau (WQ đã từ chối/chết): "
                 f"{cam}.\n"
             )
+        saturated_line = ""
+        if self.saturated_families:
+            hos = ", ".join(self.saturated_families)
+            saturated_line = (
+                f"Các HỌ NHÂN TỐ sau đã BÃO HOÀ trong phiên (sinh nhiều mà 0 đạt self-corr) — "
+                f"KHÔNG đề xuất thêm ý tưởng thuộc các họ này: {hos}.\n"
+            )
         return (
             "Bạn là nhà nghiên cứu alpha định lượng trên WorldQuant BRAIN, săn tín "
             "hiệu ĐỘC ĐÁO có correlation thấp với các factor đại trà.\n"
@@ -336,6 +351,7 @@ class LLMAlphaGenerator:
             "AVAILABLE NON-PRICE DATASETS/FIELDS from cache. Prefer these concrete IDs when they match the thesis:\n"
             f"{field_context}\n"
             f"{blacklist_line}"
+            f"{saturated_line}"
             "Mỗi ý tưởng là một câu ngắn nêu rõ NGUỒN DỮ LIỆU + hiện tượng kinh tế "
             "khai thác (không phải tên operator). Đa dạng nguồn, không lặp một mạch.\n"
             'Trả JSON đúng định dạng: {"ideas": ["...", "..."]}.'

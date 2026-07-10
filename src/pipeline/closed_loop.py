@@ -147,6 +147,7 @@ class ClosedLoop:
         dedup_key_fn=None,
         family_fn=None,
         max_per_family: int | None = None,
+        on_family_closed=None,
     ) -> None:
         self.idea_source = idea_source
         self.refiner = refiner
@@ -169,6 +170,9 @@ class ClosedLoop:
         # >=1 pass thì không đóng (còn tiềm năng). Giữ B1: family_fn tiêm từ composition root.
         self.family_fn = family_fn
         self.max_per_family = max_per_family
+        # Callback khi một họ bị đóng (Pha 2.3): nhận set họ bão hoà -> composition root nối
+        # tới idea_generator.set_saturated_families để LLM tránh tái sinh. None -> bỏ qua.
+        self.on_family_closed = on_family_closed
 
     def run(self) -> ClosedLoopReport:
         """Lặp: next_batch → mỗi ý tưởng refine_and_sim → record_brain_sim → đếm. Dừng khi
@@ -273,6 +277,8 @@ class ClosedLoop:
                             "🚪 Đóng họ [{}]: đã thử {} ứng viên, 0 pass — chuyển ngân sách.",
                             fam, fam_tried[fam],
                         )
+                        if self.on_family_closed is not None:
+                            self.on_family_closed(set(closed_families))
                 # Kết quả 1 dòng: 0 sim = bị gate local chặn trước khi đốt quota Brain. In kèm
                 # lý do (stop_reason) để phân biệt local_floor (Sharpe/turnover) vs sub_universe.
                 if outcome.sims_used == 0:

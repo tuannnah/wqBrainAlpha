@@ -294,6 +294,19 @@ def test_family_budget_dong_ho_khi_can_ma_khong_pass(repo) -> None:  # noqa: ANN
     assert refiner.calls == ["pv_a", "pv_b", "mom_a"]
 
 
+def test_family_closed_goi_callback(repo) -> None:  # noqa: ANN001
+    """Pha 2.3: khi đóng họ, on_family_closed nhận set họ bão hoà (để nối LLM prompt)."""
+    src = _FakeIdeaSource([[_cand("pv_a"), _cand("pv_b")]])
+    refiner = _FakeRefiner({})
+    seen_sets: list[set] = []
+
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=lambda e: "pv", max_per_family=2,
+                      on_family_closed=lambda fams: seen_sets.append(set(fams)))
+    loop.run()
+    assert seen_sets and "pv" in seen_sets[-1]
+
+
 def test_family_budget_khong_dong_khi_co_pass(repo) -> None:  # noqa: ANN001
     """Họ có ít nhất 1 pass thì KHÔNG đóng dù vượt max_per_family (họ còn tiềm năng)."""
     src = _FakeIdeaSource([[_cand("pv_a"), _cand("pv_b"), _cand("pv_c")]])

@@ -80,6 +80,23 @@ def test_prompt_y_tuong_khong_co_dong_cam_khi_blacklist_rong():
     assert "TUYỆT ĐỐI KHÔNG dùng field" not in prompt
 
 
+def test_prompt_tiem_ho_da_bao_hoa():
+    """Pha 2.3: họ đã bão hoà (từ exhaustion guard) tiêm vào prompt để LLM KHÔNG tái
+    sinh reversal/họ đã cạn."""
+    gen = _make_generator()
+    gen.set_saturated_families(["pv_reversal", "momentum"])
+    prompt = gen.build_ideas_system_prompt()
+    assert "BÃO HOÀ" in prompt
+    assert "pv_reversal" in prompt
+    assert "momentum" in prompt
+
+
+def test_prompt_khong_tiem_khi_khong_co_ho_bao_hoa():
+    gen = _make_generator()
+    prompt = gen.build_ideas_system_prompt()
+    assert "BÃO HOÀ" not in prompt
+
+
 def test_parse_ideas_loai_bo_metric_bia():
     """LLM hay nhét metric BỊA (sharpe=2.1, fitness=0.92) vào text hướng — đó là
     số tự bịa, không phải đo thật; phải bị tước để không nhiễm xuống downstream."""
