@@ -31,6 +31,9 @@ class _FakeOutcome:
     sim_ms: float | None = None
     dedup_key: str | None = None
     local_sharpe: float | None = None
+    # Task 3 (spec C2): pre-sim reject trung thực
+    presim_reason: str | None = None
+    is_brain_sim: bool = True
 
 
 def _read(path):
@@ -131,3 +134,36 @@ def test_run_log_path_theo_timestamp():
     p = run_log_path(datetime(2026, 7, 9, 16, 20))
     assert p.name == "alphas_2026-07-09_162000.csv"
     assert p.parent.name == "logs"
+
+
+def test_schema_co_cot_presim_reason_va_is_brain_sim():
+    """Task 3 (spec C2): CSV phải phân biệt được pre-sim reject (chưa chạm Brain) khỏi sim
+    thật rớt — 2 cột mới presim_reason/is_brain_sim."""
+    assert "presim_reason" in COLUMNS
+    assert "is_brain_sim" in COLUMNS
+
+
+def test_presim_reject_ghi_dung_cot(tmp_path):
+    p = tmp_path / "a.csv"
+    lg = RunAlphaLogger(p)
+    lg.log(1, _FakeOutcome(
+        expr="fake_op(close)", passed=False, sims_used=0, stop_reason="presim_reject",
+        stage_reached="op_invalid", fail_check="OPERATOR_INVALID", family="other",
+        presim_reason="Operator không tồn tại: fake_op", is_brain_sim=False,
+    ))
+    d = dict(zip(*_read(p)))
+    assert d["presim_reason"] == "Operator không tồn tại: fake_op"
+    assert d["is_brain_sim"] == "False"
+    assert d["stage_reached"] == "op_invalid" and d["fail_check"] == "OPERATOR_INVALID"
+    assert d["brain_sharpe"] == ""  # chưa sim -> vẫn trống
+
+
+def test_sim_that_ghi_is_brain_sim_true(tmp_path):
+    p = tmp_path / "a.csv"
+    lg = RunAlphaLogger(p)
+    lg.log(1, _FakeOutcome(
+        expr="rank(close)", passed=True, sharpe=1.5, sims_used=1,
+        stage_reached="passed", is_brain_sim=True,
+    ))
+    d = dict(zip(*_read(p)))
+    assert d["is_brain_sim"] == "True"

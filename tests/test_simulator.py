@@ -335,6 +335,34 @@ def test_pre_sim_validator_chan_truoc_khi_goi_api():
     assert recorded == ["foo_bar"]
 
 
+def test_pre_sim_validator_chan_gan_presim_reason():
+    """Task 3 (spec C2): reject tiền-kiểm phải mang `presim_reason` = reason gốc để caller
+    phân biệt 'chưa chạm Brain' khỏi 1 sim thật rớt (status='error' dùng chung cho cả 2 trước
+    đây làm mất thông tin này)."""
+    client = FakeClient()
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0,
+        pre_sim_validator=lambda e: (False, "Operator không tồn tại: fake_op"),
+    )
+    result = sim.simulate("fake_op(close)")
+    assert result.status == "error"
+    assert result.presim_reason == "Operator không tồn tại: fake_op"
+
+
+def test_sim_that_khong_gan_presim_reason():
+    """Sim thật đi qua API (không bị tiền-kiểm chặn) -> presim_reason PHẢI None, kể cả khi
+    sim đó rớt (status='error' vì lỗi Brain thật) — tránh lẫn với pre-sim reject."""
+    client = FakeClient()
+    client.queue_post(FakeResponse(500, text="server error"))
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0,
+        pre_sim_validator=lambda e: (True, "ok"),
+    )
+    result = sim.simulate("rank(close)")
+    assert result.status == "error"
+    assert result.presim_reason is None
+
+
 def test_pre_sim_validator_ok_thi_van_goi_api():
     """validator pass -> đi tiếp tới POST như cũ."""
     client = FakeClient()

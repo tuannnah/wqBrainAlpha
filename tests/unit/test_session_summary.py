@@ -89,6 +89,20 @@ def test_ghi_file(tmp_path):
     assert "Tóm tắt phiên" in p.read_text(encoding="utf-8")
 
 
+def test_funnel_dem_bucket_op_invalid_va_field_invalid():
+    """Task 3 (spec C2): pre-sim reject giờ có stage_reached riêng (op_invalid/field_invalid)
+    thay vì lẫn vào 'simmed' -> funnel phải đếm được 2 bucket này."""
+    s = SessionSummary()
+    s.record(_O(stage_reached="op_invalid", fail_check="OPERATOR_INVALID", family="other"))
+    s.record(_O(stage_reached="op_invalid", fail_check="OPERATOR_INVALID", family="other"))
+    s.record(_O(stage_reached="field_invalid", fail_check="FIELD_INVALID", family="other"))
+    d = s.as_dict()
+    assert d["by_stage"]["op_invalid"] == 2
+    assert d["by_stage"]["field_invalid"] == 1
+    assert d["by_fail_check"]["OPERATOR_INVALID"] == 2
+    assert d["by_fail_check"]["FIELD_INVALID"] == 1
+
+
 def test_summary_rong_khong_vo():
     """Phiên 0 ứng viên (log 230943 thực tế) vẫn render được, không chia cho 0."""
     s = SessionSummary()

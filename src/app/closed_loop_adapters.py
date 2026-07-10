@@ -25,7 +25,11 @@ from src.gp.engine import GPEngine
 from src.lang.parser import parse
 from src.lang.registry import default_registry
 from src.lang.visitors import CanonicalHasher, DepthVisitor, FieldCollector, OperatorCollector
-from src.reporting.diagnostics import classify_family, fail_check_from_reasons
+from src.reporting.diagnostics import (
+    categorize_presim_reason,
+    classify_family,
+    fail_check_from_reasons,
+)
 from src.pipeline.closed_loop import IdeaOutcome, QuotaExhausted
 from src.pipeline.combine_stage import combine_stage
 from src.pipeline.runner import _score_one_full, generate_many
@@ -52,6 +56,38 @@ def is_power_pool(expr: str, sharpe: float | None, self_corr: float | None, regi
     n_ops = len(OperatorCollector().visit(node))
     n_fields = len(FieldCollector(registry).visit(node) - _POWER_POOL_GROUPS)
     return n_ops <= 8 and n_fields <= 3
+
+
+# Mã categorize_presim_reason -> stage_reached tương ứng (Task 3, spec C2). PARSE/fallback
+# dùng chung "presim" (không có bucket riêng — hiếm gặp, đủ để soi qua fail_check).
+_PRESIM_STAGE_BY_CODE: dict[str, str] = {
+    "OPERATOR_INVALID": "op_invalid",
+    "FIELD_INVALID": "field_invalid",
+    "DEPTH": "depth",
+}
+
+
+def _presim_reject_outcome(
+    expr: str, canonical_hash: str, presim_reason: str, *, stop_reason: str, source: str,
+) -> IdeaOutcome:
+    """Ứng viên bị `PreFilter` loại TRƯỚC khi chạm Brain (Task 3, spec C2: đừng giả vờ
+    'simmed/LOW_SHARPE' như bug cũ — CSV giấu bug operator/field bịa vì sim_ms≈0 nhưng
+    stage_reached vẫn ghi 'simmed'). Outcome trung thực: sims_used=0 (chưa tốn quota Brain),
+    is_brain_sim=False, stage/fail_check suy từ chính category của presim_reason."""
+    code = categorize_presim_reason(presim_reason)
+    stage = _PRESIM_STAGE_BY_CODE.get(code, "presim")
+    try:
+        depth = DepthVisitor().visit(parse(expr))
+    except Exception:
+        depth = None
+    return IdeaOutcome(
+        expr=expr, canonical_hash=canonical_hash, passed=False,
+        wq_alpha_id=None, sharpe=None, fitness=None, turnover=None, self_corr=None,
+        sims_used=0, stop_reason=stop_reason,
+        stage_reached=stage, fail_check=code, family=classify_family(expr),
+        expr_depth=depth, dedup_key=canonical_hash,
+        presim_reason=presim_reason, is_brain_sim=False,
+    )
 
 
 class RefinementLoopRefiner:
@@ -171,6 +207,13 @@ class LocalTunerRefiner:
             result = self.simulator.simulate(expr, settings=sim_cfg.to_settings())
         except (AuthExpiredError, QuotaExceededError) as exc:
             raise QuotaExhausted(str(exc)) from exc
+        if result.presim_reason is not None:
+            # Chưa chạm Brain (PreFilter loại) -> outcome trung thực, KHÔNG _finalize (nó luôn
+            # gán sims_used=1/stage='simmed', đúng cho sim thật nhưng SAI ở đây).
+            return _presim_reject_outcome(
+                expr, canonical_hash, result.presim_reason,
+                stop_reason="presim_reject", source="alt_data",
+            )
         return self._finalize(
             result, expr, canonical_hash, sim_cfg,
             stop_reason="alt_data_direct", source="alt_data", description="alt-data direct",
@@ -229,7 +272,7 @@ class LocalTunerRefiner:
             stage_reached="passed" if passed else "simmed", fail_check=fail_check,
             family=classify_family(expr), expr_depth=DepthVisitor().visit(parse(expr)),
             dedup_key=canonical_hash, local_sharpe=local_sharpe,
-            backtest_ms=backtest_ms, sim_ms=sim_ms,
+            backtest_ms=backtest_ms, sim_ms=sim_ms, is_brain_sim=True,
         )
 
     def refine_and_sim(self, candidate: ShortlistCandidate) -> IdeaOutcome:
@@ -252,7 +295,7 @@ class LocalTunerRefiner:
                 self_corr=None, sims_used=0, stop_reason="depth",
                 stage_reached="depth", fail_check="DEPTH",
                 family=classify_family(candidate.expr), expr_depth=_cand_depth,
-                dedup_key=CanonicalHasher().visit(_cand_node),
+                dedup_key=CanonicalHasher().visit(_cand_node), is_brain_sim=False,
             )
         # Seed alt-data (field ngoài panel local) đi thẳng Brain — không tune/floor local được.
         if self._is_alt_data(candidate.expr):
@@ -285,7 +328,7 @@ class LocalTunerRefiner:
                 stop_reason=f"local_floor(<{self.min_local_sharpe:.2f})",
                 stage_reached="local_floor", fail_check="LOW_SHARPE", family=_family,
                 expr_depth=_depth, dedup_key=canonical_hash, local_sharpe=tr.local_sharpe,
-                backtest_ms=backtest_ms,
+                backtest_ms=backtest_ms, is_brain_sim=False,
             )
 
         # Proxy robustness sub-universe (xấp xỉ sub-universe test của Brain): winner phải giữ
@@ -305,7 +348,7 @@ class LocalTunerRefiner:
                 self_corr=None, sims_used=0, stop_reason="sub_universe",
                 stage_reached="sub_universe", fail_check="LOW_SUB_UNIVERSE_SHARPE",
                 family=_family, expr_depth=_depth, dedup_key=canonical_hash,
-                local_sharpe=tr.local_sharpe, backtest_ms=backtest_ms,
+                local_sharpe=tr.local_sharpe, backtest_ms=backtest_ms, is_brain_sim=False,
             )
 
         # Giai đoạn 2 (1 lần gọi mạng): sim Brain đúng config tốt nhất tune() tìm được —
@@ -326,6 +369,14 @@ class LocalTunerRefiner:
             raise QuotaExhausted(str(exc)) from exc
         sim_ms = (time.perf_counter() - _ts) * 1000.0
 
+        if result.presim_reason is not None:
+            # Chưa chạm Brain (PreFilter loại winner của tune()) -> outcome trung thực, KHÔNG
+            # _finalize (nó luôn gán sims_used=1/stage='simmed', đúng cho sim thật nhưng SAI
+            # ở đây — đây chính là bug spec C2: CSV giấu bug operator vì sim_ms≈0.7ms).
+            return _presim_reject_outcome(
+                tr.best_expr, canonical_hash, result.presim_reason,
+                stop_reason="presim_reject", source="gp_local_tuner",
+            )
         return self._finalize(
             result, tr.best_expr, canonical_hash, sim_cfg,
             stop_reason="local_tuned", source="gp_local_tuner", description="local-tuned motif",

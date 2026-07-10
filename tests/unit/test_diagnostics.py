@@ -3,7 +3,11 @@ từ field/cấu trúc biểu thức (IMPROVEMENT_SPEC §3 Pha 0: fail_check, fa
 
 from __future__ import annotations
 
-from src.reporting.diagnostics import classify_family, fail_check_from_reasons
+from src.reporting.diagnostics import (
+    categorize_presim_reason,
+    classify_family,
+    fail_check_from_reasons,
+)
 
 
 def test_fail_check_low_sharpe():
@@ -60,3 +64,43 @@ def test_family_analyst():
 
 def test_family_unknown():
     assert classify_family("rank(some_unknown_field)") == "other"
+
+
+# --- Task 3 (spec C2): phân loại lý do pre-sim reject (PreFilter.check) -> mã ổn định ---
+
+
+def test_categorize_presim_operator_invalid():
+    assert categorize_presim_reason("Operator không tồn tại: fake_op") == "OPERATOR_INVALID"
+
+
+def test_categorize_presim_field_invalid():
+    assert categorize_presim_reason("Field/hằng không tồn tại: fake_field") == "FIELD_INVALID"
+
+
+def test_categorize_presim_depth_do_sau():
+    assert categorize_presim_reason("Độ sâu > 7") == "DEPTH"
+
+
+def test_categorize_presim_depth_so_node():
+    assert categorize_presim_reason("Số node > 30") == "DEPTH"
+
+
+def test_categorize_presim_parse_loi():
+    assert categorize_presim_reason("Parse lỗi: unexpected token") == "PARSE"
+
+
+def test_categorize_presim_ngoac_khong_can_bang():
+    assert categorize_presim_reason("Dấu ngoặc không cân bằng") == "PARSE"
+
+
+def test_categorize_presim_la_khong_khop_tra_fallback():
+    """Reason lạ (không khớp luật nào) -> PRESIM_REJECT thay vì mất thông tin."""
+    assert categorize_presim_reason("lý do lạ chưa từng thấy") == "PRESIM_REJECT"
+
+
+def test_fail_check_from_reasons_van_khop_luat_cu_sau_khi_them_presim():
+    """Thêm luật presim KHÔNG được phá luật cũ (sharpe/fitness/turnover/drawdown)."""
+    assert fail_check_from_reasons(["sharpe 0.40 < 0.5"]) == "LOW_SHARPE"
+    assert fail_check_from_reasons(["fitness 0.71 <= 1.0"]) == "LOW_FITNESS"
+    assert fail_check_from_reasons(["turnover 0.85 ngoài [0.01, 0.70]"]) == "HIGH_TURNOVER"
+    assert fail_check_from_reasons(["drawdown 0.5 >= 0.4"]) == "HIGH_DRAWDOWN"

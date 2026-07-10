@@ -111,6 +111,27 @@ def test_altdata_quota_thi_nem_QuotaExhausted():
         pass
 
 
+def test_altdata_presim_reject_khong_gia_vo_da_sim():
+    """Task 3 (spec C2): nhánh _sim_direct cũng phải xử lý presim_reason trung thực — trước đây
+    _finalize luôn gán sims_used=1/stage='simmed' dù pre-sim reject chưa chạm Brain."""
+    def presim_reject(expr, settings):
+        return SimulationResult(
+            expression=expr, status="error",
+            raw={"error": "pre-sim reject: Operator không tồn tại: fake_op"},
+            presim_reason="Operator không tồn tại: fake_op",
+        )
+
+    r = _refiner(presim_reject)
+    out = r.refine_and_sim(_cand(_ALT_EXPR))
+    assert r.simulator.calls == 1
+    assert out.sims_used == 0
+    assert out.stage_reached == "op_invalid"
+    assert out.fail_check == "OPERATOR_INVALID"
+    assert out.is_brain_sim is False
+    assert out.presim_reason == "Operator không tồn tại: fake_op"
+    assert out.passed is False
+
+
 def test_pv_expr_van_di_duong_tune(monkeypatch):
     """Expr price/volume (local_usable=True) vẫn đi đường tune cũ — KHÔNG lạc sang sim-thẳng.
     Chứng minh nhánh alt-data chỉ kích hoạt khi field ngoài panel."""

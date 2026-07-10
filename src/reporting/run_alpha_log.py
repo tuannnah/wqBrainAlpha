@@ -21,6 +21,8 @@ COLUMNS = [
     "local_sharpe", "brain_sharpe", "brain_fitness", "turnover", "self_corr",
     "power_pool", "wq_alpha_id", "sims",
     "gen_ms", "backtest_ms", "sim_ms", "stop_reason",
+    # Task 3 (spec C2): phân biệt "chưa chạm Brain" (pre-sim reject) khỏi "sim thật rớt".
+    "presim_reason", "is_brain_sim",
 ]
 
 
@@ -69,6 +71,7 @@ class RunAlphaLogger:
             _s(getattr(outcome, "power_pool_eligible", False)),
             _s(outcome.wq_alpha_id), _s(outcome.sims_used),
             _s(g("gen_ms")), _s(g("backtest_ms")), _s(g("sim_ms")), _s(outcome.stop_reason),
+            _s(g("presim_reason")), _s(g("is_brain_sim")),
         ])
         self._f.flush()
 

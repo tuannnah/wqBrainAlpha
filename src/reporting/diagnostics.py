@@ -3,6 +3,10 @@
 
 - fail_check_from_reasons: reasons của hard_filter là free-text ("sharpe 0.40 < 0.5"); map về
   mã cố định (LOW_SHARPE/LOW_FITNESS/HIGH_TURNOVER/HIGH_DRAWDOWN/UNKNOWN) để phân bố tự động.
+  Cùng bảng luật cũng phủ reason tiền-kiểm (PreFilter.check) — Task 3 (spec C2): "Operator
+  không tồn tại"/"Field/hằng không tồn tại"/"Độ sâu >"/"Số node >"/"Parse lỗi"/"ngoặc".
+- categorize_presim_reason: bọc fail_check_from_reasons riêng cho reason pre-sim reject (chưa
+  chạm Brain) -> OPERATOR_INVALID/FIELD_INVALID/DEPTH/PARSE; không khớp -> PRESIM_REJECT.
 - classify_family: nhãn để family-aware budget (Pha 2) + phân bố summary. Suy heuristic từ tên
   field xuất hiện trong chuỗi (không cần parse) — đủ tốt để nhóm; refiner có thể override."""
 
@@ -14,6 +18,14 @@ _FAIL_CHECK_RULES: tuple[tuple[str, str], ...] = (
     ("fitness", "LOW_FITNESS"),
     ("turnover", "HIGH_TURNOVER"),
     ("drawdown", "HIGH_DRAWDOWN"),
+    # Reason tiền-kiểm (PreFilter.check, CHƯA chạm Brain) — Task 3 (spec C2): phân biệt bug
+    # operator/field bịa khỏi sim thật rớt sharpe thấp (đừng gộp cả 2 vào LOW_SHARPE/UNKNOWN).
+    ("operator", "OPERATOR_INVALID"),
+    ("field", "FIELD_INVALID"),
+    ("độ sâu", "DEPTH"),
+    ("số node", "DEPTH"),
+    ("parse", "PARSE"),
+    ("ngoặc", "PARSE"),
 )
 
 
@@ -27,6 +39,15 @@ def fail_check_from_reasons(reasons: list[str]) -> str:
             if keyword in r.lower():
                 return code
     return "UNKNOWN"
+
+
+def categorize_presim_reason(reason: str) -> str:
+    """Phân loại reason pre-sim reject (`PreFilter.check`, `SimulationResult.presim_reason`)
+    thành mã ổn định: OPERATOR_INVALID/FIELD_INVALID/DEPTH/PARSE. Dùng chung bảng luật với
+    `fail_check_from_reasons` (không nhân đôi) — không khớp luật nào -> PRESIM_REJECT (đừng
+    mất thông tin, khác UNKNOWN vốn dành cho reason sim thật)."""
+    code = fail_check_from_reasons([reason])
+    return code if code and code != "UNKNOWN" else "PRESIM_REJECT"
 
 
 # Nhận diện family theo dấu hiệu field (khớp substring, ưu tiên từ đặc trưng nhất trước).

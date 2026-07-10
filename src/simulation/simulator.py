@@ -150,6 +150,10 @@ class SimulationResult:
     os_fitness: float | None = None
     failed_checks: list[str] = field(default_factory=list)
     raw: dict = field(default_factory=dict)
+    # Lý do gốc (text) khi bị `pre_sim_validator` loại TRƯỚC khi chạm Brain — None nghĩa là
+    # kết quả này ĐÃ đi qua API thật (kể cả khi status="error" vì lỗi Brain). Phân biệt "chưa
+    # tốn quota" khỏi "sim thật rớt" (Task 3, spec C2: đừng gộp 2 trường hợp vào 1 status).
+    presim_reason: str | None = None
 
     def metrics(self) -> dict[str, float | None]:
         return {k: getattr(self, k) for k in _METRIC_KEYS}
@@ -258,6 +262,7 @@ class Simulator:
                 return SimulationResult(
                     expression=expression, status="error",
                     raw={"error": f"pre-sim reject: {reason}"},
+                    presim_reason=reason,
                 )
         body = self._build_body(expression, settings)
 

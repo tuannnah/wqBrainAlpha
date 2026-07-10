@@ -72,6 +72,13 @@ class IdeaOutcome:
     sim_ms: float | None = None
     dedup_key: str | None = None
     local_sharpe: float | None = None
+    # --- Task 3 (spec C2): phân biệt "chưa chạm Brain" (pre-sim reject) khỏi "sim thật rớt".
+    # presim_reason: reason gốc từ SimulationResult.presim_reason (None nếu đã sim thật, kể cả
+    #   khi sim đó lỗi). is_brain_sim: True <=> outcome này ĐÃ gọi Brain thật (mặc định True để
+    #   tương thích ngược — mọi call site cũ dựng IdeaOutcome đều từ 1 sim thật hoặc chưa sim gì
+    #   cả nhưng không set presim_reason, nên default True không làm sai lệch outcome cũ).
+    presim_reason: str | None = None
+    is_brain_sim: bool = True
 
 
 @dataclass(frozen=True, slots=True)

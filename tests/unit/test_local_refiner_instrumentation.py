@@ -121,3 +121,86 @@ def test_passed_stage_la_passed():
     assert o.passed is True
     assert o.stage_reached == "passed"
     assert o.fail_check == ""
+    assert o.is_brain_sim is True                # đã chạm Brain thật
+
+
+def test_simmed_failed_is_brain_sim_true():
+    """Test (b) yêu cầu: sim thật rớt sharpe/fitness thấp vẫn phải stage_reached=='simmed' VÀ
+    is_brain_sim=True (khác nhánh pre-sim reject bên dưới)."""
+    expr = "ts_delta(close, 60)"
+
+    def fake_tune(e, cfg, data, **kw):
+        return TuneResult(best_expr=e, best_config=PortfolioConfig(decay=4, truncation=0.08),
+                          local_sharpe=1.6)
+
+    r = LocalTunerRefiner(simulator=_SimLowFitness(), repo=_Repo(), data=object(),
+                          local_config=PortfolioConfig(decay=4, truncation=0.08),
+                          sim_config=SimConfig.default(), tune_fn=fake_tune)
+    o = r.refine_and_sim(_cand(expr))
+    assert o.stage_reached == "simmed"
+    assert o.is_brain_sim is True
+    assert o.sims_used == 1
+    assert o.presim_reason is None
+
+
+class _SimPresimOperatorInvalid:
+    """Giả lập Simulator thật khi PreFilter loại vì operator không có trong catalog — ĐÃ trả
+    presim_reason (Task 3) thay vì chỉ status='error' chung chung."""
+
+    def simulate(self, expr, settings=None):
+        return SimulationResult(
+            expression=expr, status="error",
+            raw={"error": "pre-sim reject: Operator không tồn tại: fake_op"},
+            presim_reason="Operator không tồn tại: fake_op",
+        )
+
+
+def test_presim_reject_operator_invalid_khong_gia_vo_da_sim():
+    """Test (a) yêu cầu: expr có op ngoài catalog giả -> outcome trung thực, KHÔNG còn giả vờ
+    'simmed/LOW_SHARPE' như bug cũ (spec C2). Expr phải PARSE được thật (registry ngôn ngữ đầy
+    đủ) — reject xảy ra ở catalog HẸP HƠN của pre_sim_validator (vd danh sách operator Brain
+    trả về), không phải ở parser; presim_reason mô phỏng đúng kịch bản đó."""
+    expr = "rank(close)"
+
+    def fake_tune(e, cfg, data, **kw):
+        # local_sharpe đủ cao để KHÔNG bị chặn ở local_floor -> đi tới sim, nơi bug nằm.
+        return TuneResult(best_expr=e, best_config=PortfolioConfig(decay=4, truncation=0.08),
+                          local_sharpe=1.6)
+
+    r = LocalTunerRefiner(simulator=_SimPresimOperatorInvalid(), repo=_Repo(), data=object(),
+                          local_config=PortfolioConfig(decay=4, truncation=0.08),
+                          sim_config=SimConfig.default(), tune_fn=fake_tune)
+    o = r.refine_and_sim(_cand(expr))
+    assert o.stage_reached == "op_invalid"
+    assert o.fail_check == "OPERATOR_INVALID"
+    assert o.sims_used == 0
+    assert o.is_brain_sim is False
+    assert o.presim_reason == "Operator không tồn tại: fake_op"
+    assert o.passed is False
+
+
+class _SimPresimFieldInvalid:
+    def simulate(self, expr, settings=None):
+        return SimulationResult(
+            expression=expr, status="error",
+            raw={"error": "pre-sim reject: Field/hằng không tồn tại: fake_field"},
+            presim_reason="Field/hằng không tồn tại: fake_field",
+        )
+
+
+def test_presim_reject_field_invalid():
+    expr = "rank(fake_field)"
+
+    def fake_tune(e, cfg, data, **kw):
+        return TuneResult(best_expr=e, best_config=PortfolioConfig(decay=4, truncation=0.08),
+                          local_sharpe=1.6)
+
+    r = LocalTunerRefiner(simulator=_SimPresimFieldInvalid(), repo=_Repo(), data=object(),
+                          local_config=PortfolioConfig(decay=4, truncation=0.08),
+                          sim_config=SimConfig.default(), tune_fn=fake_tune)
+    o = r.refine_and_sim(_cand(expr))
+    assert o.stage_reached == "field_invalid"
+    assert o.fail_check == "FIELD_INVALID"
+    assert o.sims_used == 0
+    assert o.is_brain_sim is False
+    assert o.presim_reason == "Field/hằng không tồn tại: fake_field"
