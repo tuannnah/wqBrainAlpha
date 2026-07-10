@@ -69,6 +69,38 @@ def test_tune_giu_local_metrics_tren_panel_that():
     assert np.isfinite(res.local_metrics.sharpe)
 
 
+def test_tune_thu_regression_neut_khi_co_risk_factor():
+    """Pha 3.1: tune thử biến thể regression_neut(expr, risk) để hạ self-corr; chọn nếu điểm
+    KHÔNG tệ hơn (bất biến đơn điệu)."""
+    def eval_fn(node, config):
+        from src.lang.visitors import Serializer
+        # biến thể regression_neut tốt hơn hẳn -> phải được chọn
+        return 3.0 if "regression_neut" in Serializer().visit(node) else 1.0
+    res = tune("rank(close)", _cfg(), data=None, budget=40, eval_fn=eval_fn,
+               neut_risk_factors=["rank(volume)"])
+    assert "regression_neut" in res.best_expr
+    assert "rank(volume)" in res.best_expr
+
+
+def test_tune_khong_dung_neut_khi_hai_diem():
+    """regression_neut làm điểm TỆ hơn -> giữ gốc (bất biến đơn điệu, không ép neutralize)."""
+    def eval_fn(node, config):
+        from src.lang.visitors import Serializer
+        return 0.2 if "regression_neut" in Serializer().visit(node) else 2.0
+    res = tune("rank(close)", _cfg(), data=None, budget=40, eval_fn=eval_fn,
+               neut_risk_factors=["rank(volume)"])
+    assert "regression_neut" not in res.best_expr
+
+
+def test_tune_khong_co_risk_factor_giu_nguyen_hanh_vi():
+    """Không truyền neut_risk_factors -> KHÔNG thử neutralize (tương thích ngược)."""
+    def eval_fn(node, config):
+        from src.lang.visitors import Serializer
+        return 3.0 if "regression_neut" in Serializer().visit(node) else 1.0
+    res = tune("rank(close)", _cfg(), data=None, budget=40, eval_fn=eval_fn)
+    assert "regression_neut" not in res.best_expr
+
+
 def test_tune_chon_config_tot_hon():
     # mọi expr như nhau (0.5), nhưng truncation=0.02 cho điểm cao hơn
     def eval_fn(node, config):

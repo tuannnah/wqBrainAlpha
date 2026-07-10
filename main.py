@@ -730,6 +730,10 @@ def _run_closed_loop_session(
             # CalibrationTracker đo ρ local↔Brain (join theo hash với record_brain_sim).
             calib_repo=repo,
             pp_allowed_neutralizations=pp_allowed,
+            # Pha 3.1: tune thử bọc regression_neut(expr, rank(volume)) — trừ thành phần
+            # crowded theo thanh khoản (factor phổ biến nhất gây self-corr cao) để hạ self-corr
+            # Brain. rank(volume) có trong panel local market_yf nên tune chấm được thật.
+            neut_risk_factors=["rank(volume)"],
         )
     else:
         refiner = None  # build_closed_loop mặc định RefinementLoopRefiner(loop) (đường LLM cũ)

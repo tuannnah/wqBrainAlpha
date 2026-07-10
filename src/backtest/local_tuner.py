@@ -156,6 +156,7 @@ def tune(
     budget: int = 48,  # lưới config gấp đôi (decay×trunc×neut=24); chừa ~24 eval cho window/hệ số
     max_turnover: float = _MAX_TURNOVER,
     eval_fn=None,
+    neut_risk_factors: "list[str] | None" = None,
 ) -> TuneResult:
     """Coordinate descent quanh `expr`: quét window (thang bậc) + hệ số (×0.5/×2) của từng
     hằng số trong cây, RỒI quét config (decay × truncation). Luôn giữ biểu thức/config gốc
@@ -225,6 +226,24 @@ def tune(
                 evals += 1
                 if s > best:
                     best, best_config, best_metrics = s, cfg, m
+
+    # Giai đoạn 3 (Pha 3.1): thử bọc biểu thức bằng regression_neut(best, risk_factor) để trừ
+    # thành phần crowded -> hạ self-corr Brain. regression_neut/vector_neut là toán tử DUY NHẤT
+    # làm được điều này (self-corr là ràng buộc hạng nhất khi pool bão hòa). Bất biến đơn điệu:
+    # chỉ nhận nếu điểm KHÔNG tệ hơn best (không ép neutralize làm hỏng alpha tốt). neut_risk_
+    # factors inject từ composition root (khớp field panel); None/rỗng -> bỏ qua (tương thích ngược).
+    for factor_expr in neut_risk_factors or []:
+        if evals >= budget:
+            break
+        try:
+            factor_node = parse(factor_expr)
+        except (KeyError, ValueError):
+            continue
+        neutralized = Call("regression_neut", (best_node, factor_node))
+        s, m = score(neutralized, best_config)
+        evals += 1
+        if s > best:
+            best, best_node, best_metrics = s, neutralized, m
 
     # local_sharpe báo cáo Sharpe THẬT của best (cho pre-sim floor 0.5), KHÔNG phải điểm nộp
     # dùng để xếp hạng. Đường eval_fn (test) không có metrics -> giữ `best` (giá trị eval_fn).

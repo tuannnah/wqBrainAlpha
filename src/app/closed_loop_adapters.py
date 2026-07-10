@@ -100,6 +100,7 @@ class LocalTunerRefiner:
         region: str = "USA", universe: str = "TOP3000", registry=None, tune_fn=None,
         max_pool_corr: float = 0.70, calib_repo=None,
         pp_allowed_neutralizations: frozenset[str] = frozenset(),
+        neut_risk_factors: "list[str] | None" = None,
     ) -> None:
         self.simulator = simulator
         self.repo = repo
@@ -120,6 +121,8 @@ class LocalTunerRefiner:
         # Tập neutralization theo Power Pool Theme (rỗng -> đường non-theme, dùng group-neut cũ).
         self.pp_allowed_neutralizations = pp_allowed_neutralizations
         self._tune = tune_fn or _tune
+        # Risk factor để tune bọc regression_neut hạ self-corr (Pha 3.1); None -> không thử.
+        self.neut_risk_factors = neut_risk_factors
 
     def _luu_local_eval_calibration(self, tr, canonical_hash: str) -> None:
         """Ghi ExpressionModel + EvaluationModel cho expr đã tune (khớp hash với record_brain_sim
@@ -259,7 +262,10 @@ class LocalTunerRefiner:
         import time
 
         _t0 = time.perf_counter()
-        tr = self._tune(candidate.expr, self.local_config, self.data, registry=self.registry)
+        _tune_kw = {"registry": self.registry}
+        if self.neut_risk_factors:
+            _tune_kw["neut_risk_factors"] = self.neut_risk_factors
+        tr = self._tune(candidate.expr, self.local_config, self.data, **_tune_kw)
         backtest_ms = (time.perf_counter() - _t0) * 1000.0
         canonical_hash = CanonicalHasher().visit(parse(tr.best_expr))
         node = parse(tr.best_expr)
