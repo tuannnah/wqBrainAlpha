@@ -71,11 +71,14 @@ _PRESIM_STAGE_BY_CODE: dict[str, str] = {
 
 def _presim_reject_outcome(
     expr: str, canonical_hash: str, presim_reason: str, *, stop_reason: str, source: str,
+    backtest_ms: float | None = None, sim_ms: float | None = None,
 ) -> IdeaOutcome:
     """Ứng viên bị `PreFilter` loại TRƯỚC khi chạm Brain (Task 3, spec C2: đừng giả vờ
     'simmed/LOW_SHARPE' như bug cũ — CSV giấu bug operator/field bịa vì sim_ms≈0 nhưng
     stage_reached vẫn ghi 'simmed'). Outcome trung thực: sims_used=0 (chưa tốn quota Brain),
-    is_brain_sim=False, stage/fail_check suy từ chính category của presim_reason."""
+    is_brain_sim=False, stage/fail_check suy từ chính category của presim_reason. Giữ `source`
+    (nhánh nào sinh) + timing đã tính (backtest_ms nếu đã tune, sim_ms lần gọi pre-check) để
+    CSV không bỏ trống cột chẩn đoán — chính là dữ liệu Task 3 cần để soi presim-reject."""
     code = categorize_presim_reason(presim_reason)
     stage = _PRESIM_STAGE_BY_CODE.get(code, "presim")
     try:
@@ -85,10 +88,11 @@ def _presim_reject_outcome(
     return IdeaOutcome(
         expr=expr, canonical_hash=canonical_hash, passed=False,
         wq_alpha_id=None, sharpe=None, fitness=None, turnover=None, self_corr=None,
-        sims_used=0, stop_reason=stop_reason,
+        sims_used=0, stop_reason=stop_reason, source=source,
         stage_reached=stage, fail_check=code, family=classify_family(expr),
         expr_depth=depth, dedup_key=canonical_hash,
         presim_reason=presim_reason, is_brain_sim=False,
+        backtest_ms=backtest_ms, sim_ms=sim_ms,
     )
 
 
@@ -160,7 +164,8 @@ class LocalTunerRefiner:
         # Tập neutralization theo Power Pool Theme (rỗng -> đường non-theme, dùng group-neut cũ).
         self.pp_allowed_neutralizations = pp_allowed_neutralizations
         self._tune = tune_fn or _tune
-        # Risk factor để tune bọc regression_neut hạ self-corr (Pha 3.1); None -> không thử.
+        # Risk factor để tune bọc vector_neut hạ self-corr (Pha 3.1; đổi từ regression_neut —
+        # account không có op đó trong catalog live, xem Task 1); None -> không thử.
         self.neut_risk_factors = neut_risk_factors
         # CalibrationTracker (src/pipeline/closed_loop.py) — cho biết ρ hiện tại giữa ranking
         # local và Brain có đáng tin không (Task 5). None -> hành vi cũ y nguyên (floor cứng).
@@ -413,6 +418,7 @@ class LocalTunerRefiner:
             return _presim_reject_outcome(
                 tr.best_expr, canonical_hash, result.presim_reason,
                 stop_reason="presim_reject", source="gp_local_tuner",
+                backtest_ms=backtest_ms, sim_ms=sim_ms,
             )
         return self._finalize(
             result, tr.best_expr, canonical_hash, sim_cfg,

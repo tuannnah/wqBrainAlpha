@@ -21,7 +21,7 @@ DIMENSION_HINTS = {
     "drawdown_fit": "giảm drawdown (kiểm soát rủi ro, bớt tập trung)",
     "pool_fit": (
         "GIẢM tương quan với pool đã có (alpha hiện quá giống rổ — không nộp được): "
-        "bọc tín hiệu bằng regression_neut/vector_neut để bóc phần chồng lấn với "
+        "bọc tín hiệu bằng vector_neut để bóc phần chồng lấn với "
         "factor phổ biến, hoặc đổi sang dataset/conditioning khác. KHÔNG chỉ winsorize/scale "
         "(không đổi tương quan). Mục tiêu là phần dư trực giao, không phải tinh chỉnh số."
     ),
