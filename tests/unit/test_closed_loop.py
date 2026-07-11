@@ -403,6 +403,56 @@ def test_closed_loop_works_without_original_hash_methods_on_repo() -> None:
     assert refiner.calls == ["x"]
 
 
+class _RepoAvoidSpy:
+    """Repo spy chỉ ghi lại các lần gọi `record_avoided_hash` — dùng để phân biệt outcome
+    bị gate LOCAL (không đáng cấm vĩnh viễn) khỏi outcome đã sim Brain thật (Task 3, RC1)."""
+
+    def __init__(self) -> None:
+        self.avoided_calls: list[str] = []
+
+    def avoided_exprs(self):
+        return set()
+
+    def record_brain_sim(self, **kw):
+        return None
+
+    def record_avoided_hash(self, key: str) -> None:
+        self.avoided_calls.append(key)
+
+
+def test_locally_gated_outcome_not_persisted_to_avoid_list() -> None:
+    """RC1 fix: outcome bị gate LOCAL (is_brain_sim=False, vd local_floor, 0 sim Brain) KHÔNG
+    có bằng chứng Brain thật gì cả -> KHÔNG được record_avoided_hash, để phiên sau còn cơ hội
+    thử lại (config/conditioning mới) thay vì bị cấm vĩnh viễn -> cạn seed novelty."""
+    gated = IdeaOutcome(
+        expr="gated_expr", canonical_hash="h_gated", passed=False, wq_alpha_id=None,
+        sharpe=None, fitness=None, turnover=None, self_corr=None, sims_used=0,
+        stop_reason="local_floor", stage_reached="local_floor", is_brain_sim=False,
+    )
+    src = _FakeIdeaSource([[_cand("gated_expr")]])
+    refiner = _FakeRefiner({"gated_expr": gated})
+    spy = _RepoAvoidSpy()
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=spy)
+    loop.run()
+    assert spy.avoided_calls == []
+
+
+def test_brain_simmed_outcome_is_persisted_to_avoid_list() -> None:
+    """Outcome đã tốn sim Brain thật (is_brain_sim=True) — dù pass hay fail — LÀ bằng chứng
+    thật -> vẫn phải record_avoided_hash để chặn trùng lặp chính xác ở phiên sau."""
+    simmed = IdeaOutcome(
+        expr="brain_expr", canonical_hash="h_brain", passed=False, wq_alpha_id=None,
+        sharpe=0.3, fitness=0.2, turnover=0.5, self_corr=0.1, sims_used=1,
+        stop_reason="low_sharpe", is_brain_sim=True,
+    )
+    src = _FakeIdeaSource([[_cand("brain_expr")]])
+    refiner = _FakeRefiner({"brain_expr": simmed})
+    spy = _RepoAvoidSpy()
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=spy)
+    loop.run()
+    assert spy.avoided_calls == ["brain_expr"]
+
+
 def test_gen_ms_duoc_dien_vao_outcome(repo) -> None:  # noqa: ANN001
     """Fix gap Pha 0: ClosedLoop đo thời gian next_batch (GP generation) và điền gen_ms vào
     outcome (refiner không biết chi phí sinh batch). Trước đây gen_ms luôn None -> cột 'gen'

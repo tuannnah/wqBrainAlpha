@@ -275,13 +275,18 @@ class ClosedLoop:
                     status="passed" if outcome.passed else "failed",
                 )
                 # Persist hash GỐC (pre-tune, `key` tính ở trên TRƯỚC khi refiner tune) để
-                # phiên SAU pre-check khớp đúng không gian hash (Task 6 fix). Ghi cho MỌI
-                # outcome (pass lẫn fail) — khớp semantics `seen.add(key)` trong-phiên ở trên,
-                # vốn cũng chặn trùng bất kể pass/fail. Guard: repo fake/cũ thiếu method vẫn
-                # chạy được (tương thích ngược).
-                record_avoided_hash = getattr(self.repo, "record_avoided_hash", None)
-                if callable(record_avoided_hash):
-                    record_avoided_hash(key)
+                # phiên SAU pre-check khớp đúng không gian hash (Task 6 fix). CHỈ ghi khi
+                # outcome đã thực sự sim Brain (`is_brain_sim`) — sim tốn thật là bằng chứng
+                # thật (pass hay fail đều đáng nhớ, khớp semantics `seen.add(key)` trong-phiên
+                # ở trên vốn cũng chặn trùng bất kể pass/fail). Outcome bị gate LOCAL (local_floor/
+                # presim_reject/depth/sub_universe...) KHÔNG có bằng chứng Brain thật gì cả — cấm
+                # vĩnh viễn sẽ làm cạn seed novelty (RC1: ALT_DATA/FUNDAMENTAL core bị gate 1 lần
+                # là mất luôn cơ hội thử lại ở phiên sau, kể cả khi conditioning/config đã đổi).
+                # Guard: repo fake/cũ thiếu method vẫn chạy được (tương thích ngược).
+                if outcome.is_brain_sim:
+                    record_avoided_hash = getattr(self.repo, "record_avoided_hash", None)
+                    if callable(record_avoided_hash):
+                        record_avoided_hash(key)
                 ideas_tried += 1
                 # Log CSV mọi ý tưởng có outcome (kể cả bị gate 0-sim) — Task 3.
                 if self.alpha_logger is not None:
