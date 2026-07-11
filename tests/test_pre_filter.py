@@ -184,6 +184,30 @@ def test_local_arity_khong_chan_oan_optional_arg():
     assert ok, reason
 
 
+def test_local_arity_khong_chan_oan_khi_catalog_vang_mat():
+    """Follow-up bf13ce7: catalog Brain VẮNG HOÀN TOÀN (operator_arity={} — DB fresh/chưa
+    cache) -> `known_operators=None` (tắt kiểm tồn tại) nhưng `local_arity` vẫn có (suy từ
+    registry cục bộ). `rank`/`ts_backfill` nằm trong OPTIONAL_TRAILING_ARG_OPS (Brain nhận
+    tham số tùy chọn cuối mà chữ ký cục bộ không mô hình hóa) -> KHÔNG được siết theo
+    local_arity=1 của riêng chúng (mới bị chặn oan `rank(close, 2)` / `ts_backfill(close,
+    22)`). `sign` KHÔNG nằm trong tập miễn (fixed-arity, không tham số tùy chọn) -> vẫn bị
+    local_arity chặn đúng như trước (tái hiện lỗi WQ thật)."""
+    pf = PreFilter(
+        known_operators=None,  # catalog vắng mặt -> main.py tắt kiểm tồn tại operator
+        known_fields={"close", "volume"},
+        operator_arity={},  # catalog Brain rỗng hoàn toàn
+        local_arity={"rank": 1, "ts_backfill": 1, "sign": 1},
+    )
+    ok, reason = pf.check("rank(close, 2)")
+    assert ok, reason
+    ok, reason = pf.check("ts_backfill(close, 22)")
+    assert ok, reason
+    ok, reason = pf.check("sign(close, volume)")
+    assert not ok
+    assert "input" in reason.lower()
+    assert "sign" in reason
+
+
 def test_bare_prefilter_van_hoat_dong():
     """PreFilter() không truyền gì (kể cả local_arity) vẫn chạy được bình thường — nhiều
     test/call site dựng PreFilter trần không có nguồn arity nào."""

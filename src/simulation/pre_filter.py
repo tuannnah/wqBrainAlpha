@@ -17,6 +17,35 @@ DEFAULT_GROUPS = {"market", "sector", "industry", "subindustry", "country", "exc
 # ghi 2 tham số nhưng thực tế WQ cho truyền nhiều hơn (add(a,b,c,...)).
 DEFAULT_VARIADIC_OPS = {"add", "multiply", "max", "min", "or", "and"}
 
+# Operator mà Brain THẬT chấp nhận tham số TÙY CHỌN ở cuối (optional trailing arg) vượt
+# quá độ dài `OperatorSpec.signature` cục bộ (registry cục bộ chỉ khai báo tham số bắt
+# buộc, không mô hình hóa tham số tùy chọn có default trên Brain). Nếu KHÔNG loại các op
+# này khỏi fallback local-arity, khi catalog Brain vắng mặt (operator_arity={}) — DB
+# fresh/chưa cache — PreFilter sẽ dùng ĐÚNG local_arity làm cap và SIẾT OAN các lời gọi
+# hợp lệ trên Brain (vd `rank(close, 2)` dùng optional `rate`, `ts_backfill(close, 22)`
+# dùng optional `k`), khiến ý tưởng hợp lệ không bao giờ tới được Brain để simulate.
+#
+# Với các op trong tập này: BỎ QUA fallback local_arity hoàn toàn — cap chỉ tính từ
+# `operator_arity` (catalog Brain). Catalog vắng mặt -> cap=0 (falsy) -> không kiểm arity
+# cho op đó (an toàn hơn: bỏ sót lỗi arity rẻ hơn siết oan tín hiệu hợp lệ). Đây đúng là
+# hành vi TRƯỚC task này (không regression) cho các op có mặt trong catalog.
+#
+# Danh sách tra cứu theo skill `worldquant-brain`
+# (references/fastexpr-operators.md — rank/winsorize được liệt kê rõ có tham số optional;
+# các op ts_* khác suy từ kiến thức operator FASTEXPR thật của Brain). `ts_delta` KHÔNG
+# đưa vào đây: không có tham số tùy chọn nào được biết trên Brain, chữ ký cục bộ (x, d) đã
+# khớp đúng arity thật -> fallback local vẫn an toàn cho op này.
+OPTIONAL_TRAILING_ARG_OPS = {
+    "rank",  # rank(x, rate=2) — rate tùy chọn
+    "winsorize",  # winsorize(x, std=4)
+    "ts_backfill",  # ts_backfill(x, d, k=1)
+    "ts_rank",  # ts_rank(x, d, constant=0)
+    "ts_zscore",  # ts_zscore(x, d, ...) — chưa chắc có tham số tùy chọn, thà miễn kiểm
+    "quantile",  # quantile(x, driver="gaussian", sigma=1.0)
+    "normalize",  # normalize(x, useStd=false, limit=0.0)
+    "scale",  # scale(x, scale=1, longscale=1, shortscale=1)
+}
+
 
 class PreFilter:
     def __init__(
@@ -95,11 +124,20 @@ class PreFilter:
             # Tolerant arity: chặn khi THỪA input so với chữ ký, trừ operator variadic.
             # Cap hiệu lực = max(catalog_arity, local_arity) -> op vắng mặt/arity=0 ở MỘT
             # nguồn vẫn được nguồn kia lấp (đóng lỗ hổng "Invalid number of inputs" khi
-            # catalog thiếu entry cho op).
+            # catalog thiếu entry cho op). NGOẠI LỆ: op thuộc OPTIONAL_TRAILING_ARG_OPS
+            # (Brain chấp nhận tham số tùy chọn cuối mà chữ ký cục bộ không mô hình hóa)
+            # -> KHÔNG áp fallback local_arity, chỉ tin catalog (như hành vi trước khi có
+            # local_arity) để tránh siết oan (vd rank(close, 2), ts_backfill(close, 22)).
             if node.op not in self.variadic_ops:
                 catalog_cap = (self.operator_arity or {}).get(node.op, 0)
-                local_cap = (self.local_arity or {}).get(node.op, 0)
-                cap = max(catalog_cap, local_cap)
+                if node.op in OPTIONAL_TRAILING_ARG_OPS:
+                    cap = catalog_cap
+                else:
+                    local_cap = (self.local_arity or {}).get(node.op, 0)
+                    cap = max(catalog_cap, local_cap)
+                # TODO(min-arity): chỉ kiểm THỪA (len > cap), chưa kiểm THIẾU input so với
+                # arity tối thiểu của operator (vd gọi thiếu tham số bắt buộc) — số tham số
+                # bắt buộc tối thiểu không có sẵn từ catalog/local hiện tại nên bỏ qua kiểm.
                 if cap and len(node.args) > cap:
                     return False, (
                         f"Operator {node.op} nhận tối đa {cap} input, "
