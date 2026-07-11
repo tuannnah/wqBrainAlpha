@@ -433,6 +433,20 @@ def _cached_symbols(session_factory):
     return fields, operators, field_types, matrix_only_ops, operator_arity
 
 
+def _local_operator_arity() -> dict[str, int]:
+    """Cap arity LOCAL suy từ chữ ký `OperatorRegistry` (`len(spec.signature)`).
+
+    Nguồn BỔ SUNG cho PreFilter, lấp lỗ hổng: op vắng mặt trong catalog Brain (hoặc
+    definition không parse được -> `count_max_arity` trả 0) trước đây bị BỎ QUA kiểm arity
+    hoàn toàn (3 sim đã chết vì lỗi WQ "Invalid number of inputs" do lỗ hổng này). Import
+    `src.operators_local` trước để đảm bảo registry đã nạp đủ toàn bộ operator thật (không
+    chỉ 6 op tối thiểu Phase 1) — idempotent, an toàn gọi lại nhiều lần."""
+    import src.operators_local  # noqa: F401  (nạp operator thật vào registry)
+    from src.lang.registry import default_registry
+
+    return {name: len(spec.signature) for name, spec in default_registry().all_specs().items()}
+
+
 def _make_invalid_field_recorder(session_factory, region, universe):
     """Trả callback(field_id) ghi field 'chết' vào blacklist (tự học vùng chết)."""
     repo = InvalidFieldRepository(session_factory)
@@ -1058,7 +1072,7 @@ def _make_research_loop(
     pf = PreFilter(
         known_operators=operators or None, known_fields=set(fields) or None,
         field_types=field_types, matrix_only_ops=matrix_only_ops,
-        operator_arity=operator_arity,
+        operator_arity=operator_arity, local_arity=_local_operator_arity(),
     )
     field_repo = FieldRepository(None, session_factory)
     op_repo = OperatorRepository(None, session_factory)
@@ -1218,6 +1232,7 @@ def research(
         pf = PreFilter(
             known_operators=o or None, known_fields=set(f) or None,
             field_types=ft, matrix_only_ops=mo, operator_arity=oa,
+            local_arity=_local_operator_arity(),
         )
         return _make_llm_generator(session_factory, pf).generate_ideas(1)
 
@@ -1306,6 +1321,7 @@ def _marathon_direction_provider(session_factory):
         pf = PreFilter(
             known_operators=o or None, known_fields=set(f) or None,
             field_types=ft, matrix_only_ops=mo, operator_arity=oa,
+            local_arity=_local_operator_arity(),
         )
         ideas = _make_llm_generator(session_factory, pf).generate_ideas(1)
         direction = resolve_direction("", lambda: ideas)[0]
@@ -1405,7 +1421,7 @@ def llm_generate(
     pf = PreFilter(
         known_operators=operators or None, known_fields=set(fields) or None,
         field_types=field_types, matrix_only_ops=matrix_only_ops,
-        operator_arity=operator_arity,
+        operator_arity=operator_arity, local_arity=_local_operator_arity(),
     )
     llm_gen = _make_llm_generator(session_factory, pf)
 
@@ -1755,6 +1771,7 @@ def _menu_test_engine(state: _MenuState) -> None:
     prefilter = PreFilter(
         known_operators=o or None, known_fields=set(f) or None,
         field_types=ft, matrix_only_ops=mo, operator_arity=oa,
+        local_arity=_local_operator_arity(),
     )
     cfg = _portfolio_config_from_opts("NONE", 0, 0.10, state.delay)
 

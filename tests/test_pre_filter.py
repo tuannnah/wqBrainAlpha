@@ -149,6 +149,48 @@ def test_khong_khai_bao_arity_thi_bo_qua():
     assert ok, reason
 
 
+# ----------------------- luật arity: nguồn LOCAL registry bổ sung (lấp lỗ hổng catalog)
+def test_local_arity_chan_khi_catalog_rong():
+    """Tái hiện đúng lỗ hổng: `sign` VẮNG khỏi catalog Brain (operator_arity={}) -> trước
+    đây bị bỏ qua kiểm arity hoàn toàn. Nguồn `local_arity` (suy từ chữ ký OperatorRegistry
+    cục bộ, sign là unary) phải LẤP lỗ này và chặn `sign(close, volume)` (2 input cho op
+    1-arg) — đây chính là lỗi WQ thật đã đốt sim: 'Invalid number of inputs : 2, should be
+    exactly 1'."""
+    pf = PreFilter(
+        known_operators={"sign"},
+        known_fields={"close", "volume"},
+        operator_arity={},  # catalog Brain không có entry cho "sign" -> mô phỏng lỗ hổng
+        local_arity={"sign": 1},
+    )
+    ok, reason = pf.check("sign(close, volume)")
+    assert not ok
+    assert "input" in reason.lower()
+    assert "sign" in reason
+
+
+def test_local_arity_khong_chan_oan_optional_arg():
+    """`rank(close, 2)` (rate tùy chọn) và `ts_backfill(close, 22)` vẫn hợp lệ: catalog_arity
+    (mô phỏng catalog Brain thật, đã tính cả tham số tùy chọn) > local_arity (chữ ký cục bộ
+    unary) -> cap hiệu lực = max(catalog, local) không siết oan các op có optional arg."""
+    pf = PreFilter(
+        known_operators={"rank", "ts_backfill"},
+        known_fields={"close"},
+        operator_arity={"rank": 2, "ts_backfill": 2},
+        local_arity={"rank": 1, "ts_backfill": 1},
+    )
+    ok, reason = pf.check("rank(close, 2)")
+    assert ok, reason
+    ok, reason = pf.check("ts_backfill(close, 22)")
+    assert ok, reason
+
+
+def test_bare_prefilter_van_hoat_dong():
+    """PreFilter() không truyền gì (kể cả local_arity) vẫn chạy được bình thường — nhiều
+    test/call site dựng PreFilter trần không có nguồn arity nào."""
+    ok, reason = PreFilter().check("rank(ts_delta(close, 5))")
+    assert ok, reason
+
+
 # Biểu thức residual-momentum thật (độ sâu 7) từng bị loại khi max_depth=6.
 _DEPTH7 = (
     "group_neutralize(ts_delay(divide(rank(ts_delay(ts_sum(returns, 210), 21)), "

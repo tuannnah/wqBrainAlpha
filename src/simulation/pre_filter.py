@@ -30,6 +30,7 @@ class PreFilter:
         matrix_only_ops: set[str] | None = None,
         operator_arity: dict[str, int] | None = None,
         variadic_ops: set[str] | None = None,
+        local_arity: dict[str, int] | None = None,
     ):
         self.known_operators = known_operators
         self.known_fields = known_fields
@@ -41,6 +42,13 @@ class PreFilter:
         # sai (tái hiện lỗi WQ "Invalid number of inputs"). Thiếu thì bỏ qua (có
         # thể là tham số tùy chọn). Thiếu dữ liệu arity -> không kiểm.
         self.operator_arity = operator_arity
+        # Nguồn arity BỔ SUNG lấy từ chữ ký OperatorRegistry cục bộ (local_arity =
+        # {tên op -> len(signature)}). Lấp lỗ hổng: op vắng mặt trong catalog Brain (hoặc
+        # definition không parse được -> count_max_arity trả 0) trước đây bị BỎ QUA kiểm
+        # arity hoàn toàn vì `operator_arity.get(op)` falsy. Cap hiệu lực = max(catalog,
+        # local) — catalog đã tính cả tham số tùy chọn (rank/winsorize/ts_backfill...) nên
+        # lấy max không siết oan các op đó khi catalog có mặt và lớn hơn.
+        self.local_arity = local_arity
         self.variadic_ops = variadic_ops if variadic_ops is not None else set(DEFAULT_VARIADIC_OPS)
         # Kiểm tương thích kiểu: operator Time Series/Cross Sectional đòi input
         # MATRIX, không nhận field VECTOR trực tiếp (WQ trả status=ERROR). Cần
@@ -85,11 +93,16 @@ class PreFilter:
                 return False, f"Operator không tồn tại: {node.op}"
 
             # Tolerant arity: chặn khi THỪA input so với chữ ký, trừ operator variadic.
-            if self.operator_arity and node.op not in self.variadic_ops:
-                expected = self.operator_arity.get(node.op)
-                if expected and len(node.args) > expected:
+            # Cap hiệu lực = max(catalog_arity, local_arity) -> op vắng mặt/arity=0 ở MỘT
+            # nguồn vẫn được nguồn kia lấp (đóng lỗ hổng "Invalid number of inputs" khi
+            # catalog thiếu entry cho op).
+            if node.op not in self.variadic_ops:
+                catalog_cap = (self.operator_arity or {}).get(node.op, 0)
+                local_cap = (self.local_arity or {}).get(node.op, 0)
+                cap = max(catalog_cap, local_cap)
+                if cap and len(node.args) > cap:
                     return False, (
-                        f"Operator {node.op} nhận tối đa {expected} input, "
+                        f"Operator {node.op} nhận tối đa {cap} input, "
                         f"có {len(node.args)}"
                     )
 
