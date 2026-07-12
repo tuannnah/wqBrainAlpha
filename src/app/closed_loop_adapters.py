@@ -649,7 +649,6 @@ class CombinerIdeaSource:
     def __init__(
         self, *, fallback, data: object, repo: object, config: object, registry: object,
         tau: float = 0.30, n_min: int = 2, n_max: int = 4, max_combos: int = 5,
-        db_limit: int = 50,
     ) -> None:
         self._fallback = fallback
         self._data: Any = data
@@ -660,7 +659,6 @@ class CombinerIdeaSource:
         self.n_min = n_min
         self.n_max = n_max
         self.max_combos = max_combos
-        self.db_limit = db_limit
         # Task 4: combo tự dựng cũng có thể rơi vào họ đã đóng (vd toàn tín hiệu con pv_reversal
         # ghép lại) -> lọc chính combo của mình, đồng thời ủy quyền xuống fallback.
         self._saturated: set[str] = set()
