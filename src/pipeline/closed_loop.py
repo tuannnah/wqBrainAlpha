@@ -216,9 +216,19 @@ class ClosedLoop:
 
         def _report(stop_reason: str) -> ClosedLoopReport:
             if power_pool_only:
+                # RC8 fix: "Power Pool eligible" chỉ là cờ CẤU TRÚC (is_power_pool: Sharpe≥1.0,
+                # ≤8 operator, ≤3 field, self_corr≤0.5) — KHÔNG phải xác nhận nộp được. Các
+                # alpha này KHÔNG đạt ngưỡng Regular (Sharpe cần ~1.58+, xem
+                # config/thresholds.py IS_LADDER) và tool này CHƯA có đường nộp Power Pool tự
+                # động (không auth/sim/submit thật ở đây). Nêu rõ hành động tiếp theo: người
+                # dùng phải tự xem lại từng alpha trên WQ Brain và tự quyết định nộp hay không.
                 logger.info(
-                    "⭐ Tóm tắt Power Pool: {} ứng viên đạt Power Pool nhưng KHÔNG đạt "
-                    "Regular (đáng cân nhắc nộp qua nhánh Power Pool): {}",
+                    "⭐ Tóm tắt Power Pool: {} ứng viên đạt CẤU TRÚC Power Pool (Sharpe≥1.0, "
+                    "≤8 operator, ≤3 field, self_corr≤0.5) nhưng KHÔNG đạt ngưỡng Regular "
+                    "(Sharpe cần ~1.58+). Đây KHÔNG phải xác nhận nộp được — tool này hiện "
+                    "CHƯA có đường nộp Power Pool tự động. Hành động tiếp theo: tự xem lại "
+                    "từng alpha bên dưới trên WQ Brain và tự quyết định có nộp qua nhánh Power "
+                    "Pool hay không (đạt cấu trúc ≠ được chấp nhận): {}",
                     len(power_pool_only),
                     ", ".join(_short(e, 40) for e in power_pool_only),
                 )
@@ -329,7 +339,12 @@ class ClosedLoop:
                         _fmt(outcome.self_corr), outcome.sims_used,
                     )
                 if getattr(outcome, "power_pool_eligible", False):
-                    logger.info("   ⭐ Power Pool eligible (Sharpe≥1.0, ≤8 op, ≤3 field, self_corr≤0.5)")
+                    # RC8 fix: nêu rõ đây là cờ CẤU TRÚC, không phải "đã nộp được" — alpha vẫn
+                    # dưới ngưỡng Regular và chưa có đường nộp Power Pool tự động trong tool này.
+                    logger.info(
+                        "   ⭐ Đạt CẤU TRÚC Power Pool (Sharpe≥1.0, ≤8 op, ≤3 field, "
+                        "self_corr≤0.5) — KHÔNG phải đã nộp được, cần tự xem lại trên WQ Brain."
+                    )
                 logger.info(
                     "   Σ {} ý tưởng / {} sim / {} pass / {} bỏ.",
                     ideas_tried, sims_used, n_passed, n_abandoned,

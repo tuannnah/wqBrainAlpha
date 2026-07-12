@@ -235,6 +235,36 @@ def test_run_logs_local_gate_block_when_zero_sims(repo) -> None:  # noqa: ANN001
     assert "gate local chặn" in "\n".join(msgs)
 
 
+def test_power_pool_eligible_log_khong_ngu_y_nop_duoc(repo) -> None:  # noqa: ANN001
+    """RC8: alpha power_pool_eligible=True nhưng KHÔNG passed Regular -> log per-alpha VÀ
+    tóm tắt cuối phiên phải nêu rõ đây là cờ CẤU TRÚC (không phải xác nhận nộp được), nêu
+    thiếu ngưỡng Regular, và nêu KHÔNG có đường nộp Power Pool tự động trong tool này."""
+    from loguru import logger
+
+    msgs: list[str] = []
+    sink_id = logger.add(lambda m: msgs.append(str(m)), level="INFO")
+    try:
+        pp_outcome = IdeaOutcome(
+            expr="pp_expr", canonical_hash="h_pp", passed=False, wq_alpha_id=None,
+            sharpe=1.1, fitness=0.9, turnover=0.3, self_corr=0.2, sims_used=1,
+            stop_reason="below_regular", power_pool_eligible=True,
+        )
+        src = _FakeIdeaSource([[_cand("pp_expr")]])
+        refiner = _FakeRefiner({"pp_expr": pp_outcome})
+        ClosedLoop(idea_source=src, refiner=refiner, repo=repo).run()
+    finally:
+        logger.remove(sink_id)
+
+    joined = "\n".join(msgs)
+    # Per-alpha line: nêu CẤU TRÚC, không phải "đã nộp được".
+    assert "CẤU TRÚC Power Pool" in joined
+    assert "KHÔNG phải đã nộp được" in joined
+    # Tóm tắt cuối phiên: nêu thiếu ngưỡng Regular + chưa có đường nộp tự động + hành động tiếp theo.
+    assert "KHÔNG đạt ngưỡng Regular" in joined
+    assert "CHƯA có đường nộp Power Pool tự động" in joined
+    assert "tự xem lại" in joined and "WQ Brain" in joined
+
+
 def test_closed_loop_goi_alpha_logger_moi_y_tuong():
     """ClosedLoop gọi alpha_logger.log cho mỗi ý tưởng có outcome (index tăng dần)."""
     from src.pipeline.closed_loop import ClosedLoop, IdeaOutcome
