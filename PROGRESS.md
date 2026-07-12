@@ -1,7 +1,14 @@
 # MiniBrain — Progress log
 
 ## Current state
-- **Phase:** **HOÀN TẤT CẢ 5 PHA (0→4) của `docs/tailieu/IMPROVEMENT_SPEC.md`** — code+test
+- **Phase [2026-07-12, Session 09]:** Đã chạy thật 2 phiên menu-5 (07-11: 22 ý tưởng/14 sim/0
+  pass; 07-12: 13 ý tưởng/9 sim/0 pass) SAU khi áp toàn bộ fix review 07-11 → chẩn đoán mới +
+  **kế hoạch task cho subagent**: `docs/superpowers/plans/2026-07-12-alpha-submittable-tasks.md`
+  (8 task: T1/T2 fix Combiner 0-combo — đòn √N; T3 cap sim GP; T4 chặn degenerate; T5 mini-sweep
+  sign/decay alt-data; T6 multi-simulation; T7 verify field LIVE + short-interest; T8 báo cáo
+  submit-ready). Nút thắt chính: Combiner luôn 0 combo (nghi tự-so-với-pool chứa chính sub-signal),
+  alt-data 1-shot không sweep, GP đốt ~50% quota vào rác, ρ=0.308 local không tin.
+- **Phase (trước):** **HOÀN TẤT CẢ 5 PHA (0→4) của `docs/tailieu/IMPROVEMENT_SPEC.md`** — code+test
   xong trên `main` [2026-07-10 Session 08]. Design:
   `docs/superpowers/specs/2026-07-10-improvement-spec-implementation-design.md`.
   - Pha 0 (instrumentation): IdeaOutcome +9 trường, RunAlphaLogger luôn điền đủ,
@@ -415,6 +422,29 @@
 - **Tests:** `pytest -q` 1218 passed, 1 fail pre-existing. Thêm: test_local_tuner_tune (3 case
   regression_neut), test_regression_neut_orthogonal (golden), test_calibrated_floor. Commits
   `407b50d`→`11b0614`.
+
+### [2026-07-12] Session 09 — Chẩn đoán 2 phiên thật 0-pass + kế hoạch task subagent
+- **Phase:** Sau IMPROVEMENT_SPEC + review20260710/11 (đều đã merge main). Yêu cầu user: đọc
+  log/code/docs → tìm cách cải thiện để có alpha submit được → tạo file .md chia task subagent.
+- **Done:** Đọc log 07-11/07-12 + CSV + session_summary + FIX_PLAN_2026-07-11 + soi code
+  (`CombinerIdeaSource`, `combine_stage`, `_sim_direct`, `Simulator`, `good_signals_for_combine`).
+  Viết `docs/superpowers/plans/2026-07-12-alpha-submittable-tasks.md` (8 task TDD, thứ tự
+  T1→T2→T3+T4→T5→T6→T7→T8, nghiệm thu tổng bằng 1 phiên menu-5).
+- **Decisions (chẩn đoán):** (1) Con đường khả dĩ nhất tới Sharpe ~1.58 là GHÉP các tín hiệu
+  ~1.04–1.07/self-corr 0.40–0.46 đã có (Grinold–Kahn √N) — nhưng Combiner chết im lặng `0 combo`
+  mọi batch: 3 tầng lọc không log lý do; nghi chính là combo bị chấm với pool CHỨA chính sub-signal
+  của nó (`good_signals_for_combine` join `PoolPnlModel`) → rớt gate độc đáo oan. (2) `_sim_direct`
+  đúng 1 sim/hypothesis, không flip sign (seed social từng sai dấu) — phí hypothesis. (3) GP đốt
+  ~50% sim ra Sharpe ≤0.31 kể cả hằng số `power(sign(x),2)`; ρ=0.308 → cap ngân sách GP thay vì
+  tin floor. (4) Chưa có multi-simulation → 5 seed alt-data tốn ~57′ tuần tự. (5) Hoãn vá fidelity
+  panel local (giảm phụ thuộc local thay vì tăng ρ). (6) `days_to_cover`/`shares_short` bị field
+  guard chặn — cần verify LIVE dataset trước khi seed lại.
+- **In progress:** Chưa thực thi task nào — chờ user chọn cách chạy (subagent-driven / inline).
+- **Blockers / open risks:** T7 (verify field) + nghiệm thu tổng cần session Brain (QR terminal
+  thật). Alpha `rKlkG9O8` (Sharpe 1.57, self-corr 0.49, failed_checks=[]) vẫn nằm trong DB
+  sẵn sàng nộp — user có thể `submit --no-dry-run` không cần chạy thêm phiên.
+- **Next step:** Thực thi plan theo thứ tự T1 (diag combiner offline — không tốn quota) → T2.
+- **Tests:** Không đổi code phiên này (chỉ docs + plan).
 
 ### [2026-07-10] Session 08 (tiếp) — Kiểm định độc lập + fix 3 gap
 - **Phase:** Sub-agent (general-purpose) đối chiếu code vs IMPROVEMENT_SPEC từng acceptance ->
