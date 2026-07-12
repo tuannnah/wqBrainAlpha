@@ -38,6 +38,7 @@ if str(ROOT) not in sys.path:
 import src.operators_local  # noqa: E402,F401  nạp 27 operator local vào registry TRƯỚC parse/eval
 
 from config.settings import settings  # noqa: E402
+from config.thresholds import MAX_DEPTH, SELF_CORR_MAX  # noqa: E402
 from main import (  # noqa: E402  tái dùng đúng cách main.py dựng config, không tự chế lại
     _find_market_data_dir,
     _local_neutralization,
@@ -109,6 +110,14 @@ def _expr_for_pool_id(session_factory, pool_id: int) -> str | None:
 def main() -> int:
     emit("# Chẩn đoán CombinerIdeaSource — 0 combo\n")
     emit(f"Chạy lúc: {date.today():%Y-%m-%d}\n")
+    emit(
+        "> **Lưu ý phạm vi**: script này CHỈ tái hiện nhánh tín hiệu lấy từ DB "
+        "(`repo.good_signals_for_combine`, `source=\"db\"`). Ở production, "
+        "`CombinerIdeaSource.next_batch()` còn trộn thêm tín hiệu `source=\"run\"` phát sinh "
+        "ngay trong batch hiện tại — nên các combo #N liệt kê dưới đây KHÔNG nhất thiết trùng "
+        "với combo mà production từng dựng trên cùng batch đó; đây là chẩn đoán offline trên "
+        "một tập con tín hiệu, không phải replay chính xác 1-1.\n"
+    )
 
     # ------------------------------------------------------------------
     # Bước 0: dựng DB/data/config Y HỆT closed-loop thật
@@ -231,7 +240,7 @@ def main() -> int:
             "\n### Kết luận\n\n"
             "**Tầng 1 (greedy khử tương quan) giết combo**: mọi cặp tín hiệu top đều tương "
             f"quan >= tau={TAU} nên `select_decorrelated_combos` không ghép được combo nào "
-            "(n_min=2 không đạt). Không có combo thô nào để đi tiếp Tầng 2/3/4."
+            f"(n_min={N_MIN} không đạt). Không có combo thô nào để đi tiếp Tầng 2/3/4."
         )
         _write_report()
         return 0
@@ -239,10 +248,11 @@ def main() -> int:
     # ------------------------------------------------------------------
     # Tầng 2+3+4: build_combined_expression -> _score_one_full(pool=...) -> so fitness
     # ------------------------------------------------------------------
-    emit(f"\n## Tầng 2/3/4 — dựng biểu thức, chấm gate (pool={len(repo.load_pool())} thành "
+    pool_raw = repo.load_pool()
+    pool = pool_raw or None
+    emit(f"\n## Tầng 2/3/4 — dựng biểu thức, chấm gate (pool={len(pool_raw)} thành "
          f"viên), so fitness với sub-expr tốt nhất\n")
-    pool = repo.load_pool() or None
-    emit(f"- `repo.load_pool()` trả **{len(pool or {})}** thành viên (PoolPnlModel).")
+    emit(f"- `repo.load_pool()` trả **{len(pool_raw)}** thành viên (PoolPnlModel).")
 
     def score(expr: str):
         return _score_one_full(expr, cfg, data, pool)
@@ -266,7 +276,7 @@ def main() -> int:
 
         built = build_combined_expression([s.expr for s in combo], registry=registry)
         if built is None:
-            emit("- **RỚT: depth** — không dựng được biểu thức lọt trần độ sâu MAX_DEPTH.")
+            emit(f"- **RỚT: depth** — không dựng được biểu thức lọt trần độ sâu MAX_DEPTH={MAX_DEPTH}.")
             n_depth_fail += 1
             continue
         emit(f"- Biểu thức ghép: `{built.expr}` (dùng {len(built.sub_exprs)}/{len(combo)} sub-expr)")
@@ -342,7 +352,7 @@ def main() -> int:
         arr = np.asarray(gate_selfcorr_values)
         emit(
             f"- self_corr trung bình của các combo rớt vì pool-corr: {arr.mean():.4f} "
-            f"(ngưỡng SELF_CORR_MAX=0.70), min={arr.min():.4f} max={arr.max():.4f}"
+            f"(ngưỡng SELF_CORR_MAX={SELF_CORR_MAX:.2f}), min={arr.min():.4f} max={arr.max():.4f}"
         )
 
     emit("\n## Kết luận\n")
@@ -356,21 +366,26 @@ def main() -> int:
     elif len(combos) == 0:
         emit("- Không có combo thô nào (đã kết luận ở Tầng 1 phía trên).")
     else:
+        denom_tang3 = n_gate_selfcorr_fail + n_gate_other_fail + n_dominance_fail + n_passed
+        pct_selfcorr = (
+            f"{n_gate_selfcorr_fail / denom_tang3 * 100:.0f}%" if denom_tang3 > 0 else "N/A"
+        )
         emit(
             f"**Cả {len(combos)}/{len(combos)} combo thô đều chết — do HAI tầng lọc cộng "
             f"hưởng, không phải một tầng duy nhất:**\n\n"
             f"1. **Tầng 2 (depth)**: {n_depth_fail}/{len(combos)} combo không dựng nổi biểu "
-            f"thức lọt MAX_DEPTH=7 — chết trước khi kịp tới gate.\n"
+            f"thức lọt MAX_DEPTH={MAX_DEPTH} — chết trước khi kịp tới gate.\n"
             f"2. **Tầng 3 (gate, self_corr pool)**: trong số combo VƯỢT qua Tầng 2, "
-            f"**{n_gate_selfcorr_fail}/{n_gate_selfcorr_fail + n_gate_other_fail + n_dominance_fail + n_passed}** "
-            "(100% nếu mẫu số này > 0) rớt vì `self_corr >= SELF_CORR_MAX=0.70` so với "
-            "`repo.load_pool()`.\n"
+            f"**{n_gate_selfcorr_fail}/{denom_tang3}** ({pct_selfcorr}) rớt vì "
+            f"`self_corr >= SELF_CORR_MAX={SELF_CORR_MAX:.2f}` so với `repo.load_pool()`.\n"
         )
         if gate_selfcorr_values:
             arr = np.asarray(gate_selfcorr_values)
+            margins = arr - SELF_CORR_MAX
             emit(
                 f"   self_corr đo được: {', '.join(f'{v:.4f}' for v in gate_selfcorr_values)} "
-                f"(đều vượt ngưỡng 0.70, cách xa từ +0.002 đến +0.16)."
+                f"(đều vượt ngưỡng {SELF_CORR_MAX:.2f}, cách xa từ {margins.min():+.3f} đến "
+                f"{margins.max():+.3f})."
             )
         emit(
             "\n**Kiểm chứng giả thuyết trong brief** (\"combo tương quan với chính sub-signal "
@@ -379,13 +394,14 @@ def main() -> int:
             f"**{n_selfcorr_matches_own_subexpr}** ca thành viên pool trùng nhất CHÍNH LÀ một "
             f"sub-expr của combo đó, còn **{n_selfcorr_matches_other_member}** ca thành viên "
             "trùng nhất là một alpha KHÁC hẳn trong pool (không nằm trong combo). Tức nguyên "
-            "nhân thật sự rộng hơn giả thuyết ban đầu: **pool 1321 thành viên đã BÃO HÒA** "
-            "(dày đặc các biến thể `group_neutralize(rank(...))`/`multiply(-1, rank(...))` "
-            "trên price/volume) — combo `add(rank(s1), rank(s2))` mới dựng, dù 2 sub-expr "
-            "chọn qua greedy đã <0.30 tương quan VỚI NHAU, vẫn gần như chắc chắn rơi vào bán "
-            "kính 0.70 của MỘT thành viên nào đó trong 1321 alpha đã có sẵn — vì combiner chỉ "
-            "khử tương quan trong nội bộ ~50 ứng viên (`select_decorrelated_combos`), KHÔNG "
-            "hề kiểm tra trước tương quan với TOÀN BỘ pool đã tích lũy.\n"
+            f"nhân thật sự rộng hơn giả thuyết ban đầu: **pool {len(pool_raw)} thành viên đã "
+            "BÃO HÒA** (dày đặc các biến thể `group_neutralize(rank(...))`/"
+            "`multiply(-1, rank(...))` trên price/volume) — combo `add(rank(s1), rank(s2))` "
+            f"mới dựng, dù 2 sub-expr chọn qua greedy đã <{TAU:.2f} tương quan VỚI NHAU, vẫn "
+            f"gần như chắc chắn rơi vào bán kính {SELF_CORR_MAX:.2f} của MỘT thành viên nào đó "
+            f"trong {len(pool_raw)} alpha đã có sẵn — vì combiner chỉ khử tương quan trong nội "
+            f"bộ ~{DB_LIMIT} ứng viên (`select_decorrelated_combos`), KHÔNG hề kiểm tra trước "
+            "tương quan với TOÀN BỘ pool đã tích lũy.\n"
         )
         emit(
             "\n### Fix đề xuất cho Task 2 (theo thứ tự ưu tiên, dựa trên số liệu đo được)\n\n"
