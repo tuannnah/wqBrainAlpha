@@ -67,3 +67,16 @@ def test_distinct_expr_giu_sharpe_cao_nhat():
 
 def test_db_rong_tra_list_rong():
     assert _repo().brain_proven_signals(0.8) == []
+
+
+def test_ton_trong_limit_top_sharpe():
+    """Review fix: `limit` (mặc định 50) chặn danh sách phình vô hạn khi DB tích luỹ —
+    cắt TOP theo sharpe giảm dần, không phải tuỳ tiện."""
+    repo = _repo()
+    for i in range(5):
+        _seed(repo, f"h{i}", f"expr_{i}", 1.0 + i * 0.1, "passed")
+
+    out = repo.brain_proven_signals(0.8, limit=3)
+
+    assert len(out) == 3
+    assert [s for _, s in out] == [1.4, 1.3, 1.2]  # top-3 sharpe giảm dần

@@ -525,7 +525,7 @@ class MiniBrainRepository:
         finally:
             session.close()
 
-    def brain_proven_signals(self, min_sharpe: float) -> list[tuple[str, float]]:
+    def brain_proven_signals(self, min_sharpe: float, limit: int = 50) -> list[tuple[str, float]]:
         """Nguồn tín hiệu con 'đã chứng minh tốt trên BRAIN THẬT' cho combiner (Task 2 Fix 1,
         thay `good_signals_for_combine`): calibration đo được ρ=0.308 giữa fitness LOCAL và
         sharpe Brain (`logs/diag_combiner_20260712.md`) — xếp hạng theo fitness local chọn
@@ -534,7 +534,8 @@ class MiniBrainRepository:
         sharpe >= min_sharpe, giữ sharpe CAO NHẤT nếu một expr có nhiều lần sim. KHÔNG lọc
         theo `status`: alpha 'failed' vì LOW_SHARPE (vd 1.04 < ngưỡng nộp IS_LADDER_FAIL 1.58)
         vẫn là component quý — Grinold-Kahn √N có thể đẩy nó lên ngưỡng nộp khi ghép. Sort
-        sharpe giảm dần."""
+        sharpe giảm dần, cắt TOP `limit` (review fix: DB tích luỹ vô hạn theo thời gian —
+        combiner chỉ cần các component mạnh nhất, không cần backtest cả kho)."""
         session = self.session_factory()
         try:
             rows = (
@@ -548,7 +549,8 @@ class MiniBrainRepository:
                 sharpe_f = float(sharpe)
                 if expr_string not in best or sharpe_f > best[expr_string]:
                     best[expr_string] = sharpe_f
-            return sorted(best.items(), key=lambda kv: kv[1], reverse=True)
+            ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)
+            return ranked[:limit]
         finally:
             session.close()
 

@@ -41,7 +41,7 @@ class _FakeRepo:
         # `logs/diag_combiner_20260712.md`).
         self._db = db_signals
 
-    def brain_proven_signals(self, min_sharpe=0.8):
+    def brain_proven_signals(self, min_sharpe=0.8, limit=50):
         return self._db
 
     def load_pool(self):
@@ -314,6 +314,128 @@ def test_next_batch_gop_drop_stats_vao_last_stats_va_log(monkeypatch):  # noqa: 
     assert src.last_stats["not_better"] == 1
     assert src.last_stats["greedy_empty"] == 0
     assert any("Combiner drop" in m for m in logs)
+
+
+# ------------------- Review fix: cache PnL nguồn db, không backtest lặp -------------------
+# next_batch() chạy trong vòng while của closed-loop; không cache thì MỖI batch backtest lại
+# TOÀN BỘ expr Brain-proven (~20s/expr) cho đúng những PnL series KHÔNG ĐỔI (panel local bất
+# biến trong phiên), và danh sách chỉ tăng khi DB tích luỹ. Cache expr -> (pnl, dates) sống
+# theo đời CombinerIdeaSource; kết quả ÂM (không local-usable/backtest lỗi) cũng cache để
+# không thử lại vô ích.
+
+
+def _dem_backtest_db(monkeypatch, cla, dem: dict[str, int], loi: set[str] | None = None):
+    """Monkeypatch `_score_one_full` module-level: đếm số lần backtest theo expr; expr trong
+    `loi` -> raise (mô phỏng backtest hỏng, _local_backtest phải trả None + cache âm)."""
+    rng = np.random.default_rng(7)
+
+    @dataclass
+    class _M:
+        fitness: float
+        sharpe: float
+
+    @dataclass
+    class _V:
+        passed: bool
+
+    @dataclass
+    class _R:
+        metrics: _M
+        verdict: _V
+        pnl: np.ndarray
+        dates: np.ndarray
+
+    def fake(expr, cfg, data, pool=None):
+        dem[expr] = dem.get(expr, 0) + 1
+        if loi and expr in loi:
+            raise ValueError("backtest hỏng (giả lập)")
+        return _R(_M(0.5, 0.5), _V(True), rng.normal(size=50), DATES.copy())
+
+    monkeypatch.setattr(cla, "_score_one_full", fake)
+
+
+def test_cache_khong_backtest_lai_expr_db_o_lan_hai(monkeypatch):
+    """(a) Gọi next_batch() 2 lần, repo trả CÙNG danh sách -> expr db chỉ backtest 1 lần
+    (lần 2 lấy từ cache, 0 backtest thêm)."""
+    import src.app.closed_loop_adapters as cla
+
+    dem: dict[str, int] = {}
+    _dem_backtest_db(monkeypatch, cla, dem)
+
+    run_cand = _cand("rank(ts_delta(close, 5))", np.random.default_rng(8).normal(size=50), 1.0)
+    db_expr = "rank(ts_delta(volume, 5))"
+    # n_min=3 > tổng tín hiệu (2) -> combine_stage không chạy, chỉ đo đường _signals.
+    src = cla.CombinerIdeaSource(
+        fallback=_FakeFallback([run_cand]), data=object(),
+        repo=_FakeRepo([(db_expr, 1.2)]), config=object(), registry=None, n_min=3,
+    )
+
+    src.next_batch()
+    assert dem.get(db_expr, 0) == 1  # lần 1: backtest đúng 1 lần
+
+    src.next_batch()
+    assert dem.get(db_expr, 0) == 1  # lần 2: 0 backtest thêm — lấy từ cache
+
+    # Tín hiệu db vẫn xuất hiện đầy đủ ở lần 2 (cache trả pnl, không phải bỏ qua expr).
+    assert src.last_stats["n_db_signals"] == 1
+
+
+def test_cache_chi_backtest_expr_moi_xuat_hien(monkeypatch):
+    """(b) Lần 2 repo trả thêm expr MỚI -> chỉ backtest đúng expr mới; expr lỗi cache ÂM,
+    không thử lại ở lần sau."""
+    import src.app.closed_loop_adapters as cla
+
+    dem: dict[str, int] = {}
+    e_cu, e_moi, e_loi = (
+        "rank(ts_delta(volume, 5))", "rank(ts_delta(close, 20))", "rank(ts_delta(open, 5))",
+    )
+    _dem_backtest_db(monkeypatch, cla, dem, loi={e_loi})
+
+    run_cand = _cand("rank(ts_delta(close, 5))", np.random.default_rng(9).normal(size=50), 1.0)
+
+    class _RepoDoiDanhSach(_FakeRepo):
+        """Lần 1 trả [e_cu, e_loi]; từ lần 2 thêm e_moi."""
+
+        def __init__(self):
+            self.n_goi = 0
+
+        def brain_proven_signals(self, min_sharpe=0.8, limit=50):
+            self.n_goi += 1
+            base = [(e_cu, 1.2), (e_loi, 1.1)]
+            return base if self.n_goi == 1 else base + [(e_moi, 1.0)]
+
+        def load_pool(self):
+            return {}
+
+    src = cla.CombinerIdeaSource(
+        fallback=_FakeFallback([run_cand]), data=object(),
+        repo=_RepoDoiDanhSach(), config=object(), registry=None, n_min=99,
+    )
+
+    src.next_batch()
+    assert dem == {e_cu: 1, e_loi: 1}  # lần 1: backtest cả hai (e_loi raise -> cache âm)
+
+    src.next_batch()
+    # Lần 2: CHỈ backtest e_moi; e_cu lấy cache, e_loi cache âm không thử lại.
+    assert dem == {e_cu: 1, e_loi: 1, e_moi: 1}
+    assert src.last_stats["n_db_signals"] == 2  # e_cu (cache) + e_moi; e_loi bị loại
+
+
+def test_db_limit_truyen_xuong_brain_proven_signals():
+    """(c) `db_limit` của CombinerIdeaSource truyền xuống `brain_proven_signals(limit=...)`."""
+    nhan: list[int] = []
+
+    class _RepoGhiLimit(_FakeRepo):
+        def brain_proven_signals(self, min_sharpe=0.8, limit=50):
+            nhan.append(limit)
+            return []
+
+    src = CombinerIdeaSource(
+        fallback=_FakeFallback([_cand("x", np.zeros(50), 1.0)]), data=object(),
+        repo=_RepoGhiLimit([]), config=object(), registry=None, db_limit=7,
+    )
+    src.next_batch()
+    assert nhan == [7]
 
 
 def test_next_batch_skip_van_ghi_instrumentation():

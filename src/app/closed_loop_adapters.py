@@ -649,6 +649,7 @@ class CombinerIdeaSource:
     def __init__(
         self, *, fallback, data: object, repo: object, config: object, registry: object,
         tau: float = 0.30, n_min: int = 2, n_max: int = 4, max_combos: int = 5,
+        db_limit: int = 50,
     ) -> None:
         self._fallback = fallback
         self._data: Any = data
@@ -659,6 +660,15 @@ class CombinerIdeaSource:
         self.n_min = n_min
         self.n_max = n_max
         self.max_combos = max_combos
+        # Review fix: trần số expr Brain-proven lấy từ DB mỗi batch — DB tích luỹ vô hạn,
+        # không giới hạn thì _signals backtest ngày càng nhiều expr mỗi next_batch().
+        self.db_limit = db_limit
+        # Review fix: cache PnL local của expr nguồn "db" — panel local BẤT BIẾN trong phiên
+        # nên backtest cùng expr luôn ra cùng PnL; không cache thì MỖI next_batch() (vòng
+        # while closed-loop) backtest lại TOÀN BỘ danh sách (~20s/expr) vô ích. Giá trị None
+        # = kết quả ÂM (không local-usable / backtest lỗi / 0 PnL) — cũng cache để không thử
+        # lại. Sống theo đời CombinerIdeaSource (1 phiên).
+        self._db_pnl_cache: dict[str, tuple[Any, Any] | None] = {}
         # Task 4: combo tự dựng cũng có thể rơi vào họ đã đóng (vd toàn tín hiệu con pv_reversal
         # ghép lại) -> lọc chính combo của mình, đồng thời ủy quyền xuống fallback.
         self._saturated: set[str] = set()
@@ -743,11 +753,19 @@ class CombinerIdeaSource:
             if res is None:
                 continue
             sigs.append(SubSignal(c.expr, res.pnl, res.dates, res.metrics.fitness, source="run"))
-        for expr, sharpe in self._repo.brain_proven_signals(COMBINER_MIN_BRAIN_SHARPE):
-            res = self._local_backtest(expr)
-            if res is None:
+        for expr, sharpe in self._repo.brain_proven_signals(
+            COMBINER_MIN_BRAIN_SHARPE, limit=self.db_limit,
+        ):
+            # Cache theo expr (review fix): chỉ backtest expr CHƯA gặp; query DB vẫn chạy
+            # mỗi batch (rẻ) nên sharpe luôn tươi — cache chỉ giữ (pnl, dates) bất biến.
+            if expr not in self._db_pnl_cache:
+                res = self._local_backtest(expr)
+                self._db_pnl_cache[expr] = None if res is None else (res.pnl, res.dates)
+            cached = self._db_pnl_cache[expr]
+            if cached is None:  # kết quả âm đã cache — không local-usable/backtest lỗi
                 continue
-            sigs.append(SubSignal(expr, res.pnl, res.dates, sharpe, source="db"))
+            pnl, dates = cached
+            sigs.append(SubSignal(expr, pnl, dates, sharpe, source="db"))
         return sigs
 
     def next_batch(self) -> list[ShortlistCandidate]:
