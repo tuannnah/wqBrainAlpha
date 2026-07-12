@@ -681,6 +681,17 @@ class CombinerIdeaSource:
             return _score_one_full(expr, self._config, self._data, pool)
         return score
 
+    def _score_fn_factory(self, others: list[SubSignal]):
+        """Fix 2 (Task 2): pool chấm gate combo = PnL local của CHÍNH các tín hiệu Brain-
+        proven NGOÀI combo (dict tự đánh số — `SubSignal` không có eval_id), KHÔNG PHẢI
+        `repo.load_pool()` (1321+ eval LOCAL bão hòa). Đo được (logs/diag_combiner_20260712.md,
+        20260713.md): self-corr THẬT của Brain cho vùng price/volume này chỉ 0.40-0.46, trong
+        khi pool 1321+ eval local giết oan combo với self_corr đo được 0.70-0.86 — proxy local
+        sai, không phản ánh pool alpha Brain thật của account. `combine_stage` gọi lại hàm này
+        cho MỖI combo với `others` đã loại chính thành phần combo đó -> khử luôn tự-so."""
+        pool: Any = {i: (s.dates, s.pnl) for i, s in enumerate(others)} or None
+        return self._score_fn(pool)
+
     def _local_backtest(self, expr: str) -> Any:
         """Backtest local qua `_score_one_full` NẾU expr local-usable (field nằm trong
         panel); trả `_ScoreResult` hoặc None nếu không dùng được (alt-data ngoài panel,
@@ -758,10 +769,13 @@ class CombinerIdeaSource:
                 n_run, n_db, len(signals), self.n_min,
             )
             return batch
-        pool: Any = self._repo.load_pool() or None
+        # Fix 2 (Task 2): score_fn cũ (pool=None) chỉ là fallback tương thích chữ ký —
+        # score_fn_factory (pool = tín hiệu Brain-proven NGOÀI combo) ưu tiên dùng thật sự,
+        # KHÔNG còn gọi repo.load_pool() (1321+ eval LOCAL bão hòa, xem _score_fn_factory).
         combos = combine_stage(
-            signals, self._score_fn(pool), tau=self.tau, n_min=self.n_min,
+            signals, self._score_fn(None), tau=self.tau, n_min=self.n_min,
             n_max=self.n_max, max_combos=self.max_combos, registry=self._registry,
+            score_fn_factory=self._score_fn_factory,
         )
         if self._saturated:
             combos = [c for c in combos if classify_family(c.expr) not in self._saturated]

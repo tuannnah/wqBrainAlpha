@@ -85,3 +85,48 @@ def test_khong_du_tin_hieu_khong_combo():
     one = [_sig("ts_delta(close, 5)", rng.normal(size=200), 1.0)]
     out = combine_stage(one, _scorer({}), tau=0.5, n_min=2, n_max=2, max_combos=1)
     assert out == []
+
+
+# ------------------------- Fix 2: gate pool trung thực + tự-so -------------------------
+# Diag đo được (logs/diag_combiner_20260712.md, 20260713.md): 3/3 combo vượt qua gate depth
+# đều rớt vì self_corr >= 0.70 với `repo.load_pool()` (1321-1350 eval LOCAL bão hòa), trong
+# khi self-corr THẬT của Brain cho vùng này đo được chỉ 0.40-0.46 -> proxy local giết oan.
+# Fix: pool chấm gate = PnL local của CHÍNH các tín hiệu Brain-proven NGOÀI combo (không
+# phải toàn bộ 1321 eval) -- loại thành phần combo khỏi pool cũng khử luôn tự-so.
+
+
+def test_score_fn_factory_uu_tien_loai_thanh_vien_combo_khoi_pool():
+    a, b = _two_uncorrelated()
+    c = _sig("ts_rank(close, 20)", np.random.default_rng(3).normal(size=200), 0.1)
+    all_sigs = [a, b, c]
+    combined_expr = build_combined_expression([a.expr, b.expr]).expr
+
+    received: list[list[SubSignal]] = []
+
+    def factory(others: list[SubSignal]):
+        received.append(others)
+
+        def score_fn(expr: str) -> _FakeScore:
+            fit = 2.0 if expr == combined_expr else 0.5
+            return _FakeScore(_FakeMetrics(fit), _FakeVerdict(True), np.zeros(200), DATES.copy())
+
+        return score_fn
+
+    out = combine_stage(
+        all_sigs, _scorer({}),  # score_fn cũ truyền vào nhưng KHÔNG được dùng vì có factory
+        tau=0.5, n_min=2, n_max=2, max_combos=1, score_fn_factory=factory,
+    )
+
+    assert len(out) == 1  # factory trả fitness combo=2.0 > best_component=0.5 -> giữ
+    assert len(received) == 1  # đúng 1 combo -> factory gọi đúng 1 lần
+    assert {s.expr for s in received[0]} == {c.expr}  # pool CHỈ chứa C (loại A,B = combo)
+
+
+def test_score_fn_cu_van_dung_khi_khong_co_factory():
+    """Tương thích ngược: không truyền score_fn_factory -> dùng score_fn cũ như trước Fix 2."""
+    sigs = _two_uncorrelated()
+    combined_expr = build_combined_expression([s.expr for s in sigs]).expr
+    score_fn = _scorer({combined_expr: 2.0})
+    out = combine_stage(sigs, score_fn, tau=0.5, n_min=2, n_max=2, max_combos=1)
+    assert len(out) == 1
+    assert out[0].expr == combined_expr

@@ -220,6 +220,38 @@ def test_next_batch_du_n_min_sinh_combo_va_ghi_instrumentation(monkeypatch):
     assert src.last_stats["n_combos"] == 1
 
 
+def test_next_batch_khong_con_dung_repo_load_pool(monkeypatch):
+    """Fix 2 (Task 2): gate pool không còn là `repo.load_pool()` (1321+ eval LOCAL bão hòa —
+    đo được giết oan combo self-corr 0.70-0.86 trong khi Brain thật đo 0.40-0.46, xem
+    `logs/diag_combiner_20260712.md`) — next_batch phải dùng score_fn_factory (pool = tín
+    hiệu Brain-proven NGOÀI combo) thay vì gọi `load_pool`."""
+    import src.app.closed_loop_adapters as cla
+
+    rng = np.random.default_rng(4)
+    dates = DATES.copy()
+    e1, e2 = "rank(ts_delta(close, 5))", "rank(ts_delta(volume, 5))"
+    sub_pnls = {e1: rng.normal(size=50), e2: rng.normal(size=50)}
+    monkeypatch.setattr(cla, "_score_one_full", _fake_score_one_full(sub_pnls, dates))
+
+    empty_pnl = np.zeros(0, dtype=np.float64)
+    empty_dates = np.zeros(0, dtype="datetime64[ns]")
+    curated_a = ShortlistCandidate(expr=e1, metrics=None, pnl=empty_pnl, dates=empty_dates)
+    curated_b = ShortlistCandidate(expr=e2, metrics=None, pnl=empty_pnl, dates=empty_dates)
+
+    class _RepoNoLoadPool(_FakeRepo):
+        def load_pool(self):
+            raise AssertionError("next_batch KHÔNG được gọi repo.load_pool() nữa (Fix 2)")
+
+    src = cla.CombinerIdeaSource(
+        fallback=_FakeFallback([curated_a, curated_b]), data=object(),
+        repo=_RepoNoLoadPool([]), config=object(), registry=None, tau=0.9,
+    )
+
+    out = src.next_batch()  # không raise AssertionError -> load_pool() thật sự không bị gọi
+
+    assert len(out) == 3  # 2 batch gốc + 1 combo — vẫn hoạt động bình thường
+
+
 def test_next_batch_skip_van_ghi_instrumentation():
     """(c): nhánh skip (< n_min) vẫn ghi last_stats để chẩn đoán được vì sao 0 combo."""
     empty = np.zeros(0, dtype=np.float64)

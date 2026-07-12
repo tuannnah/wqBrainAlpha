@@ -50,10 +50,19 @@ def combine_stage(
     max_combos: int = DEFAULT_MAX_COMBOS,
     max_depth: int | None = None,
     registry: OperatorRegistry | None = None,
+    score_fn_factory: Callable[[list[SubSignal]], Callable[[str], _Scored]] | None = None,
 ) -> list[ShortlistCandidate]:
-    """Chọn combo khử tương quan từ `signals`, dựng biểu thức ghép, chấm bằng `score_fn`,
-    trả về ShortlistCandidate cho các combo QUA GATE và fitness > tín hiệu con tốt nhất
-    (chấm cùng score_fn). Combo không dựng được (quá trần độ sâu) bị bỏ qua."""
+    """Chọn combo khử tương quan từ `signals`, dựng biểu thức ghép, chấm, trả về
+    ShortlistCandidate cho các combo QUA GATE và fitness > tín hiệu con tốt nhất (chấm
+    cùng scorer). Combo không dựng được (quá trần độ sâu) bị bỏ qua.
+
+    `score_fn_factory` (Fix 2, Task 2 — thay pool `repo.load_pool()` 1321+ eval LOCAL bão
+    hòa đã giết oan combo self-corr 0.70-0.86 trong khi Brain thật đo 0.40-0.46, xem
+    `logs/diag_combiner_20260712.md`): nếu có, ƯU TIÊN dùng — gọi lại cho MỖI combo với
+    danh sách `signals` NGOÀI combo đó (loại chính thành phần của combo cũng khử luôn
+    tự-so) để dựng scorer chấm gate bằng pool = PnL local của CHÍNH các tín hiệu Brain-
+    proven, không phải toàn bộ pool tích luỹ. Không có factory -> giữ `score_fn` cũ (tương
+    thích ngược cho test/call site hiện hữu)."""
     combos = select_decorrelated_combos(
         signals, tau=tau, n_min=n_min, n_max=n_max, max_combos=max_combos
     )
@@ -65,11 +74,17 @@ def combine_stage(
         )
         if built is None:
             continue
-        scored = score_fn(built.expr)
+        if score_fn_factory is not None:
+            combo_ids = {id(s) for s in combo}
+            others = [s for s in signals if id(s) not in combo_ids]
+            local_score_fn = score_fn_factory(others)
+        else:
+            local_score_fn = score_fn
+        scored = local_score_fn(built.expr)
         if not scored.verdict.passed:  # type: ignore[attr-defined]
             continue
         best_component = max(
-            (score_fn(e).metrics.fitness for e in built.sub_exprs),  # type: ignore[attr-defined]
+            (local_score_fn(e).metrics.fitness for e in built.sub_exprs),  # type: ignore[attr-defined]
             default=float("-inf"),
         )
         if scored.metrics.fitness <= best_component:  # type: ignore[attr-defined]
