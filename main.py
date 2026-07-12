@@ -692,8 +692,14 @@ def _run_closed_loop_session(
     # Guard tổng quát (Task 2): loại khỏi vocab GP mọi operator KHÔNG có trong catalog
     # Brain live TRƯỚC khi vòng kín sinh ý tưởng — né phí pre-sim vô ích khi GP emit
     # operator Brain chắc chắn từ chối (vd ts_std trước đây). Catalog rỗng -> bỏ qua.
-    _, _catalog_ops, _, _, _ = _cached_symbols(session_factory)
+    _catalog_fields, _catalog_ops, _, _, _ = _cached_symbols(session_factory)
     enforce_gp_vocab_against_catalog(default_registry(), _catalog_ops)
+    # Field-validity guard (RC1/RC2 fix idea-generator, Task known_fields): core alt-data/
+    # fundamental/hypothesis tham chiếu field KHÔNG có trong catalog cache thật bị lọc bỏ
+    # TRƯỚC khi chạm Brain sim (cardinal rule #1 — đừng tin tên field, đừng đốt quota vì field
+    # bịa). Catalog rỗng (chưa `wq load-fields`) -> None để KHÔNG lọc oan (an toàn hơn là lọc
+    # sạch mọi core khi chưa có dữ liệu để so).
+    _known_fields = set(_catalog_fields) if _catalog_fields else None
     try:
         data = ParquetSource(market_data_dir).load("1900-01-01", "2999-12-31", universe)
     except (FileNotFoundError, AssertionError, OSError) as exc:
@@ -777,6 +783,7 @@ def _run_closed_loop_session(
         top_k=top_k, max_corr=max_corr, max_ideas=max_ideas, base_seed=seed,
         refiner=refiner, include_alt_data=include_alt_data, alpha_logger=_alpha_logger,
         include_combiner=include_combiner, session_summary=_summary,
+        known_fields=_known_fields,
     )
     console.print(f"[cyan]Bắt đầu vòng kín (base_seed={seed}, Ctrl+C để dừng)…[/cyan]")
     # `finally` bao trùm mọi đường ra (chạy xong bình thường/QuotaExhausted/Ctrl+C) để

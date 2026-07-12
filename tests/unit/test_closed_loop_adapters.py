@@ -246,7 +246,7 @@ def test_build_closed_loop_include_alt_data(small_panel, repo) -> None:  # noqa:
                              registry=default_registry(), loop=_NoopLoop(),
                              pop_size=6, n_generations=0, top_k=3, max_ideas=2,
                              curated_seeds=False, include_alt_data=True,
-                             include_fundamental=False)
+                             include_fundamental=False, include_hypothesis=False)
     batch = loop.idea_source.next_batch()
     assert [c.expr for c in batch] == list(ALT_DATA_CORES)
 
@@ -399,7 +399,8 @@ def test_build_closed_loop_on_family_closed_noi_toi_idea_source(small_panel, rep
                              registry=default_registry(), loop=_NoopLoop(),
                              pop_size=6, n_generations=0, top_k=3, max_ideas=2,
                              curated_seeds=False, include_alt_data=False,
-                             include_fundamental=False, include_combiner=False)
+                             include_fundamental=False, include_combiner=False,
+                             include_hypothesis=False)
     assert loop.on_family_closed is not None
 
     loop.on_family_closed({"pv_reversal"})
@@ -443,3 +444,71 @@ def test_build_closed_loop_alt_data_bat_mac_dinh(small_panel, repo) -> None:  # 
     exprs = [c.expr for c in loop.idea_source.next_batch()]
     for core in ALT_DATA_CORES:
         assert core in exprs
+
+
+# --- Field-validity guard (RC1/RC2 fix idea-generator): core field bịa/chưa cache bị lọc
+# TRƯỚC khi chạm Brain sim, thay vì đốt quota rồi WQ từ chối (cardinal rule #1). ------------
+
+
+def test_alt_data_idea_source_loc_core_field_khong_co_trong_catalog() -> None:
+    """known_fields KHÔNG chứa field của 1 core -> core đó bị lọc, core còn lại (field đủ)
+    vẫn được phục vụ."""
+    from src.app.closed_loop_adapters import AltDataIdeaSource
+    from src.lang.registry import default_registry
+
+    cores = (
+        "rank(close)",                       # field "close" -> CÓ trong catalog
+        "rank(field_bia_khong_ton_tai)",      # field bịa -> KHÔNG có trong catalog
+    )
+    src = AltDataIdeaSource(
+        fallback=None, cores=cores,
+        known_fields=frozenset({"close", "volume"}), registry=default_registry(),
+    )
+    served = [c.expr for c in src.next_batch()]
+    assert served == ["rank(close)"]
+    assert "rank(field_bia_khong_ton_tai)" not in served
+
+
+def test_alt_data_idea_source_known_fields_none_khong_loc() -> None:
+    """known_fields=None (mặc định, catalog chưa load) -> KHÔNG lọc gì — hành vi cũ y nguyên
+    (tương thích ngược, mọi test hiện có không truyền known_fields đều phải chạy y như trước)."""
+    from src.app.closed_loop_adapters import AltDataIdeaSource
+
+    cores = ("rank(close)", "rank(field_bia_khong_ton_tai)")
+    src = AltDataIdeaSource(fallback=None, cores=cores)
+    served = [c.expr for c in src.next_batch()]
+    assert served == list(cores)
+
+
+def test_build_closed_loop_known_fields_loc_core_thieu_field(small_panel, repo) -> None:  # noqa: ANN001
+    """build_closed_loop(known_fields=...) phải thread xuống AltDataIdeaSource: core hypothesis
+    tham chiếu field không nằm trong catalog cache KHÔNG BAO GIỜ được idea_source phục vụ."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.generation.hypothesis_seeds import HYPOTHESIS_CORES
+    from src.lang.registry import default_registry
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    # Catalog THẬT chỉ có field fundamental đã verify live (khớp value_quality) — mọi field
+    # analyst4/short-interest suy đoán (chưa verify) phải bị lọc.
+    known = frozenset({"operating_income", "assets", "sales_growth", "close", "volume"})
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2,
+                             curated_seeds=False, include_alt_data=False,
+                             include_fundamental=False, include_combiner=False,
+                             known_fields=known)
+    exprs = [c.expr for c in loop.idea_source.next_batch()]
+    # Core value_quality (chỉ dùng field đã verify live) PHẢI có mặt.
+    value_quality_core = [e for e in HYPOTHESIS_CORES if "sales_growth" in e][0]
+    assert value_quality_core in exprs
+    # Core dùng field chưa verify (anl4_*, days_to_cover, shares_short) PHẢI bị lọc hết.
+    for core in HYPOTHESIS_CORES:
+        if core != value_quality_core:
+            assert core not in exprs

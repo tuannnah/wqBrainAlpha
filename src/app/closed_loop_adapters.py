@@ -22,6 +22,7 @@ from src.generation.alt_data_seeds import (
     pp_neutralization_for_expr,
 )
 from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
+from src.generation.hypothesis_seeds import HYPOTHESIS_CORES
 from src.generation.combiner import SubSignal
 from src.gp.engine import GPEngine
 from src.lang.parser import parse
@@ -481,15 +482,55 @@ class CuratedIdeaSource:
         return self._fallback.next_batch()
 
 
+def _filter_known_fields(
+    cores: tuple[str, ...], known_fields: "frozenset[str] | set[str] | None", registry: Any,
+) -> tuple[str, ...]:
+    """Field-validity guard (RC1/RC2 fix idea-generator): lọc BỎ core mà `FieldCollector`
+    thu được field KHÔNG nằm trong `known_fields` (catalog cache thật của account) TRƯỚC khi
+    core được yield đi sim — chặn đúng lỗi tốn quota/sai dấu nghiêm trọng nhất của dự án (field
+    bịa gửi thẳng Brain). `known_fields=None` -> KHÔNG lọc gì (tương thích ngược, catalog chưa
+    load). Field nhóm (sector/industry/market…, `_POWER_POOL_GROUPS`) luôn coi là hợp lệ vì
+    không phải field DỮ LIỆU (dù thực tế cores hiện tại không dùng group_neutralize nên hiếm
+    khi chạm nhánh này — vẫn trừ ra để đúng tinh thần "chỉ lọc field dữ liệu thật, không lọc oan
+    pseudo-field", tránh false-positive nếu sau này có core dùng group).
+    Core parse lỗi (hiếm, bug soạn thảo) -> LOẠI + log, không để lọt lên Brain."""
+    if known_fields is None:
+        return cores
+    kept: list[str] = []
+    for expr in cores:
+        try:
+            fields = FieldCollector(registry).visit(parse(expr)) - _POWER_POOL_GROUPS
+        except Exception as exc:
+            logger.info("Field guard: bỏ qua core (parse lỗi) {!r}: {}", expr, exc)
+            continue
+        missing = fields - set(known_fields)
+        if missing:
+            logger.info(
+                "Field guard: bỏ qua core {!r} — field không có trong catalog cache: {}",
+                expr, sorted(missing),
+            )
+            continue
+        kept.append(expr)
+    return tuple(kept)
+
+
 class AltDataIdeaSource:
     """Yield các core ALT-DATA (option8/socialmedia8… — field ngoài panel local) ở batch ĐẦU,
     rồi ủy quyền fallback. Giống CuratedIdeaSource nhưng cho seed đi THẲNG Brain: refiner nhận
     diện qua `local_usable == False` và sim thẳng (không tune local). Mở rộng khỏi họ price/
-    volume đã bão hòa -> alpha mới ít trùng self-corr (đòn bẩy chất lượng chính)."""
+    volume đã bão hòa -> alpha mới ít trùng self-corr (đòn bẩy chất lượng chính).
 
-    def __init__(self, *, fallback, cores: tuple[str, ...] = ALT_DATA_CORES) -> None:
+    `known_fields` (field-validity guard): khi truyền (khác None), MỌI core có field không
+    nằm trong tập này bị lọc bỏ ở constructor (một lần, không lặp lại mỗi next_batch) — core đó
+    KHÔNG BAO GIỜ được yield ra, tức KHÔNG BAO GIỜ chạm Brain sim."""
+
+    def __init__(
+        self, *, fallback, cores: tuple[str, ...] = ALT_DATA_CORES,
+        known_fields: "frozenset[str] | set[str] | None" = None, registry: Any = None,
+    ) -> None:
         self._fallback = fallback
-        self._cores = tuple(cores)
+        reg = registry if registry is not None else default_registry()
+        self._cores = _filter_known_fields(tuple(cores), known_fields, reg)
         self._served = False
         # Task 4: cùng cơ chế lọc + ủy quyền như CuratedIdeaSource.
         self._saturated: set[str] = set()
@@ -708,13 +749,19 @@ def build_closed_loop(
     include_alt_data: bool = True, alpha_logger: object | None = None,
     include_combiner: bool = True, session_summary: object | None = None,
     include_fundamental: bool = True, max_per_family: int | None = 8,
-    idea_generator: object | None = None,
+    idea_generator: object | None = None, include_hypothesis: bool = True,
+    known_fields: "frozenset[str] | set[str] | None" = None,
 ) -> "ClosedLoop":
     """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
     bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
     qua LLM refine, chỉ tune local rồi sim Brain 1 lần) + CalibrationTracker (ρ) + ClosedLoop.
     `loop` là RefinementLoop đã dựng (đăng nhập + Simulator thật) do composition root
-    (main.py) truyền vào; không dùng tới khi đã truyền `refiner` tường minh."""
+    (main.py) truyền vào; không dùng tới khi đã truyền `refiner` tường minh.
+
+    `known_fields`: catalog field cache thật của account (vd `set(_cached_symbols(...)[0])`
+    ở main.py) — field-validity guard (RC1/RC2): core alt-data/fundamental/hypothesis nào tham
+    chiếu field KHÔNG nằm trong tập này bị lọc bỏ, KHÔNG BAO GIỜ gửi lên Brain sim (chỉ log).
+    None (mặc định) -> KHÔNG lọc gì (tương thích ngược khi chưa/không load được catalog)."""
     from src.pipeline.closed_loop import CalibrationTracker, ClosedLoop
 
     idea_source: object = GPIdeaSource(
@@ -735,8 +782,15 @@ def build_closed_loop(
         direct_cores += ALT_DATA_CORES
     if include_fundamental:
         direct_cores += FUNDAMENTAL_CORES
+    if include_hypothesis:
+        # Họ MỚI (analyst_revision/short_interest/earnings_drift/value_quality) — field
+        # field-validity guard (known_fields) tự lọc field chưa cache thay vì đốt quota Brain.
+        direct_cores += HYPOTHESIS_CORES
     if direct_cores:
-        idea_source = AltDataIdeaSource(fallback=idea_source, cores=direct_cores)
+        idea_source = AltDataIdeaSource(
+            fallback=idea_source, cores=direct_cores,
+            known_fields=known_fields, registry=registry,
+        )
     # Combiner bọc NGOÀI CÙNG: nối tiếp mỗi batch (sau curated/alt-data) bằng alpha ghép từ
     # chính tín hiệu con batch đó + kho DB -> tự động chạy sau mỗi run (spec 2026-07-09).
     if include_combiner:

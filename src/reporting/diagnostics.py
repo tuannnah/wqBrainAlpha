@@ -53,7 +53,8 @@ def categorize_presim_reason(reason: str) -> str:
 # Nhận diện family theo dấu hiệu field (khớp substring, ưu tiên từ đặc trưng nhất trước).
 def classify_family(expr: str) -> str:
     """Suy họ nhân tố từ biểu thức (heuristic substring). Trả một trong:
-    options_iv / news_social / analyst / fundamental / pv_reversal / momentum / other."""
+    options_iv / news_social / earnings_drift / analyst_revision / short_interest /
+    value_quality / analyst / fundamental / pv_reversal / momentum / other."""
     e = expr.lower()
 
     def has(*subs: str) -> bool:
@@ -63,6 +64,21 @@ def classify_family(expr: str) -> str:
         return "options_iv"
     if has("snt_social", "social_value", "social_volume", "news", "buzz"):
         return "news_social"
+    # Family MỚI (hypothesis_seeds, Task hàng đợi RC1/RC2): kiểm TRƯỚC nhánh analyst/
+    # fundamental CHUNG bên dưới để không bị nuốt vào bucket cũ — family-budget/saturation
+    # cần nhãn RIÊNG mới coi các họ này là orthogonal (không lẫn pv_reversal/analyst/fundamental).
+    if has("eps_value"):
+        # Earnings surprise (actual vs consensus) -> PEAD/earnings-drift, KHÁC analyst_revision
+        # (revision thuần, không có "actual") — kiểm trước để "eps_value" không rơi nhầm nhánh dưới.
+        return "earnings_drift"
+    if has("afv4_eps_mean", "afv4_cfps_mean"):
+        return "analyst_revision"
+    if has("days_to_cover", "shares_short", "short_interest"):
+        return "short_interest"
+    if has("operating_income") and has("sales_growth"):
+        # Conditioning quality x growth (2 field fundamental cùng lúc) -> khác hẳn 1 core
+        # single-ratio của FUNDAMENTAL_CORES (chỉ 1 trong 2 field này, không cả hai).
+        return "value_quality"
     if has("earningsrevision", "netearnings", "analyst", "estimate", "rating", "recommendation"):
         return "analyst"
     if has("ebit", "assets", "cashflow", "book", "revenue", "dividend", "ts_backfill"):
