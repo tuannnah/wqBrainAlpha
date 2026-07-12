@@ -61,6 +61,13 @@ COMBINER_MIN_BRAIN_SHARPE: float = 0.8
 # thay vì phát hiện muộn (đo được 3/5 rồi 2/5 combo chết vì depth ở diag 20260712/20260713).
 COMBINER_MAX_COMPONENT_DEPTH: int = 4
 
+# --- Điểm-nộp (submission score, Task 2 Fix 4) ---
+# combine_stage so combo với thành phần mạnh nhất bằng điểm-nộp
+# min(sharpe/SUBMIT_SHARPE_REF, fitness/SUBMIT_FITNESS_REF) thay vì so fitness thô — buộc
+# combo phải tiến GẦN NGƯỠNG NỘP thật trên CẢ HAI trục mới được coi 'vượt trội' đáng giữ.
+SUBMIT_SHARPE_REF: float = 1.25  # tham chiếu Sharpe local ứng với ngưỡng nộp Brain (calibrate)
+SUBMIT_FITNESS_REF: float = 1.0  # tham chiếu fitness — khớp docs consultant (fitness > 1)
+
 
 def calibrated_floor(target_brain_sharpe: float = PRE_SIM_TARGET_BRAIN_SHARPE) -> float:
     """Floor local sharpe suy từ mục tiêu Brain: local >= target/1.28 thì Brain kỳ vọng >=

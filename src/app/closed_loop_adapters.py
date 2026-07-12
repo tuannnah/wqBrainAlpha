@@ -772,20 +772,32 @@ class CombinerIdeaSource:
         # Fix 2 (Task 2): score_fn cũ (pool=None) chỉ là fallback tương thích chữ ký —
         # score_fn_factory (pool = tín hiệu Brain-proven NGOÀI combo) ưu tiên dùng thật sự,
         # KHÔNG còn gọi repo.load_pool() (1321+ eval LOCAL bão hòa, xem _score_fn_factory).
+        # Fix 4: drop_stats mới, riêng cho lần gọi này — combine_stage mutate in-place.
+        drop_stats: dict[str, int] = {}
         combos = combine_stage(
             signals, self._score_fn(None), tau=self.tau, n_min=self.n_min,
             n_max=self.n_max, max_combos=self.max_combos, registry=self._registry,
-            score_fn_factory=self._score_fn_factory,
+            score_fn_factory=self._score_fn_factory, drop_stats=drop_stats,
         )
         if self._saturated:
             combos = [c for c in combos if classify_family(c.expr) not in self._saturated]
         self.last_stats = {
             "n_run_signals": n_run, "n_db_signals": n_db,
             "total_signals": len(signals), "skipped": False, "n_combos": len(combos),
+            # Fix 4: gộp drop_stats vào last_stats (mặc định 0 nếu tầng đó không rớt gì) để
+            # tool/test đọc lại chẩn đoán "TẠI SAO 0 combo" mà không cần bắt log.
+            "depth": drop_stats.get("depth", 0), "gate": drop_stats.get("gate", 0),
+            "not_better": drop_stats.get("not_better", 0),
+            "greedy_empty": drop_stats.get("greedy_empty", 0),
         }
         logger.info(
             "CombinerIdeaSource: n_run={} n_db={} total={} -> {} combo",
             n_run, n_db, len(signals), len(combos),
+        )
+        logger.info(
+            "Combiner drop: depth={} gate={} not_better={} greedy_empty={}",
+            self.last_stats["depth"], self.last_stats["gate"],
+            self.last_stats["not_better"], self.last_stats["greedy_empty"],
         )
         return batch + combos
 

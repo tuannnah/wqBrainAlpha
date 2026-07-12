@@ -123,6 +123,8 @@ def _fake_score_one_full(sub_pnls: dict[str, np.ndarray], dates: np.ndarray):
     @dataclass
     class _FakeMetrics:
         fitness: float
+        sharpe: float  # Fix 4: điểm-nộp cần cả sharpe — gán = fitness để giữ nguyên ý định
+        # gốc của fake này (combo "mạnh hơn" -> điểm-nộp cao hơn, không đổi hành vi test cũ).
 
     @dataclass
     class _FakeVerdict:
@@ -139,8 +141,8 @@ def _fake_score_one_full(sub_pnls: dict[str, np.ndarray], dates: np.ndarray):
 
     def fake(expr: str, cfg, data, pool=None):
         if expr in sub_pnls:
-            return _FakeResult(_FakeMetrics(0.5), _FakeVerdict(True), sub_pnls[expr], dates)
-        return _FakeResult(_FakeMetrics(5.0), _FakeVerdict(True), combo_pnl, dates)
+            return _FakeResult(_FakeMetrics(0.5, 0.5), _FakeVerdict(True), sub_pnls[expr], dates)
+        return _FakeResult(_FakeMetrics(5.0, 5.0), _FakeVerdict(True), combo_pnl, dates)
 
     return fake
 
@@ -250,6 +252,68 @@ def test_next_batch_khong_con_dung_repo_load_pool(monkeypatch):
     out = src.next_batch()  # không raise AssertionError -> load_pool() thật sự không bị gọi
 
     assert len(out) == 3  # 2 batch gốc + 1 combo — vẫn hoạt động bình thường
+
+
+def test_next_batch_gop_drop_stats_vao_last_stats_va_log(monkeypatch):  # noqa: ANN001
+    """Fix 4 (Task 2): next_batch gộp drop_stats (depth/gate/not_better/greedy_empty) từ
+    combine_stage vào last_stats VÀ log dòng "Combiner drop: ..." — chẩn đoán được TẠI SAO
+    0 combo mà không cần bắt log (đúng như comment gốc của `last_stats` yêu cầu)."""
+    import src.app.closed_loop_adapters as cla
+
+    rng = np.random.default_rng(6)
+    dates = DATES.copy()
+    e1, e2 = "rank(ts_delta(close, 5))", "rank(ts_delta(volume, 5))"
+    sub_pnls = {e1: rng.normal(size=50), e2: rng.normal(size=50)}
+
+    @dataclass
+    class _M:
+        fitness: float
+        sharpe: float
+
+    @dataclass
+    class _V:
+        passed: bool
+
+    @dataclass
+    class _R:
+        metrics: _M
+        verdict: _V
+        pnl: np.ndarray
+        dates: np.ndarray
+
+    def fake(expr, cfg, data, pool=None):
+        if expr in sub_pnls:
+            return _R(_M(0.5, 0.5), _V(True), sub_pnls[expr], dates)
+        # combo -> điểm-nộp THẤP hơn component -> "not_better", KHÔNG được giữ.
+        return _R(_M(0.1, 0.1), _V(True), np.ones(len(dates)), dates)
+
+    monkeypatch.setattr(cla, "_score_one_full", fake)
+
+    empty_pnl = np.zeros(0, dtype=np.float64)
+    empty_dates = np.zeros(0, dtype="datetime64[ns]")
+    curated_a = ShortlistCandidate(expr=e1, metrics=None, pnl=empty_pnl, dates=empty_dates)
+    curated_b = ShortlistCandidate(expr=e2, metrics=None, pnl=empty_pnl, dates=empty_dates)
+    src = cla.CombinerIdeaSource(
+        fallback=_FakeFallback([curated_a, curated_b]), data=object(),
+        repo=_FakeRepo([]), config=object(), registry=None, tau=0.9,
+    )
+
+    # Bắt log loguru bằng sink riêng (KHÔNG đụng sink stderr WARNING toàn phiên ở conftest)
+    # để xác nhận dòng "Combiner drop: ..." thật sự được emit, không chỉ suy từ last_stats.
+    logs: list[str] = []
+    sink_id = cla.logger.add(logs.append, level="INFO")
+    try:
+        out = src.next_batch()
+    finally:
+        cla.logger.remove(sink_id)
+
+    assert len(out) == 2  # combo bị loại (not_better) -> chỉ batch gốc
+    assert src.last_stats["n_combos"] == 0
+    assert src.last_stats["depth"] == 0
+    assert src.last_stats["gate"] == 0
+    assert src.last_stats["not_better"] == 1
+    assert src.last_stats["greedy_empty"] == 0
+    assert any("Combiner drop" in m for m in logs)
 
 
 def test_next_batch_skip_van_ghi_instrumentation():

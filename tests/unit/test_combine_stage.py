@@ -23,6 +23,7 @@ def _sig(expr: str, pnl: np.ndarray, score: float) -> SubSignal:
 @dataclass
 class _FakeMetrics:
     fitness: float
+    sharpe: float = 0.5  # Fix 4: điểm-nộp cần cả sharpe; mặc định = fallback fitness cũ.
 
 
 @dataclass
@@ -39,11 +40,17 @@ class _FakeScore:
 
 
 def _scorer(fitness_map: dict[str, float], passed: bool = True):
-    """Trả score_fn tra fitness theo expr; expr lạ -> fitness mặc định 0.5."""
+    """Trả score_fn tra `value` theo expr (expr lạ -> mặc định 0.5), gán CẢ fitness lẫn
+    sharpe = value (Fix 4: điểm-nộp = min(sharpe/SUBMIT_SHARPE_REF, fitness/SUBMIT_FITNESS_REF)
+    — đặt sharpe=fitness giữ nguyên thứ tự so sánh "value cao hơn -> điểm-nộp cao hơn" mà các
+    test dominance cũ đã giả định, không cần sửa lại kỳ vọng của chúng)."""
 
     def score_fn(expr: str) -> _FakeScore:
-        fit = fitness_map.get(expr, 0.5)
-        return _FakeScore(_FakeMetrics(fit), _FakeVerdict(passed), np.zeros(200), DATES.copy())
+        value = fitness_map.get(expr, 0.5)
+        return _FakeScore(
+            _FakeMetrics(fitness=value, sharpe=value), _FakeVerdict(passed), np.zeros(200),
+            DATES.copy(),
+        )
 
     return score_fn
 
@@ -108,7 +115,12 @@ def test_score_fn_factory_uu_tien_loai_thanh_vien_combo_khoi_pool():
 
         def score_fn(expr: str) -> _FakeScore:
             fit = 2.0 if expr == combined_expr else 0.5
-            return _FakeScore(_FakeMetrics(fit), _FakeVerdict(True), np.zeros(200), DATES.copy())
+            # sharpe=fit (như `_scorer`): điểm-nộp (Fix 4) tỉ lệ thuận fitness ở đây, giữ
+            # nguyên ý định gốc của test này (combo "mạnh hơn" component -> điểm-nộp cao hơn).
+            return _FakeScore(
+                _FakeMetrics(fitness=fit, sharpe=fit), _FakeVerdict(True), np.zeros(200),
+                DATES.copy(),
+            )
 
         return score_fn
 
@@ -155,3 +167,78 @@ def test_score_fn_cu_van_dung_khi_khong_co_factory():
     out = combine_stage(sigs, score_fn, tau=0.5, n_min=2, n_max=2, max_combos=1)
     assert len(out) == 1
     assert out[0].expr == combined_expr
+
+
+# ------------------------- Fix 4: instrument + điểm-nộp -------------------------
+# drop_stats đếm tại 3 điểm `continue` (depth/gate/not_better) + `greedy_empty`. Tiêu chí
+# vượt trội đổi từ so fitness thô sang điểm-nộp min(sharpe/SUBMIT_SHARPE_REF,
+# fitness/SUBMIT_FITNESS_REF) — combo chỉ đáng giữ nếu nó tiến GẦN NGƯỠNG NỘP hơn thành
+# phần mạnh nhất, không chỉ đơn thuần "fitness thô cao hơn".
+
+
+def test_drop_stats_dem_dung_greedy_empty():
+    stats: dict[str, int] = {}
+    out = combine_stage([], _scorer({}), tau=0.5, n_min=2, n_max=2, max_combos=1, drop_stats=stats)
+    assert out == []
+    assert stats == {"greedy_empty": 1}
+
+
+def test_drop_stats_dem_dung_depth():
+    # Ép max_depth cực nhỏ (khác COMBINER_MAX_COMPONENT_DEPTH — đây là trần combo SAU khi
+    # build, không phải trần từng component) để build_combined_expression chắc chắn thất bại.
+    sigs = _two_uncorrelated()
+    stats: dict[str, int] = {}
+    out = combine_stage(
+        sigs, _scorer({}), tau=0.5, n_min=2, n_max=2, max_combos=1, max_depth=1, drop_stats=stats,
+    )
+    assert out == []
+    assert stats == {"depth": 1}
+
+
+def test_drop_stats_dem_dung_gate():
+    sigs = _two_uncorrelated()
+    stats: dict[str, int] = {}
+    out = combine_stage(
+        sigs, _scorer({}, passed=False), tau=0.5, n_min=2, n_max=2, max_combos=1, drop_stats=stats,
+    )
+    assert out == []
+    assert stats == {"gate": 1}
+
+
+def test_drop_stats_dem_dung_not_better():
+    sigs = _two_uncorrelated()
+    stats: dict[str, int] = {}
+    # mọi expr (kể cả combo) -> value=0.5 mặc định -> điểm-nộp combo == điểm-nộp component
+    # mạnh nhất -> không vượt trội -> "not_better".
+    out = combine_stage(
+        sigs, _scorer({}), tau=0.5, n_min=2, n_max=2, max_combos=1, drop_stats=stats,
+    )
+    assert out == []
+    assert stats == {"not_better": 1}
+
+
+def test_diem_nop_thay_fitness_tho_khi_so_vuot_troi():
+    """Combo fitness THÔ cao hơn component nhưng sharpe THẤP (điểm-nộp thấp hơn) -> vẫn bị
+    loại — chứng minh tiêu chí đã đổi sang điểm-nộp, không còn so fitness thô đơn thuần."""
+    sigs = _two_uncorrelated()
+    combined_expr = build_combined_expression([s.expr for s in sigs]).expr
+
+    def score_fn(expr: str) -> _FakeScore:
+        if expr == combined_expr:
+            # fitness thô 5.0 (>> 0.5 của component) nhưng sharpe chỉ 0.1 -> điểm-nộp
+            # min(0.1/1.25, 5.0/1.0) = 0.08, THẤP hơn điểm-nộp component min(0.5/1.25,
+            # 0.5/1.0)=0.4 -> KHÔNG vượt trội dù fitness thô cao hơn hẳn.
+            return _FakeScore(
+                _FakeMetrics(fitness=5.0, sharpe=0.1), _FakeVerdict(True), np.zeros(200),
+                DATES.copy(),
+            )
+        return _FakeScore(
+            _FakeMetrics(fitness=0.5, sharpe=0.5), _FakeVerdict(True), np.zeros(200), DATES.copy(),
+        )
+
+    stats: dict[str, int] = {}
+    out = combine_stage(
+        sigs, score_fn, tau=0.5, n_min=2, n_max=2, max_combos=1, drop_stats=stats,
+    )
+    assert out == []
+    assert stats == {"not_better": 1}
