@@ -35,9 +35,13 @@ class _FakeFallback:
 
 class _FakeRepo:
     def __init__(self, db_signals):
+        # Fix 1 (Task 2): db_signals nay là [(expr, sharpe_brain)] — khớp
+        # `repo.brain_proven_signals(min_sharpe)` thật (KHÔNG còn (expr, dates, pnl, fitness)
+        # của `good_signals_for_combine` cũ, đã bị xoá vì fitness LOCAL không đáng tin, xem
+        # `logs/diag_combiner_20260712.md`).
         self._db = db_signals
 
-    def good_signals_for_combine(self, limit=50):
+    def brain_proven_signals(self, min_sharpe=0.8):
         return self._db
 
     def load_pool(self):
@@ -68,19 +72,37 @@ def test_thieu_tin_hieu_tra_batch_nguyen():
     assert src.next_batch() == [curated]
 
 
-def test_gom_tin_hieu_run_va_db_bo_curated_pnl_rong():
+def test_gom_tin_hieu_run_va_db_backtest_local_score_la_sharpe_brain(small_panel):  # noqa: ANN001
+    """Fix 1 (Task 2): nguồn db nay qua `repo.brain_proven_signals` — CombinerIdeaSource tự
+    backtest local từng expr (qua `_score_one_full`) để lấy PnL, và SCORE gán cho SubSignal
+    là sharpe BRAIN thật (từ DB), KHÔNG PHẢI fitness đo được từ backtest local đó."""
     rng = np.random.default_rng(0)
     valid = _cand("rank(ts_delta(close, 5))", rng.normal(size=50), 1.0)
-    empty = np.zeros(0, dtype=np.float64)
-    curated = ShortlistCandidate(expr="curated", metrics=None, pnl=empty, dates=empty)
-    db = [("rank(ts_delta(close, 20))", DATES.copy(), rng.normal(size=50), 1.2)]
-    src = _src([valid, curated], db)
+    empty_pnl = np.zeros(0, dtype=np.float64)
+    empty_dates = np.zeros(0, dtype="datetime64[ns]")
+    # field ngoài panel (như test alt-data khác) -> local_usable=False -> loại, không backtest.
+    curated = ShortlistCandidate(
+        expr="rank(ts_delta(anl4_afv4_eps_mean, 5))", metrics=None,
+        pnl=empty_pnl, dates=empty_dates,
+    )
+    db_expr = "rank(ts_delta(volume, 5))"
+    db_sharpe = 1.9  # sharpe Brain giả — cố tình khác xa fitness local thật để phân biệt nguồn.
+    src = CombinerIdeaSource(
+        fallback=_FakeFallback([valid, curated]), data=small_panel,
+        repo=_FakeRepo([(db_expr, db_sharpe)]),
+        config=PortfolioConfig(decay=0, truncation=0.10), registry=None,
+    )
 
     sigs = src._signals([valid, curated])
 
-    exprs = {s.expr: s.source for s in sigs}
-    assert exprs == {"rank(ts_delta(close, 5))": "run", "rank(ts_delta(close, 20))": "db"}
-    assert "curated" not in exprs  # candidate PnL rỗng bị loại
+    by_expr = {s.expr: s for s in sigs}
+    assert set(by_expr) == {"rank(ts_delta(close, 5))", db_expr}
+    assert by_expr["rank(ts_delta(close, 5))"].source == "run"
+    assert by_expr["rank(ts_delta(close, 5))"].score == 1.0  # candidate.metrics.fitness, không đổi
+    assert by_expr[db_expr].source == "db"
+    assert by_expr[db_expr].score == db_sharpe  # sharpe Brain -- KHÔNG PHẢI fitness local backtest
+    assert by_expr[db_expr].pnl.size > 0  # backtest local thật đã chạy để lấy PnL
+    assert "rank(ts_delta(anl4_afv4_eps_mean, 5))" not in by_expr  # curated pnl rỗng bị loại
 
 
 # ------------------------- Task 7: sửa bug "0 combo" -------------------------

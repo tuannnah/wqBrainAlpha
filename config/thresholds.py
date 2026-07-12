@@ -49,6 +49,14 @@ CALIBRATION_LOCAL_TO_BRAIN: float = 1.28
 PRE_SIM_TARGET_BRAIN_SHARPE: float = 0.64
 
 
+# --- Combiner (Task 2 — sửa 0-combo, xem logs/diag_combiner_20260712.md) ---
+# Sàn sharpe BRAIN THẬT để một expr được coi là "component quý" cho combiner (Fix 1):
+# KHÔNG lọc theo status — alpha 'failed' vì LOW_SHARPE (vd sharpe 1.04 < IS_LADDER_FAIL 1.58)
+# vẫn qua sàn này, vì Grinold-Kahn √N có thể đẩy nó lên ngưỡng nộp khi ghép với thành phần
+# ít tương quan khác.
+COMBINER_MIN_BRAIN_SHARPE: float = 0.8
+
+
 def calibrated_floor(target_brain_sharpe: float = PRE_SIM_TARGET_BRAIN_SHARPE) -> float:
     """Floor local sharpe suy từ mục tiêu Brain: local >= target/1.28 thì Brain kỳ vọng >=
     target. Thay ngưỡng cứng 0.5 (Pha 4) — chỉnh mục tiêu Brain, floor tự suy theo hiệu chỉnh."""

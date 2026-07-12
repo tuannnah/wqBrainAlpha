@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 from loguru import logger
 
-from config.thresholds import calibrated_floor
+from config.thresholds import COMBINER_MIN_BRAIN_SHARPE, calibrated_floor
 from src.backtest.gate import local_usable
 from src.backtest.local_tuner import tune as _tune
 from src.generation.alt_data_seeds import (
@@ -681,8 +681,33 @@ class CombinerIdeaSource:
             return _score_one_full(expr, self._config, self._data, pool)
         return score
 
+    def _local_backtest(self, expr: str) -> Any:
+        """Backtest local qua `_score_one_full` NẾU expr local-usable (field nằm trong
+        panel); trả `_ScoreResult` hoặc None nếu không dùng được (alt-data ngoài panel,
+        parse/eval lỗi, hoặc backtest ra 0 ngày PnL). Dùng chung cho cả tín hiệu "run"
+        (candidate batch chưa có pnl, kiểu curated/alt-data) lẫn "db" (Fix 1 Task 2:
+        `brain_proven_signals` chỉ trả expr+sharpe, KHÔNG có PnL sẵn — phải tự backtest)."""
+        try:
+            # data thiếu field_names() thật (fake/object() trong test cũ) -> coi như
+            # local-usable, GIỮ hành vi cũ (khớp `_is_alt_data` của LocalTunerRefiner).
+            usable = local_usable(expr, self._data)
+        except Exception:
+            usable = True
+        if not usable:
+            return None
+        try:
+            res = _score_one_full(expr, self._config, self._data)
+        except Exception as exc:
+            # Backtest lỗi (config/data giả trong test, hoặc expr rơi vào nhánh lỗi hiếm)
+            # -> bỏ qua candidate này, KHÔNG crash cả next_batch vì 1 ứng viên xấu.
+            logger.debug("CombinerIdeaSource._local_backtest: backtest lỗi cho {!r}: {}", expr, exc)
+            return None
+        if res.pnl.size == 0:
+            return None
+        return res
+
     def _signals(self, batch: list[ShortlistCandidate]) -> list[SubSignal]:
-        """Tín hiệu con ứng viên = candidate batch CÓ PnL local + kho alpha tốt DB.
+        """Tín hiệu con ứng viên = candidate batch CÓ PnL local + kho alpha Brain-proven DB.
 
         Candidate batch CHƯA có pnl local (kiểu curated/alt-data: `metrics=None`, `pnl`
         rỗng — `CuratedIdeaSource`/`AltDataIdeaSource` yield thẳng core KHÔNG tự backtest)
@@ -691,34 +716,29 @@ class CombinerIdeaSource:
         `_score_one_full` (parse->eval->portfolio->backtest->metrics — CÙNG đường tuner/
         generate_many dùng, không tự chế lại) để lấy pnl/fitness làm tín hiệu con. Alt-data
         thật (field ngoài panel local, vd option8/socialmedia8) vẫn bị loại — không có cách
-        chấm local. score = fitness để xếp seed."""
+        chấm local. score = fitness (local, đo TRỰC TIẾP từ backtest run này) để xếp seed.
+
+        Nguồn "db" (Task 2 Fix 1, thay `good_signals_for_combine`): calibration đo được
+        ρ=0.308 giữa fitness LOCAL và sharpe Brain (`logs/diag_combiner_20260712.md`) — xếp
+        theo fitness local chọn toàn GP junk, các core Brain-proven KHÔNG có mặt. Lấy
+        `repo.brain_proven_signals(COMBINER_MIN_BRAIN_SHARPE)` (expr, sharpe Brain THẬT),
+        backtest local từng expr để lấy PnL (đo tương quan) nhưng SCORE = sharpe Brain (không
+        phải fitness local vừa đo) — vì sharpe Brain mới là thước đo đáng tin theo calibration.
+        Expr không local-usable (không chấm nổi tương quan cục bộ) bị bỏ."""
         sigs: list[SubSignal] = []
         for c in batch:
             if c.metrics is not None and getattr(c.pnl, "size", 0) > 0:
                 sigs.append(SubSignal(c.expr, c.pnl, c.dates, c.metrics.fitness, source="run"))
                 continue
-            try:
-                # data thiếu field_names() thật (fake/object() trong test cũ) -> coi như
-                # local-usable, GIỮ hành vi cũ (khớp `_is_alt_data` của LocalTunerRefiner).
-                usable = local_usable(c.expr, self._data)
-            except Exception:
-                usable = True
-            if not usable:
-                continue
-            try:
-                res = _score_one_full(c.expr, self._config, self._data)
-            except Exception as exc:
-                # Backtest lỗi (config/data giả trong test, hoặc expr rơi vào nhánh lỗi
-                # hiếm) -> bỏ qua candidate này, KHÔNG crash cả next_batch vì 1 ứng viên xấu.
-                logger.debug(
-                    "CombinerIdeaSource._signals: backtest lỗi cho {!r}: {}", c.expr, exc,
-                )
-                continue
-            if res.pnl.size == 0:
+            res = self._local_backtest(c.expr)
+            if res is None:
                 continue
             sigs.append(SubSignal(c.expr, res.pnl, res.dates, res.metrics.fitness, source="run"))
-        for expr, dates, pnl, fitness in self._repo.good_signals_for_combine(limit=self.db_limit):
-            sigs.append(SubSignal(expr, pnl, dates, fitness, source="db"))
+        for expr, sharpe in self._repo.brain_proven_signals(COMBINER_MIN_BRAIN_SHARPE):
+            res = self._local_backtest(expr)
+            if res is None:
+                continue
+            sigs.append(SubSignal(expr, res.pnl, res.dates, sharpe, source="db"))
         return sigs
 
     def next_batch(self) -> list[ShortlistCandidate]:

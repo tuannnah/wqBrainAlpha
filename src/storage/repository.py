@@ -336,37 +336,6 @@ class MiniBrainRepository:
         finally:
             session.close()
 
-    def good_signals_for_combine(
-        self, limit: int = 50,
-    ) -> list[tuple[str, Dates, npt.NDArray[np.float64], float]]:
-        """Nguồn tín hiệu con 'đã chứng minh tốt' cho combiner: (expr_string, dates, pnl,
-        fitness) của các evaluation PASSED có PnL trong pool (PoolPnlModel chỉ lưu eval pass).
-        Sắp fitness giảm dần, cắt `limit`. Ghép kho này với pool run hiện tại giúp combiner
-        tìm tổ hợp ít tương quan đa dạng hơn (spec 2026-07-09)."""
-        session = self.session_factory()
-        try:
-            rows = (
-                session.query(
-                    ExpressionModel.expr_string,
-                    PoolPnlModel.dates_blob,
-                    PoolPnlModel.pnl_blob,
-                    EvaluationModel.fitness,
-                )
-                .join(EvaluationModel, PoolPnlModel.evaluation_id == EvaluationModel.id)
-                .join(ExpressionModel, EvaluationModel.expression_id == ExpressionModel.id)
-                .order_by(EvaluationModel.fitness.desc())
-                .limit(limit)
-                .all()
-            )
-            out: list[tuple[str, Dates, npt.NDArray[np.float64], float]] = []
-            for expr_string, dates_blob, pnl_blob, fitness in rows:
-                dates = np.frombuffer(dates_blob, dtype="datetime64[D]")
-                pnl = np.frombuffer(pnl_blob, dtype=np.float64).copy()
-                out.append((expr_string, dates, pnl, float(fitness or 0.0)))
-            return out
-        finally:
-            session.close()
-
     def save_pool_pnl(
         self, evaluation_id: int, dates: npt.NDArray[np.datetime64],
         pnl: npt.NDArray[np.float64],
@@ -553,6 +522,33 @@ class MiniBrainRepository:
                 .all()
             )
             return {r[0] for r in rows if r[0]}
+        finally:
+            session.close()
+
+    def brain_proven_signals(self, min_sharpe: float) -> list[tuple[str, float]]:
+        """Nguồn tín hiệu con 'đã chứng minh tốt trên BRAIN THẬT' cho combiner (Task 2 Fix 1,
+        thay `good_signals_for_combine`): calibration đo được ρ=0.308 giữa fitness LOCAL và
+        sharpe Brain (`logs/diag_combiner_20260712.md`) — xếp hạng theo fitness local chọn
+        toàn GP junk (`group_neutralize(volume, sector)`…), các core Brain-proven KHÔNG có
+        mặt. Trả (expr_string, sharpe) DISTINCT theo expr_string từ `BrainSimLinkModel` có
+        sharpe >= min_sharpe, giữ sharpe CAO NHẤT nếu một expr có nhiều lần sim. KHÔNG lọc
+        theo `status`: alpha 'failed' vì LOW_SHARPE (vd 1.04 < ngưỡng nộp IS_LADDER_FAIL 1.58)
+        vẫn là component quý — Grinold-Kahn √N có thể đẩy nó lên ngưỡng nộp khi ghép. Sort
+        sharpe giảm dần."""
+        session = self.session_factory()
+        try:
+            rows = (
+                session.query(BrainSimLinkModel.expr_string, BrainSimLinkModel.sharpe)
+                .filter(BrainSimLinkModel.sharpe.isnot(None))
+                .filter(BrainSimLinkModel.sharpe >= min_sharpe)
+                .all()
+            )
+            best: dict[str, float] = {}
+            for expr_string, sharpe in rows:
+                sharpe_f = float(sharpe)
+                if expr_string not in best or sharpe_f > best[expr_string]:
+                    best[expr_string] = sharpe_f
+            return sorted(best.items(), key=lambda kv: kv[1], reverse=True)
         finally:
             session.close()
 
