@@ -10,6 +10,7 @@ from typing import Protocol
 
 import numpy as np
 import numpy.typing as npt
+from loguru import logger
 
 from src.backtest.backtester import Backtester
 from src.backtest.config import PortfolioConfig
@@ -19,6 +20,7 @@ from src.backtest.pool_corr import PoolCorrelation
 from src.backtest.portfolio import PortfolioBuilder
 from src.data.market_panel import MarketData
 from src.engine.evaluator import EvalContext, Evaluator
+from src.lang.meaningfulness import check_meaningful
 from src.lang.parser import ParseError, parse
 from src.lang.registry import default_registry
 from src.lang.visitors import DepthVisitor, FieldCollector, Serializer
@@ -132,9 +134,13 @@ def generate_many(
     pool: dict[int, tuple[Dates, npt.NDArray[np.float64]]] | None = None,
 ) -> list[ShortlistCandidate]:
     """Chạy `gp_engine.run()` → final_population; với mỗi Individual đã eval (fitness không
-    None), serialize AST → string, chấm lại qua `_score_one_full` (một nguồn AlphaMetrics +
-    PnL duy nhất, KHÔNG backtest 2 lần), giữ cái pass gate, rồi `build_shortlist` top_k +
-    decorrelate pool-aware. Individual fitness=None (chưa eval trong GP) bị bỏ qua."""
+    None), serialize AST → string, dedup, rồi lọc CẤU TRÚC qua `check_meaningful` (no-op,
+    domain-invalid, tự lồng dư thừa -- xem `src.lang.meaningfulness`) TRƯỚC KHI chấm điểm --
+    biểu thức vô nghĩa bị loại ở đây KHÔNG tốn cả backtest local, và (quan trọng hơn) không
+    bao giờ có cơ hội lọt gate local do may rủi (ρ local↔Brain thấp) rồi đốt sim Brain thật.
+    Cái còn lại chấm qua `_score_one_full` (một nguồn AlphaMetrics + PnL duy nhất, KHÔNG
+    backtest 2 lần), giữ cái pass gate, rồi `build_shortlist` top_k + decorrelate pool-aware.
+    Individual fitness=None (chưa eval trong GP) bị bỏ qua."""
     result = gp_engine.run()
     serializer = Serializer()
     pool_corr = PoolCorrelation(pool=pool) if pool else None
@@ -148,6 +154,13 @@ def generate_many(
         if expr_str in seen:
             continue
         seen.add(expr_str)
+        meaningful_ok, meaningless_reason = check_meaningful(ind.expr)  # type: ignore[arg-type]
+        if not meaningful_ok:
+            logger.debug(
+                "GP: bỏ biểu thức vô nghĩa/degenerate trước khi sim [{}]: {}",
+                meaningless_reason, expr_str,
+            )
+            continue
         res = _score_one_full(expr_str, cfg, data, pool)
         if not res.verdict.passed:
             continue
