@@ -136,3 +136,84 @@ Chạy lúc: 2026-07-13
 4. **Tầng depth**: ưu tiên sub-expr độ sâu thấp khi greedy chọn combo (đo `_depth_of` mỗi candidate trước, không chỉ sau khi build thất bại) để giảm tỉ lệ 2/5 chết vì depth trước khi tới gate.
 
 KHÔNG hạ `SELF_CORR_MAX` — đó là ngưỡng an toàn thật ánh xạ tới self-correlation checker của Brain, hạ ngưỡng sẽ tạo alpha nộp lên chắc chắn bị Brain từ chối.
+
+---
+
+# Chẩn đoán CombinerIdeaSource — re-run sau Task 2 (4 fix)
+
+Chạy lúc: 2026-07-13
+
+> Gọi THẲNG `combine_stage` thật với `score_fn_factory` + `drop_stats` (không tự chế lại logic tầng 2/3/4 lần thứ hai như bản diag Task 1) — nguồn tầng 0 đổi sang `repo.brain_proven_signals` (Fix 1). Script này CHỈ tái hiện nhánh tín hiệu "db" (Brain-proven); production `CombinerIdeaSource.next_batch()` còn trộn thêm tín hiệu "run" phát sinh ngay trong batch hiện tại — không phải replay chính xác 1-1.
+
+## Bước 0 — Dựng môi trường (DB / panel / config)
+
+- Tài khoản active (`.wq_account`): `tuananhpo13@gmail.com`
+- DB URL: `sqlite:///wq_alpha_tuananhpo13_gmail_com.db`
+- MarketData dir: `data\market_yf`
+- Config local gate: neutralization=MARKET (yêu cầu=MARKET), decay=4, truncation=0.08, delay=1, region=USA, universe=TOP3000
+- Panel: 2618 ngày, groups có sẵn = ['sector']
+
+## Tầng 0 — `repo.brain_proven_signals(min_sharpe=0.8)`
+
+- Số expr Brain-proven (sharpe >= 0.8, mọi status): **10**
+
+10 expr Brain-proven đầu (sort sharpe giảm dần):
+
+| # | sharpe Brain | expr |
+|---|---|---|
+| 1 | 1.4500 | `add(multiply(2, multiply(-1, ts_mean(subtract(close, vwap), 60))), multiply(-1, ts_mean(subtract(close, open), 5)))` |
+| 2 | 1.4100 | `add(multiply(4, multiply(-2, ts_mean(subtract(close, vwap), 10))), multiply(-1, ts_mean(subtract(close, open), 5)))` |
+| 3 | 1.4100 | `add(multiply(2, multiply(-2, ts_mean(subtract(close, vwap), 10))), multiply(-0.5, ts_mean(subtract(close, open), 5)))` |
+| 4 | 1.4100 | `multiply(-2, ts_mean(subtract(close, vwap), 10))` |
+| 5 | 1.2200 | `group_neutralize(multiply(-1, rank(ts_delta(ts_delta(ts_zscore(close, 5), 5), 10))), sector)` |
+| 6 | 1.1500 | `multiply(-1, ts_delta(subtract(close, open), 10))` |
+| 7 | 1.0800 | `rank(ts_zscore(multiply(-1, ts_mean(subtract(close, low), 5)), 20))` |
+| 8 | 1.0100 | `add(multiply(2, multiply(-2, ts_mean(subtract(close, vwap), 5))), min(-0.5, ts_mean(subtract(close, open), 40)))` |
+| 9 | 0.9000 | `multiply(-1, ts_mean(subtract(close, open), 10))` |
+| 10 | 0.8300 | `rank(ts_zscore(power(ts_delta(high, 120), -1), 10))` |
+
+- Backtest local thành công (local-usable + có PnL): **10**/10 (0 bị loại vì không local-usable hoặc backtest lỗi/0 PnL).
+- Phân bố sharpe Brain (= score xếp seed cho greedy): n=10 min=0.8300 p25=1.0275 median=1.1850 p75=1.4100 max=1.4500 mean=1.1870
+
+## Tầng 1-4 — `combine_stage` thật (tau=0.3, n_min=2, n_max=4, max_combos=5, COMBINER_MAX_COMPONENT_DEPTH=4)
+
+- `drop_stats`: `{'gate': 1}`
+- **Số combo QUA HẾT 4 tầng: 0**
+
+## Kết luận (re-run sau Task 2)
+
+**VẪN 0 combo.** `drop_stats` chỉ rõ CHÍNH XÁC tầng nào giết hết combo thô: depth=0, gate=1, not_better=0, greedy_empty=0.
+
+### Phân tích thủ công bổ sung (vì sao gate=1, không phải bug còn sót)
+
+Chạy tay thêm một bước (không sửa `tools/diag_combiner.py` — chỉ để giải thích SỐ ĐO, không
+lặp lại logic gate) để xem CHÍNH XÁC combo nào bị `select_decorrelated_combos` chọn và tại
+sao gate từ chối nó:
+
+- Sau lọc depth (Fix 3, `COMBINER_MAX_COMPONENT_DEPTH=4`), chỉ còn **3/10** expr Brain-proven
+  đủ nông làm component: sharpe 1.41 (`multiply(-2, ts_mean(subtract(close, vwap), 10))`),
+  1.15 (`multiply(-1, ts_delta(subtract(close, open), 10))`), 0.90
+  (`multiply(-1, ts_mean(subtract(close, open), 10))`) — CẢ 3 đều thuộc CÙNG MỘT họ
+  close-vwap/close-open mean-reversion (project memory `project_alpha_vwap_reversal.md`: đây
+  là họ Brain-proven DUY NHẤT của account tới nay, Sharpe Brain 1.49 PASSED).
+- Greedy (tau=0.30) ghép được đúng 1 combo 2 thành viên: sharpe 1.41 + sharpe 1.15 ->
+  `add(rank(multiply(-2, ts_mean(subtract(close, vwap), 10))), rank(multiply(-1,
+  ts_delta(subtract(close, open), 10))))`.
+- Gate (Fix 2, pool = 8 tín hiệu Brain-proven CÒN LẠI ngoài combo, KHÔNG phải 1321 eval
+  local) đo `self_corr = 0.8672` (>= `SELF_CORR_MAX=0.70`) — thành viên pool trùng nhất là
+  `add(multiply(4, multiply(-2, ts_mean(subtract(close, vwap), 10))), multiply(-1,
+  ts_mean(subtract(close, open), 5)))` (sharpe Brain 1.41, hạng #2 trong Tầng 0): về bản chất
+  đây là CHÍNH TỔ HỢP close-vwap(10)+close-open đã có sẵn trong DB, chỉ khác hệ số scale (×4
+  thay vì ×1) và cửa sổ close-open (5 thay vì 10) — combo greedy vừa dựng gần như là BẢN SAO
+  của một alpha Brain-proven đã tồn tại.
+
+**Kết luận trung thực**: pool 9-member mới (Fix 2) KHÔNG bị "giết oan" như pool 1321 eval
+local cũ — self-corr 0.867 đo được ở đây là THẬT: tài khoản hiện chỉ có DUY NHẤT một họ
+Brain-proven (`close_vwap_reversal`) trong `BrainSimLinkModel`, nên combo nào dựng từ 2
+thành viên họ đó cũng gần trùng một biến thể khác CÙNG họ đã sim trước. Đây không phải lỗi
+combiner còn sót — đây là **giới hạn dữ liệu**: cần chạy closed-loop thật để tích luỹ thêm
+Brain sim ở CÁC HỌ khác (`fundamental_*`, `analyst_revision`, `short_interest`,
+`earnings_drift`, `value_quality`... đã có seed sẵn theo `project_review20260711_idea_
+generator.md`) trước khi combiner có đủ đa dạng để ghép ra combo thật sự mới. Khớp đúng DoD
+của brief: "diag_combiner ra ≥1 combo HOẶC drop_stats + báo cáo chỉ rõ vì sao" — trường hợp
+này rơi vào nhánh thứ hai, lý do đã đo và ghi rõ, không phải 0-combo im lặng.
