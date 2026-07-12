@@ -130,7 +130,7 @@ def _score_fn_factory_for(cfg, data):
 
 def main() -> int:
     emit("\n---\n")
-    emit(f"# Chẩn đoán CombinerIdeaSource — re-run sau Task 2 (4 fix)\n")
+    emit("# Chẩn đoán CombinerIdeaSource — re-run sau Task 2 (4 fix)\n")
     emit(f"Chạy lúc: {date.today():%Y-%m-%d}\n")
     emit(
         "> Gọi THẲNG `combine_stage` thật với `score_fn_factory` + `drop_stats` (không tự chế "
