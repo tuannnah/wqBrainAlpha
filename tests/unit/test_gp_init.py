@@ -9,8 +9,8 @@ import numpy as np
 from src.gp.individual import Individual
 from src.gp.init import init_population, ramped_half_and_half, random_tree
 from src.lang.ast import Call, Field
-from src.lang.registry import default_registry
-from src.lang.visitors import DepthVisitor
+from src.lang.registry import ArgKind, OpCategory, OperatorRegistry, OperatorSpec, default_registry
+from src.lang.visitors import ComplexityVisitor, DepthVisitor
 
 _FIELDS = ("close", "volume", "returns")
 
@@ -135,3 +135,71 @@ def test_init_population_seed_offset_xoay_sang_lo_ke_tiep():
     )
     # offset=2, count=2, len=3 -> wrap: seeds[2:3] + seeds[0:1]
     assert [ind.expr for ind in pop] == [seeds[2], seeds[0]]
+
+
+# --- RC5: ràng buộc node-count NGAY khi sinh (tránh generate-then-reject ở pre_filter) ---
+
+
+def _binary_only_registry() -> OperatorRegistry:
+    """Registry "suy biến" CHỈ có 1 operator nhị phân (PANEL, PANEL) — mọi cây full=True
+    không phải leaf sẽ luôn nổ theo cấp số nhân (2^depth - 1 node), không có lối thoát về
+    cây nhỏ hơn ở CÙNG depth. Dùng để kiểm resample bị chặn không lặp vô hạn."""
+    registry = OperatorRegistry()
+    registry.register(OperatorSpec(
+        name="_only_binary", category=OpCategory.ARITHMETIC,
+        signature=(ArgKind.PANEL, ArgKind.PANEL), impl=lambda *_: None, bounded=False,
+    ))
+    return registry
+
+
+def test_ramped_half_and_half_never_exceeds_max_nodes():
+    """(a) Với max_nodes nhỏ, MỌI cây trả về phải nằm trong ngân sách — kể cả sau khi hết
+    lượt resample (fallback phải co dần depth chứ không được trả cây vượt ngân sách)."""
+    rng = np.random.default_rng(11)
+    registry = default_registry()
+    small_max_nodes = 8
+    trees = ramped_half_and_half(
+        registry, rng, n=30, min_depth=2, max_depth=7, fields=_FIELDS,
+        max_nodes=small_max_nodes,
+    )
+    assert len(trees) == 30
+    assert all(ComplexityVisitor().visit(t) <= small_max_nodes for t in trees)
+
+
+def test_ramped_half_and_half_default_budget_matches_pre_filter():
+    """Không truyền max_nodes -> dùng mặc định MAX_NODES=30 (khớp PreFilter.max_nodes)."""
+    from config.thresholds import MAX_NODES
+
+    rng = np.random.default_rng(12)
+    registry = default_registry()
+    trees = ramped_half_and_half(
+        registry, rng, n=20, min_depth=2, max_depth=7, fields=_FIELDS,
+    )
+    assert all(ComplexityVisitor().visit(t) <= MAX_NODES for t in trees)
+
+
+def test_bounded_resample_terminates_on_degenerate_registry_that_only_makes_big_trees():
+    """(b) Registry suy biến chỉ có operator nhị phân -> cây full=True depth cao LUÔN vượt
+    ngân sách rất nhỏ (max_nodes=1). Vẫn phải kết thúc (không vòng lặp vô hạn) và trả về 1
+    cây hợp lệ (leaf, 1 node) do fallback co depth."""
+    from src.gp.init import _bounded_random_tree
+
+    registry = _binary_only_registry()
+    rng = np.random.default_rng(13)
+    tree = _bounded_random_tree(
+        registry, rng, depth=6, fields=_FIELDS, full=True, min_depth=1, max_nodes=1,
+    )
+    assert ComplexityVisitor().visit(tree) <= 1
+
+
+def test_bounded_resample_returns_smallest_seen_when_shrink_impossible():
+    """Ngân sách hợp lý (không cực đoan như =1) vẫn phải tôn trọng ngay cả với registry chỉ
+    sinh cây nhị phân bùng nổ ở depth cao."""
+    from src.gp.init import _bounded_random_tree
+
+    registry = _binary_only_registry()
+    rng = np.random.default_rng(14)
+    tree = _bounded_random_tree(
+        registry, rng, depth=6, fields=_FIELDS, full=True, min_depth=1, max_nodes=15,
+    )
+    assert ComplexityVisitor().visit(tree) <= 15

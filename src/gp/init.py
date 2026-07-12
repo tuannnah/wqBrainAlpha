@@ -10,12 +10,18 @@ import logging
 
 import numpy as np
 
+from config.thresholds import MAX_NODES
 from src.gp.individual import Individual
 from src.lang.ast import Call, Constant, Field, Node
 from src.lang.registry import ArgKind, OperatorRegistry
-from src.lang.visitors import DepthVisitor
+from src.lang.visitors import ComplexityVisitor, DepthVisitor
 
 logger = logging.getLogger(__name__)
+
+# RC5: số lần resample tối đa khi cây sinh ra vượt ngân sách node (tránh generate-rồi-bị
+# pre_filter reject "Số node > 30" -- tốn gen_ms vô ích). Hết lượt vẫn vượt -> co dần depth
+# (xem `_bounded_random_tree`), KHÔNG bao giờ vòng lặp vô hạn.
+_MAX_RESAMPLE = 8
 
 _SCALAR_RANGE = (-3.0, 3.0)  # biên độ hợp lý cho threshold/hệ số trong cây seed ngẫu nhiên
 # Tập hằng số RỜI RẠC (IMPROVEMENT_SPEC §3 Pha 1.3): thay float uniform ngẫu nhiên bằng bộ
@@ -80,6 +86,49 @@ def random_tree(
     return Call(op=spec.name, args=tuple(args))
 
 
+def _bounded_random_tree(
+    registry: OperatorRegistry,
+    rng: np.random.Generator,
+    depth: int,
+    fields: tuple[str, ...],
+    full: bool,
+    min_depth: int = 1,
+    *,
+    kind: ArgKind = ArgKind.PANEL,
+    max_nodes: int = MAX_NODES,
+) -> Node:
+    """``random_tree`` nhưng RÀNG BUỘC THÊM số node (RC5): cây vượt ``max_nodes`` sau khi
+    sinh sẽ bị resample (tối đa ``_MAX_RESAMPLE`` lần) thay vì được trả về để rồi bị
+    ``PreFilter`` reject ("Số node > 30") -- generate-then-reject lãng phí gen_ms.
+
+    Hết lượt resample vẫn vượt ngân sách -> co dần ``depth`` (giữ ``min_depth`` không vượt
+    quá depth mới) cho tới khi vừa ngân sách; ``depth=1`` LUÔN là leaf đơn (1 node) nên vòng
+    lặp co depth CHẮC CHẮN kết thúc (không bao giờ vô hạn) và luôn trả một cây hợp lệ."""
+    best: Node | None = None
+    best_size: int | None = None
+    for _ in range(_MAX_RESAMPLE):
+        tree = random_tree(registry, rng, depth, fields, full, min_depth, kind=kind)
+        size = ComplexityVisitor().visit(tree)
+        if size <= max_nodes:
+            return tree
+        if best_size is None or size < best_size:
+            best, best_size = tree, size
+
+    shrink_depth = depth - 1
+    while shrink_depth >= 1:
+        tree = random_tree(
+            registry, rng, shrink_depth, fields, full, min(min_depth, shrink_depth), kind=kind,
+        )
+        size = ComplexityVisitor().visit(tree)
+        if size <= max_nodes:
+            return tree
+        if best_size is None or size < best_size:
+            best, best_size = tree, size
+        shrink_depth -= 1
+    assert best is not None  # vòng for ở trên luôn chạy >=1 lần nên best luôn được gán
+    return best
+
+
 def _random_leaf(
     rng: np.random.Generator, fields: tuple[str, ...], *, kind: ArgKind = ArgKind.PANEL,
 ) -> Node:
@@ -97,9 +146,13 @@ def ramped_half_and_half(
     min_depth: int,
     max_depth: int,
     fields: tuple[str, ...],
+    max_nodes: int = MAX_NODES,
 ) -> list[Node]:
     """Chia n cây đều cho mỗi độ sâu trong [min_depth, max_depth], nửa full nửa grow mỗi
-    độ sâu (Koza). Phần dư dồn vào độ sâu lớn nhất."""
+    độ sâu (Koza). Phần dư dồn vào độ sâu lớn nhất.
+
+    (RC5) Mỗi cây sinh ra qua ``_bounded_random_tree`` -- ràng buộc số node <= ``max_nodes``
+    NGAY khi sinh (reject-and-resample nội bộ), thay vì để ``PreFilter`` reject sau này."""
     depths = list(range(min_depth, max_depth + 1))
     per_depth = n // len(depths)
     remainder = n - per_depth * len(depths)
@@ -110,7 +163,9 @@ def ramped_half_and_half(
         half = count // 2
         for j in range(count):
             full = j < half
-            trees.append(random_tree(registry, rng, depth, fields, full, min_depth=min_depth))
+            trees.append(_bounded_random_tree(
+                registry, rng, depth, fields, full, min_depth=min_depth, max_nodes=max_nodes,
+            ))
     return trees
 
 

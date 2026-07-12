@@ -14,8 +14,8 @@ from src.gp.variation import (
     subtree_mutation,
 )
 from src.lang.ast import Call, Constant, Field, Node
-from src.lang.registry import ArgKind, OperatorRegistry, default_registry
-from src.lang.visitors import DepthVisitor, Serializer
+from src.lang.registry import ArgKind, OpCategory, OperatorRegistry, OperatorSpec, default_registry
+from src.lang.visitors import ComplexityVisitor, DepthVisitor, Serializer
 
 _FIELDS = ("close", "volume", "returns")
 
@@ -250,3 +250,61 @@ def test_crossover_never_swaps_constant_root():
         ca, cb = crossover(const_only, normal, rng, max_depth=7)
         _check_panel_invariant(ca, registry)
         _check_panel_invariant(cb, registry)
+
+
+# --- RC5: ràng buộc node-count khi variation (mutation/crossover), tránh generate-then-reject ---
+
+
+def _big_binary_tree(depth: int) -> Node:
+    """Cây nhị phân "add" đầy đủ, sâu ``depth`` -> 2^depth - 1 node. Dùng làm cha mẹ/seed
+    ép subtree_mutation phải chèn cây con lớn để kiểm ràng buộc node budget."""
+    if depth <= 1:
+        return Field("close")
+    child = _big_binary_tree(depth - 1)
+    return Call(op="add", args=(child, child))
+
+
+def test_subtree_mutation_never_exceeds_max_nodes_or_returns_original():
+    """(c) Với max_nodes rất nhỏ, mọi kết quả subtree_mutation phải HOẶC nằm trong ngân
+    sách HOẶC bằng chính cây gốc (no-op an toàn) — không bao giờ trả cây vượt ngân sách."""
+    registry = default_registry()
+    seed_tree = _big_binary_tree(4)  # 15 node
+    small_max_nodes = 6
+    for seed in range(50):
+        rng = np.random.default_rng(seed)
+        mutated = subtree_mutation(
+            seed_tree, registry, rng, fields=_FIELDS, max_depth=7, max_nodes=small_max_nodes,
+        )
+        size = ComplexityVisitor().visit(mutated)
+        assert size <= small_max_nodes or mutated == seed_tree
+
+
+def test_crossover_never_exceeds_max_nodes_or_returns_originals():
+    """(c) crossover: mỗi con phải nằm trong ngân sách node HOẶC cặp kết quả bằng nguyên
+    cặp cha mẹ ban đầu (fallback an toàn hết lượt retry)."""
+    a = _big_binary_tree(4)  # 15 node
+    b = _big_binary_tree(4)
+    small_max_nodes = 6
+    for seed in range(50):
+        rng = np.random.default_rng(seed)
+        ca, cb = crossover(a, b, rng, max_depth=7, max_nodes=small_max_nodes)
+        size_a, size_b = ComplexityVisitor().visit(ca), ComplexityVisitor().visit(cb)
+        within_budget = size_a <= small_max_nodes and size_b <= small_max_nodes
+        unchanged = ca == a and cb == b
+        assert within_budget or unchanged
+
+
+def test_subtree_mutation_resample_terminates_with_degenerate_registry():
+    """(b) Registry suy biến chỉ có operator nhị phân -> mọi replacement subtree sinh ra
+    đều lớn. subtree_mutation vẫn phải kết thúc (không vòng lặp vô hạn) và trả về HOẶC cây
+    trong ngân sách HOẶC cây gốc không đổi."""
+    registry = OperatorRegistry()
+    registry.register(OperatorSpec(
+        name="_only_binary", category=OpCategory.ARITHMETIC,
+        signature=(ArgKind.PANEL, ArgKind.PANEL), impl=lambda *_: None, bounded=False,
+    ))
+    seed_tree = Field("close")
+    rng = np.random.default_rng(99)
+    mutated = subtree_mutation(seed_tree, registry, rng, fields=_FIELDS, max_depth=7, max_nodes=1)
+    size = ComplexityVisitor().visit(mutated)
+    assert size <= 1 or mutated == seed_tree

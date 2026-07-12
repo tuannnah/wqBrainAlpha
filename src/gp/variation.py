@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import numpy as np
 
-from config.thresholds import MAX_DEPTH
+from config.thresholds import MAX_DEPTH, MAX_NODES
 from src.gp.individual import Individual
 from src.gp.init import _random_scalar, random_tree
 from src.lang.ast import Call, Constant, Field, Node
 from src.lang.registry import ArgKind, OperatorRegistry, OperatorSpec, default_registry
-from src.lang.visitors import DepthVisitor, all_subtrees
+from src.lang.visitors import ComplexityVisitor, DepthVisitor, all_subtrees
 
 _MAX_CROSSOVER_RETRIES = 10
+# RC5: số lần resample tối đa khi subtree_mutation sinh cây con vượt ngân sách node. Hết
+# lượt vẫn vượt -> giữ nguyên cây gốc (validity repair tối giản, nhất quán cách crossover
+# đã xử lý max_depth: lùi về không đổi gì thay vì cắt cây tùy tiện).
+_MAX_MUTATION_NODE_RETRIES = 8
 
 
 def _panel_compatible_subtrees(root: Node, registry: OperatorRegistry) -> list[Node]:
@@ -57,10 +61,12 @@ def _replace_subtree(root: Node, target: Node, replacement: Node) -> Node:
 
 def crossover(
     a: Node, b: Node, rng: np.random.Generator, max_depth: int = MAX_DEPTH,
+    max_nodes: int = MAX_NODES,
 ) -> tuple[Node, Node]:
     """Tráo 1 subtree PANEL-compatible của ``a`` với 1 của ``b`` (typed). Cả hai cây kết
-    quả phải <= max_depth; hết ``_MAX_CROSSOVER_RETRIES`` lượt vẫn vượt -> trả (a, b)
-    nguyên bản (validity repair tối giản: lùi về không đổi gì)."""
+    quả phải <= max_depth VÀ <= max_nodes (RC5: ràng buộc số node ngay khi sinh, tránh
+    generate-then-reject ở PreFilter); hết ``_MAX_CROSSOVER_RETRIES`` lượt vẫn vượt -> trả
+    (a, b) nguyên bản (validity repair tối giản: lùi về không đổi gì)."""
     registry = default_registry()
     for _ in range(_MAX_CROSSOVER_RETRIES):
         points_a = _panel_compatible_subtrees(a, registry)
@@ -72,7 +78,12 @@ def crossover(
 
         new_a = _replace_subtree(a, pa, pb)
         new_b = _replace_subtree(b, pb, pa)
-        if DepthVisitor().visit(new_a) <= max_depth and DepthVisitor().visit(new_b) <= max_depth:
+        if (
+            DepthVisitor().visit(new_a) <= max_depth
+            and DepthVisitor().visit(new_b) <= max_depth
+            and ComplexityVisitor().visit(new_a) <= max_nodes
+            and ComplexityVisitor().visit(new_b) <= max_nodes
+        ):
             return new_a, new_b
     return a, b
 
@@ -172,12 +183,16 @@ def _find_parent_spec(
 
 def subtree_mutation(
     node: Node, registry: OperatorRegistry, rng: np.random.Generator,
-    fields: tuple[str, ...], max_depth: int = MAX_DEPTH,
+    fields: tuple[str, ...], max_depth: int = MAX_DEPTH, max_nodes: int = MAX_NODES,
 ) -> Node:
     """Thay 1 subtree PANEL-compatible bằng cây ngẫu nhiên mới, depth giới hạn theo
     ``remaining`` (đảm bảo cây kết quả không vượt ``max_depth``). Chỉ chọn tâm điểm trong
     các vị trí PANEL (qua ``_panel_compatible_subtrees``) — replacement luôn là cây PANEL
-    nên kết quả type-safe (không chèn Constant vào slot WINDOW/SCALAR). Trả cây mới."""
+    nên kết quả type-safe (không chèn Constant vào slot WINDOW/SCALAR).
+
+    (RC5) Cây kết quả cũng phải <= ``max_nodes``: resample subtree thay thế tối đa
+    ``_MAX_MUTATION_NODE_RETRIES`` lần; hết lượt vẫn vượt ngân sách -> trả nguyên ``node``
+    gốc không đổi (validity repair tối giản, không cắt cây tùy tiện). Trả cây mới."""
     targets = _panel_compatible_subtrees(node, registry)
     if not targets:
         return node  # không có vị trí PANEL nào (vd Constant đứng trần) -> giữ nguyên
@@ -185,11 +200,15 @@ def subtree_mutation(
     target_depth = DepthVisitor().visit(target)
     full_depth = DepthVisitor().visit(node)
     remaining = max(1, max_depth - (full_depth - target_depth))
-    new_subtree = random_tree(
-        registry, rng, depth=int(rng.integers(1, remaining + 1)), fields=fields,
-        full=bool(rng.integers(0, 2)),
-    )
-    return _replace_subtree(node, target, new_subtree)
+    for _ in range(_MAX_MUTATION_NODE_RETRIES):
+        new_subtree = random_tree(
+            registry, rng, depth=int(rng.integers(1, remaining + 1)), fields=fields,
+            full=bool(rng.integers(0, 2)),
+        )
+        candidate = _replace_subtree(node, target, new_subtree)
+        if ComplexityVisitor().visit(candidate) <= max_nodes:
+            return candidate
+    return node  # hết lượt resample vẫn vượt ngân sách node -> giữ nguyên cây gốc (an toàn)
 
 
 def hoist_mutation(node: Node, rng: np.random.Generator, registry: OperatorRegistry | None = None) -> Node:

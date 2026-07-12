@@ -7,6 +7,10 @@ from __future__ import annotations
 
 # --- Cấu trúc biểu thức ---
 MAX_DEPTH: int = 7  # trần độ sâu AST — đếm cây biểu thức TRẦN (nhất quán pre_filter, không thêm node wrapper config)
+# Trần số node (leaf+Call) — PHẢI khớp `PreFilter.max_nodes` mặc định (src/simulation/pre_filter.py)
+# vì đây là ngưỡng thật sự pre_filter dùng để reject. (RC5) GP sinh cây phải tự ràng buộc
+# ngay lúc sinh theo hằng số này để tránh generate-rồi-reject lãng phí gen_ms.
+MAX_NODES: int = 30
 
 # --- Self-correlation (cổng chặn submission thật sự) ---
 SELF_CORR_MAX: float = 0.70  # PnL self-corr >= ngưỡng này -> hard fail
