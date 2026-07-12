@@ -14,16 +14,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
+from config.thresholds import COMBINER_MAX_COMPONENT_DEPTH
 from src.generation.combiner import (
     DEFAULT_MAX_COMBOS,
     DEFAULT_N_MAX,
     DEFAULT_N_MIN,
     DEFAULT_TAU,
     SubSignal,
+    _depth_of,  # tái dùng đúng phép đo depth combiner dùng nội bộ (DepthVisitor)
     build_combined_expression,
     select_decorrelated_combos,
 )
-from src.lang.registry import OperatorRegistry
+from src.lang.registry import OperatorRegistry, default_registry
 from src.pipeline.shortlist import ShortlistCandidate
 
 
@@ -63,14 +65,21 @@ def combine_stage(
     tự-so) để dựng scorer chấm gate bằng pool = PnL local của CHÍNH các tín hiệu Brain-
     proven, không phải toàn bộ pool tích luỹ. Không có factory -> giữ `score_fn` cũ (tương
     thích ngược cho test/call site hiện hữu)."""
+    reg = registry or default_registry()
+    # Fix 3 (Task 2): loại tín hiệu quá sâu NGAY TRƯỚC greedy — component depth >
+    # COMBINER_MAX_COMPONENT_DEPTH chắc chắn vượt trần sau khi build_combined_expression bọc
+    # rank+add, đo được 3/5 rồi 2/5 combo chết ở tầng dựng biểu thức (diag 20260712/20260713)
+    # vì greedy chọn nhầm seed quá sâu trước khi biết nó sẽ hỏng. Không đụng `signals` gốc
+    # (score_fn_factory Fix 2 vẫn cần TOÀN BỘ signals để dựng pool "ngoài combo").
+    shallow_signals = [s for s in signals if _depth_of(s.expr, reg) <= COMBINER_MAX_COMPONENT_DEPTH]
     combos = select_decorrelated_combos(
-        signals, tau=tau, n_min=n_min, n_max=n_max, max_combos=max_combos
+        shallow_signals, tau=tau, n_min=n_min, n_max=n_max, max_combos=max_combos
     )
     depth_kw = {} if max_depth is None else {"max_depth": max_depth}
     out: list[ShortlistCandidate] = []
     for combo in combos:
         built = build_combined_expression(
-            [s.expr for s in combo], registry=registry, **depth_kw
+            [s.expr for s in combo], registry=reg, **depth_kw
         )
         if built is None:
             continue

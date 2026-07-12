@@ -55,6 +55,11 @@ PRE_SIM_TARGET_BRAIN_SHARPE: float = 0.64
 # vẫn qua sàn này, vì Grinold-Kahn √N có thể đẩy nó lên ngưỡng nộp khi ghép với thành phần
 # ít tương quan khác.
 COMBINER_MIN_BRAIN_SHARPE: float = 0.8
+# Trần độ sâu MỘT tín hiệu con được phép làm component combo (Fix 3): MAX_DEPTH(7) trừ 3
+# tầng wrapper build_combined_expression luôn thêm (rank chuẩn hoá + 2 tầng add cân bằng cho
+# N=4). Component sâu hơn mức này chắc chắn vượt trần sau khi bọc -> loại NGAY trước greedy
+# thay vì phát hiện muộn (đo được 3/5 rồi 2/5 combo chết vì depth ở diag 20260712/20260713).
+COMBINER_MAX_COMPONENT_DEPTH: int = 4
 
 
 def calibrated_floor(target_brain_sharpe: float = PRE_SIM_TARGET_BRAIN_SHARPE) -> float:

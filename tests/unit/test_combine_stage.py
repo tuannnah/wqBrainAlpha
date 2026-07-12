@@ -122,6 +122,31 @@ def test_score_fn_factory_uu_tien_loai_thanh_vien_combo_khoi_pool():
     assert {s.expr for s in received[0]} == {c.expr}  # pool CHỈ chứa C (loại A,B = combo)
 
 
+# ------------------------- Fix 3: depth-aware pre-filter -------------------------
+# Diag đo được (logs/diag_combiner_20260712.md: 3/5 combo, 20260713.md: 2/5 combo) chết vì
+# component quá sâu -> build_combined_expression không lọt trần MAX_DEPTH sau khi bọc
+# rank+add. Loại tín hiệu depth > COMBINER_MAX_COMPONENT_DEPTH NGAY TRƯỚC greedy (đo bằng
+# DepthVisitor như `combiner._depth_of`) thay vì phát hiện muộn sau khi dựng thất bại.
+
+
+def test_tin_hieu_qua_sau_bi_loai_truoc_greedy():
+    """signal depth 6 (> COMBINER_MAX_COMPONENT_DEPTH=4) điểm CAO NHẤT — nếu không bị loại
+    trước greedy sẽ luôn được chọn làm seed đầu tiên; phải KHÔNG BAO GIỜ có mặt trong combo."""
+    rng = np.random.default_rng(5)
+    deep = _sig(
+        "rank(ts_rank(ts_mean(ts_std_dev(ts_delta(close, 1), 5), 5), 5))",  # depth 6
+        rng.normal(size=200), 10.0,
+    )
+    a, b = _two_uncorrelated()  # depth 4 -> vào bình thường (== ngưỡng, không bị loại oan)
+    combined_expr = build_combined_expression([a.expr, b.expr]).expr
+    score_fn = _scorer({combined_expr: 2.0})
+
+    out = combine_stage([deep, a, b], score_fn, tau=0.5, n_min=2, n_max=2, max_combos=1)
+
+    assert len(out) == 1
+    assert out[0].expr == combined_expr  # combo dựng từ a,b — "deep" KHÔNG tham gia
+
+
 def test_score_fn_cu_van_dung_khi_khong_co_factory():
     """Tương thích ngược: không truyền score_fn_factory -> dùng score_fn cũ như trước Fix 2."""
     sigs = _two_uncorrelated()
