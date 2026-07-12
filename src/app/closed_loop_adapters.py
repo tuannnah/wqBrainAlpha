@@ -6,7 +6,7 @@ src.gp/src.llm/src.pipeline/src.lang (khác src/pipeline vốn cấm src.llm/src
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from src.pipeline.closed_loop import ClosedLoop
@@ -450,13 +450,22 @@ class CuratedIdeaSource:
     giống mạnh vào pipeline trước để LocalTuner tune quanh -> chạm alpha đạt chuẩn nộp nhanh,
     thay vì phụ thuộc GP random tình cờ sinh đúng cấu trúc thắng."""
 
-    def __init__(self, *, fallback, cores: tuple[str, ...] = VERIFIED_CORES) -> None:
+    def __init__(
+        self, *, fallback, cores: tuple[str, ...] = VERIFIED_CORES,
+        avoided_hashes: "set[str] | None" = None,
+        dedup_key_fn: Callable[[str], str] | None = None,
+    ) -> None:
         self._fallback = fallback
         self._cores = tuple(cores)
         self._served_curated = False
         # Task 4: giống GPIdeaSource — lọc core của CHÍNH mình theo họ đã đóng, đồng thời ủy
         # quyền xuống fallback để cả chuỗi (GP ở cuối) cũng học tín hiệu này.
         self._saturated: set[str] = set()
+        # Task 6 (RC7 lean fix): lọc core ĐÃ Brain-sim & lưu tried_hashes phiên trước tại
+        # NGUỒN — tránh phục vụ lại core bão hoà, tốn slot batch curated + gây dedup-block
+        # log spam ở ClosedLoop.run. Cả hai None -> không lọc gì (tương thích ngược).
+        self._avoided_hashes = avoided_hashes
+        self._dedup_key_fn = dedup_key_fn
 
     def set_saturated_families(self, fams: "set[str] | frozenset[str]") -> None:
         self._saturated = set(fams)
@@ -471,13 +480,21 @@ class CuratedIdeaSource:
             empty = np.zeros(0, dtype=np.float64)
             dates = np.zeros(0, dtype="datetime64[ns]")
             cores = [e for e in self._cores if classify_family(e) not in self._saturated]
+            if self._avoided_hashes is not None and self._dedup_key_fn is not None:
+                kept: list[str] = []
+                for e in cores:
+                    if self._dedup_key_fn(e) in self._avoided_hashes:
+                        logger.info("core đã sim & bão hoà, bỏ phục vụ lại: {!r}", e)
+                        continue
+                    kept.append(e)
+                cores = kept
             if cores:
                 return [
                     ShortlistCandidate(expr=e, metrics=None, pnl=empty, dates=dates)
                     for e in cores
                 ]
-            # Toàn bộ core curated thuộc họ đã đóng -> rơi thẳng xuống fallback thay vì trả
-            # rỗng (rỗng ở đây KHÔNG có nghĩa "cạn ý tưởng", chỉ là curated không còn gì hợp).
+            # Toàn bộ core curated thuộc họ đã đóng (hoặc đã bị lọc bởi avoided_hashes) -> rơi
+            # thẳng xuống fallback thay vì trả rỗng (rỗng ở đây KHÔNG có nghĩa "cạn ý tưởng").
             return self._fallback.next_batch()
         return self._fallback.next_batch()
 
@@ -764,14 +781,37 @@ def build_closed_loop(
     None (mặc định) -> KHÔNG lọc gì (tương thích ngược khi chưa/không load được catalog)."""
     from src.pipeline.closed_loop import CalibrationTracker, ClosedLoop
 
+    # Dedup key = canonical hash đã fold scale dương (Pha 1.2). Định nghĩa TRƯỚC khi dựng
+    # CuratedIdeaSource (Task 6) để wrapper này pha loãng đúng core ĐÃ Brain-sim & lưu
+    # tried_hashes phiên trước — cùng không gian hash với ClosedLoop.run/_dedup_key ở dưới.
+    _hasher = CanonicalHasher(registry if registry is not None else default_registry())
+
+    def _dedup_key(expr: str) -> str:
+        try:
+            return _hasher.visit(parse(expr))
+        except Exception:
+            return expr
+
+    # Task 6 (RC7 lean fix): nạp avoided-hashes MỘT LẦN tại build time — guard getattr+callable
+    # giống ClosedLoop.run (repo fake/cũ thiếu method vẫn chạy được, tương thích ngược).
+    _avoided_hashes_original = getattr(repo, "avoided_hashes_original", None)
+    avoided_hashes: "set[str] | None" = (
+        set(_avoided_hashes_original()) if callable(_avoided_hashes_original) else None
+    )
+
     idea_source: object = GPIdeaSource(
         data, repo, config, registry, pop_size=pop_size, n_generations=n_generations,
         base_seed=base_seed, top_k=top_k, max_corr=max_corr,
     )
     # Thử core price/volume ĐÃ KIỂM CHỨNG (Brain ~1.5+) TRƯỚC, rồi mới tới GP random — hạt
     # giống mạnh vào pipeline sớm để LocalTuner tune quanh -> chạm alpha đạt chuẩn nộp nhanh.
+    # Task 6: truyền avoided_hashes+dedup_key_fn để prune core ĐÃ bão hoà tại NGUỒN, tránh
+    # tốn slot batch curated + dedup-block log spam ở ClosedLoop.run cho core biết trước sẽ
+    # bị chặn.
     if curated_seeds:
-        idea_source = CuratedIdeaSource(fallback=idea_source)
+        idea_source = CuratedIdeaSource(
+            fallback=idea_source, avoided_hashes=avoided_hashes, dedup_key_fn=_dedup_key,
+        )
     # Alt-data đặt NGOÀI CÙNG -> phục vụ ở batch đầu (trước cả curated PV) để phiên ngắn/
     # --max-ideas nhỏ vẫn chạm alt-data (đòn bẩy độ mới), không bị PV core nuốt hết quota.
     # Alt-data + fundamental: field ngoài panel local -> refiner sim thẳng Brain. GỘP cores vào
@@ -804,16 +844,9 @@ def build_closed_loop(
     # object mà ClosedLoop cập nhật last_rho mỗi maybe_calibrate() nên refiner luôn thấy ρ mới nhất.
     if hasattr(refiner, "set_calibration_tracker"):
         refiner.set_calibration_tracker(tracker)  # type: ignore[attr-defined]
-    # Dedup key = canonical hash đã fold scale dương (Pha 1.2). Tiêm vào ClosedLoop để dedup
+    # Dedup key = canonical hash đã fold scale dương (Pha 1.2), `_dedup_key` đã định nghĩa ở
+    # trên (dùng chung cho CuratedIdeaSource + ClosedLoop) — tiêm vào ClosedLoop để dedup
     # TRƯỚC refine bắt cả biến thể scale; parse lỗi -> fallback chuỗi thô (không chặn oan).
-    _hasher = CanonicalHasher(registry if registry is not None else default_registry())
-
-    def _dedup_key(expr: str) -> str:
-        try:
-            return _hasher.visit(parse(expr))
-        except Exception:
-            return expr
-
     # Family-aware budget (Pha 2.2): classify_family suy họ từ field/cấu trúc; ClosedLoop đóng
     # họ khi cạn max_per_family mà 0 pass -> chuyển ngân sách sang họ orthogonal (yield).
     from src.reporting.diagnostics import classify_family
