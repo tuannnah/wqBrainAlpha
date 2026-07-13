@@ -669,6 +669,7 @@ def _run_closed_loop_session(
     neutralization: str = "MARKET", decay: int = 4, truncation: float = 0.08,
     base_seed: int | None = None, refiner_kind: str = "local",
     include_alt_data: bool = True, include_combiner: bool = True,
+    max_gp_sims: int | None = 3,
 ) -> bool:
     """Dựng + chạy vòng kín AI+MiniBrain thật (dùng chung cho CLI `closed-loop` và menu mục 5).
 
@@ -783,7 +784,7 @@ def _run_closed_loop_session(
         top_k=top_k, max_corr=max_corr, max_ideas=max_ideas, base_seed=seed,
         refiner=refiner, include_alt_data=include_alt_data, alpha_logger=_alpha_logger,
         include_combiner=include_combiner, session_summary=_summary,
-        known_fields=_known_fields,
+        known_fields=_known_fields, max_gp_sims=max_gp_sims,
     )
     console.print(f"[cyan]Bắt đầu vòng kín (base_seed={seed}, Ctrl+C để dừng)…[/cyan]")
     # `finally` bao trùm mọi đường ra (chạy xong bình thường/QuotaExhausted/Ctrl+C) để
@@ -853,6 +854,11 @@ def closed_loop_cmd(
         help="Nối tiếp mỗi batch bằng ALPHA GHÉP: tổ hợp tín hiệu ít tương quan (batch + kho DB) "
              "thành add(rank(...)) -> Sharpe ~√N (Grinold–Kahn), dễ chạm ngưỡng nộp. Mặc định bật.",
     ),
+    max_gp_sims: int = typer.Option(
+        3, help="Trần sim Brain THẬT/phiên riêng cho ứng viên GP (nguồn nhiễu, calibration "
+                 "ρ=0.308 không đủ tin để lọc trước) -> ưu tiên quota cho seed đã kiểm chứng/"
+                 "alpha ghép. 0 = không cap.",
+    ),
 ) -> None:
     """Vòng kín AI + MiniBrain: GP sinh ý tưởng → refine (LocalTuner local mặc định, hoặc AI
     refine ≤patience nếu --refiner llm) + gate local → SIM Brain → lưu DB + feedback → lặp
@@ -876,6 +882,7 @@ def closed_loop_cmd(
         neutralization=neutralization, decay=decay, truncation=truncation,
         base_seed=(base_seed or None), refiner_kind=refiner,
         include_alt_data=alt_data, include_combiner=combine,
+        max_gp_sims=(max_gp_sims or None),
     )
     if not ok:
         raise typer.Exit(code=1)
