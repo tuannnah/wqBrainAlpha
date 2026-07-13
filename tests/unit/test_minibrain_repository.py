@@ -257,6 +257,62 @@ def test_submit_ready_alphas_loai_alpha_co_failed_checks(repo):
     assert repo.submit_ready_alphas(self_corr_max=0.70) == []
 
 
+def test_submit_ready_alphas_loai_alpha_failed_checks_null(repo):
+    """failed_checks=NULL nghĩa là CHƯA TỪNG chạy is.checks thật (cột thêm bằng ALTER TABLE
+    không DEFAULT — mọi row trước sub-project B là NULL), KHÁC HẲN '[]' = đã kiểm và không
+    fail check nào -> KHÔNG được liệt là sẵn sàng (nhất quán cách loại self_corr=None)."""
+    from src.storage.models import AlphaModel, SimulationModel
+
+    alpha_repo = AlphaRepository(repo.session_factory)
+    alpha_id = alpha_repo.save_alpha("legacy_expr", source="test")
+    # Ghi SimulationModel trực tiếp với failed_checks=None — mô phỏng row cũ trước sub-project
+    # B (save_simulation ngày nay luôn json.dumps nên không tạo được NULL qua đường đó).
+    session = repo.session_factory()
+    try:
+        session.add(
+            SimulationModel(
+                id="simnull", alpha_id=alpha_id, wq_alpha_id="LEGACY1", region="USA",
+                universe="TOP3000", sharpe=1.6, status="passed", failed_checks=None,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+    repo.record_brain_sim(
+        canonical_hash="hnull", expr_string="legacy_expr", wq_alpha_id="LEGACY1",
+        region="USA", universe="TOP3000", sharpe=1.6, fitness=0.9, turnover=0.4,
+        self_corr=0.3, status="passed",
+    )
+    assert repo.submit_ready_alphas(self_corr_max=0.70) == []
+
+
+def test_submit_ready_alphas_bo_qua_row_failed_checks_json_hong(repo):
+    """failed_checks chứa JSON hỏng (dữ liệu rác) -> bỏ qua row đó, KHÔNG crash, KHÔNG dám
+    khẳng định 'sẵn sàng'."""
+    from src.storage.models import SimulationModel
+
+    alpha_repo = AlphaRepository(repo.session_factory)
+    alpha_id = alpha_repo.save_alpha("corrupt_expr", source="test")
+    session = repo.session_factory()
+    try:
+        session.add(
+            SimulationModel(
+                id="simbad", alpha_id=alpha_id, wq_alpha_id="CORRUPT1", region="USA",
+                universe="TOP3000", sharpe=1.6, status="passed",
+                failed_checks="{không phải JSON hợp lệ",
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+    repo.record_brain_sim(
+        canonical_hash="hbad", expr_string="corrupt_expr", wq_alpha_id="CORRUPT1",
+        region="USA", universe="TOP3000", sharpe=1.6, fitness=0.9, turnover=0.4,
+        self_corr=0.3, status="passed",
+    )
+    assert repo.submit_ready_alphas(self_corr_max=0.70) == []
+
+
 def test_submit_ready_alphas_loai_alpha_chua_verify_self_corr(repo):
     """failed_checks=[] + status=passed nhưng self-corr CHƯA từng ghi (None trong DB, vd nộp
     qua đường cũ trước khi có cầu BrainSimLinkModel) -> KHÔNG liệt là sẵn sàng (tránh báo sai)."""

@@ -657,6 +657,9 @@ class MiniBrainRepository:
                 .join(AlphaModel, SimulationModel.alpha_id == AlphaModel.id)
                 .filter(SimulationModel.status == "passed")
                 .filter(SimulationModel.wq_alpha_id.isnot(None))
+                # Tất định: dedup seen_wq_ids giữ row ĐẦU TIÊN gặp — sort sim mới nhất lên
+                # trước để cùng một wq_alpha_id nhiều lần sim luôn lấy kết quả mới nhất.
+                .order_by(SimulationModel.sim_at.desc())
                 .all()
             )
             ready: list[SubmitReadyAlpha] = []
@@ -665,8 +668,14 @@ class MiniBrainRepository:
                 wq_id = sim.wq_alpha_id
                 if wq_id in seen_wq_ids or sim.alpha_id in submitted_ids:
                     continue
+                if sim.failed_checks is None:
+                    # NULL = CHƯA TỪNG chạy is.checks thật (cột thêm bằng ALTER TABLE không
+                    # DEFAULT — mọi row trước sub-project B là NULL), KHÁC HẲN '[]' = đã kiểm
+                    # và 0 check fail. Không dám khẳng định "sẵn sàng" khi chưa verify —
+                    # nhất quán với cách loại self_corr chưa verify (None) ở dưới.
+                    continue
                 try:
-                    checks = json.loads(sim.failed_checks or "[]")
+                    checks = json.loads(sim.failed_checks)
                 except (json.JSONDecodeError, TypeError):
                     continue  # dữ liệu hỏng -> không dám khẳng định "sẵn sàng"
                 if checks != []:
