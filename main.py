@@ -669,7 +669,7 @@ def _run_closed_loop_session(
     neutralization: str = "MARKET", decay: int = 4, truncation: float = 0.08,
     base_seed: int | None = None, refiner_kind: str = "local",
     include_alt_data: bool = True, include_combiner: bool = True,
-    max_gp_sims: int | None = 3,
+    max_gp_sims: int | None = 3, alt_sweep_budget: int = 2,
 ) -> bool:
     """Dựng + chạy vòng kín AI+MiniBrain thật (dùng chung cho CLI `closed-loop` và menu mục 5).
 
@@ -766,6 +766,10 @@ def _run_closed_loop_session(
             # crowded theo thanh khoản (factor phổ biến nhất gây self-corr cao) để hạ self-corr
             # Brain. rank(volume) có trong panel local market_yf nên tune chấm được thật.
             neut_risk_factors=["rank(volume)"],
+            # Mini-sweep alt-data (Task 5): cứu hypothesis sai dấu/decay yếu bằng ≤
+            # alt_sweep_budget sim thêm thay vì vứt sau 1 sim (bằng chứng: seed social từng
+            # sai dấu, analyst revision 1-shot rồi bỏ).
+            alt_sweep_budget=alt_sweep_budget,
         )
     else:
         refiner = None  # build_closed_loop mặc định RefinementLoopRefiner(loop) (đường LLM cũ)
@@ -859,6 +863,12 @@ def closed_loop_cmd(
                  "ρ=0.308 không đủ tin để lọc trước) -> ưu tiên quota cho seed đã kiểm chứng/"
                  "alpha ghép. 0 = không cap.",
     ),
+    alt_sweep_budget: int = typer.Option(
+        2, help="Ngân sách mini-sweep cho đường alt-data đi thẳng Brain: sau sim core, tối đa "
+                 "N sim THÊM (flip dấu nếu sharpe quá âm, đổi decay nếu sharpe dương nhưng "
+                 "chưa pass) trước khi chọn kết quả điểm-nộp cao nhất. 0 = tắt sweep (đúng 1 "
+                 "sim/ý tưởng như cũ).",
+    ),
 ) -> None:
     """Vòng kín AI + MiniBrain: GP sinh ý tưởng → refine (LocalTuner local mặc định, hoặc AI
     refine ≤patience nếu --refiner llm) + gate local → SIM Brain → lưu DB + feedback → lặp
@@ -882,7 +892,7 @@ def closed_loop_cmd(
         neutralization=neutralization, decay=decay, truncation=truncation,
         base_seed=(base_seed or None), refiner_kind=refiner,
         include_alt_data=alt_data, include_combiner=combine,
-        max_gp_sims=(max_gp_sims or None),
+        max_gp_sims=(max_gp_sims or None), alt_sweep_budget=alt_sweep_budget,
     )
     if not ok:
         raise typer.Exit(code=1)

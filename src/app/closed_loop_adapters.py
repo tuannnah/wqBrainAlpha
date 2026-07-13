@@ -14,9 +14,12 @@ if TYPE_CHECKING:
 from loguru import logger
 
 from config.thresholds import (
+    ALT_SWEEP_MIN_ABS_SHARPE,
     COMBINER_MIN_BRAIN_SHARPE,
     DEGENERATE_SHARPE,
     DEGENERATE_TURNOVER,
+    SUBMIT_FITNESS_REF,
+    SUBMIT_SHARPE_REF,
     calibrated_floor,
 )
 from src.backtest.gate import local_usable
@@ -30,9 +33,16 @@ from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
 from src.generation.hypothesis_seeds import HYPOTHESIS_CORES
 from src.generation.combiner import SubSignal
 from src.gp.engine import GPEngine
+from src.lang.ast import Call, Constant
 from src.lang.parser import parse
 from src.lang.registry import default_registry
-from src.lang.visitors import CanonicalHasher, DepthVisitor, FieldCollector, OperatorCollector
+from src.lang.visitors import (
+    CanonicalHasher,
+    DepthVisitor,
+    FieldCollector,
+    OperatorCollector,
+    Serializer,
+)
 from src.reporting.diagnostics import (
     categorize_presim_reason,
     classify_family,
@@ -102,6 +112,33 @@ def _presim_reject_outcome(
     )
 
 
+def _flip_sign(expr: str) -> str:
+    """Đảo dấu biểu thức bằng AST (Task 5, KHÔNG xử lý chuỗi): nếu gốc đã là dạng
+    `multiply(-1, X)` thì BÓC thành X (tránh bọc chồng multiply(-1, multiply(-1, X))); ngược
+    lại BỌC `multiply(-1, <expr>)`. Dùng khi sim core alt-data ra sharpe quá âm — bằng chứng
+    thật: seed social từng SAI DẤU (Sharpe -0.48 lẽ ra +0.48 nếu được flip thay vì vứt thẳng
+    hypothesis kinh tế đằng sau nó)."""
+    node = parse(expr)
+    if (
+        isinstance(node, Call) and node.op == "multiply" and len(node.args) == 2
+        and isinstance(node.args[0], Constant) and node.args[0].value == -1
+    ):
+        flipped = node.args[1]
+    else:
+        flipped = Call(op="multiply", args=(Constant(value=-1.0), node))
+    return Serializer().visit(flipped)
+
+
+def _submit_score(sharpe: float | None, fitness: float | None) -> float:
+    """Điểm-nộp (cùng công thức combine_stage._submit_score, Task 2 Fix 4):
+    min(sharpe/SUBMIT_SHARPE_REF, fitness/SUBMIT_FITNESS_REF) — đo một kết quả sim tiến GẦN
+    NGƯỠNG NỘP thật tới đâu trên CẢ HAI trục. sharpe/fitness None (sim lỗi/presim) -> -inf,
+    không bao giờ được chọn làm 'tốt nhất' khi còn ứng viên có số liệu thật."""
+    if sharpe is None or fitness is None:
+        return float("-inf")
+    return min(sharpe / SUBMIT_SHARPE_REF, fitness / SUBMIT_FITNESS_REF)
+
+
 class RefinementLoopRefiner:
     """Bọc RefinementLoop: refine+sim một core (qua run_from_seed) → IdeaOutcome cho ClosedLoop."""
 
@@ -150,6 +187,7 @@ class LocalTunerRefiner:
         pp_allowed_neutralizations: frozenset[str] = frozenset(),
         neut_risk_factors: "list[str] | None" = None,
         calibration_tracker: object | None = None,
+        alt_sweep_budget: int = 2,
     ) -> None:
         self.simulator = simulator
         self.repo = repo
@@ -176,6 +214,10 @@ class LocalTunerRefiner:
         # CalibrationTracker (src/pipeline/closed_loop.py) — cho biết ρ hiện tại giữa ranking
         # local và Brain có đáng tin không (Task 5). None -> hành vi cũ y nguyên (floor cứng).
         self.calibration_tracker = calibration_tracker
+        # Ngân sách mini-sweep alt-data (Task 5): số sim THÊM tối đa sau sim core (flip dấu/
+        # decay khác) cho MỘT hypothesis — mặc định 2, tức tối đa 1 + alt_sweep_budget sim thật
+        # cho một expr alt-data. 0 = tắt sweep (giữ hành vi cũ: đúng 1 sim/ý tưởng).
+        self.alt_sweep_budget = alt_sweep_budget
 
     def set_calibration_tracker(self, tracker: object) -> None:
         """Gắn CalibrationTracker SAU khi khởi tạo — dùng khi `build_closed_loop` dựng tracker
@@ -214,10 +256,14 @@ class LocalTunerRefiner:
             return False
 
     def _sim_direct(self, candidate: ShortlistCandidate) -> IdeaOutcome:
-        """Nhánh alt-data: BỎ tune/floor local (panel không có field), sim Brain 1 lần với
-        neutralization chọn theo category dataset (docs WQ), rồi chấm/lưu như đường tune."""
+        """Nhánh alt-data: BỎ tune/floor local (panel không có field), sim Brain core 1 lần với
+        neutralization chọn theo category dataset (docs WQ), rồi mini-sweep CÓ KỶ LUẬT (Task 5):
+        mỗi hypothesis kinh tế đáng được cứu bằng ≤ `alt_sweep_budget` sim thêm thay vì vứt sau
+        1 sim (bằng chứng: seed social từng SAI DẤU, analyst revision 1-shot 0.64 rồi bỏ).
+        Sim core sharpe <= -ALT_SWEEP_MIN_ABS_SHARPE -> thử flip dấu; sharpe >= +ngưỡng nhưng
+        chưa pass -> thử decay khác quanh best-so-far. Dừng khi hết ngân sách hoặc
+        `status == 'passed'`. Outcome cuối = sim có điểm-nộp cao nhất trong TOÀN BỘ lần đã sim."""
         expr = candidate.expr
-        canonical_hash = CanonicalHasher().visit(parse(expr))
         if self.pp_allowed_neutralizations:
             neut = pp_neutralization_for_expr(
                 expr, self.pp_allowed_neutralizations, self.registry
@@ -230,22 +276,55 @@ class LocalTunerRefiner:
         except (AuthExpiredError, QuotaExceededError) as exc:
             raise QuotaExhausted(str(exc)) from exc
         if result.presim_reason is not None:
-            # Chưa chạm Brain (PreFilter loại) -> outcome trung thực, KHÔNG _finalize (nó luôn
-            # gán sims_used=1/stage='simmed', đúng cho sim thật nhưng SAI ở đây).
+            # Chưa chạm Brain (PreFilter loại) -> outcome trung thực, KHÔNG sweep (biểu thức
+            # gốc đã sai cấu trúc thì flip dấu/đổi decay cũng vô nghĩa) và KHÔNG _finalize (nó
+            # luôn gán sims_used=1/stage='simmed', đúng cho sim thật nhưng SAI ở đây).
             return _presim_reject_outcome(
-                expr, canonical_hash, result.presim_reason,
+                expr, CanonicalHasher().visit(parse(expr)), result.presim_reason,
                 stop_reason="presim_reject", source="alt_data",
             )
+        # Mini-sweep: mỗi phần tử là (expr, sim_cfg, result) của MỘT sim THẬT đã chạy.
+        attempts: list[tuple[str, Any, Any]] = [(expr, sim_cfg, result)]
+        sims_used = 1
+        budget_left = self.alt_sweep_budget
+        cur_expr, cur_cfg, cur_result = expr, sim_cfg, result
+        while budget_left > 0 and cur_result.status != "passed":
+            sharpe = cur_result.sharpe
+            if sharpe is None:
+                break  # không đủ tín hiệu để quyết định sweep tiếp -> dừng an toàn
+            if sharpe <= -ALT_SWEEP_MIN_ABS_SHARPE:
+                next_expr, next_cfg = _flip_sign(cur_expr), cur_cfg
+            elif sharpe >= ALT_SWEEP_MIN_ABS_SHARPE:
+                next_decay = 8 if cur_cfg.decay == 4 else 4
+                next_expr, next_cfg = cur_expr, cur_cfg.with_overrides(decay=next_decay)
+            else:
+                break  # |sharpe| < ngưỡng -> chưa đủ tín hiệu để biết nên flip hay đổi decay
+            try:
+                next_result = self.simulator.simulate(next_expr, settings=next_cfg.to_settings())
+            except (AuthExpiredError, QuotaExceededError) as exc:
+                raise QuotaExhausted(str(exc)) from exc
+            budget_left -= 1
+            if next_result.presim_reason is not None:
+                # Biến thể sweep (hiếm) bị PreFilter chặn -> không phải sim thật, dừng sweep
+                # thay vì cố đưa presim reject vào so điểm-nộp (sharpe/fitness None).
+                break
+            sims_used += 1
+            attempts.append((next_expr, next_cfg, next_result))
+            cur_expr, cur_cfg, cur_result = next_expr, next_cfg, next_result
+        best_expr, best_cfg, best_result = max(
+            attempts, key=lambda a: _submit_score(a[2].sharpe, a[2].fitness)
+        )
         return self._finalize(
-            result, expr, canonical_hash, sim_cfg,
+            best_result, best_expr, CanonicalHasher().visit(parse(best_expr)), best_cfg,
             stop_reason="alt_data_direct", source="alt_data", description="alt-data direct",
+            sims_used=sims_used,
         )
 
     def _finalize(
         self, result, expr: str, canonical_hash: str, sim_cfg, *,
         stop_reason: str, source: str, description: str,
         local_sharpe: float | None = None, backtest_ms: float | None = None,
-        sim_ms: float | None = None,
+        sim_ms: float | None = None, sims_used: int = 1,
     ) -> IdeaOutcome:
         """Chấm điểm + lưu DB + xét Power Pool cho 1 kết quả sim Brain — DÙNG CHUNG cho đường
         tune (local_tuned) và đường alt-data (alt_data_direct) để không lặp logic."""
@@ -288,7 +367,7 @@ class LocalTunerRefiner:
         return IdeaOutcome(
             expr=expr, canonical_hash=canonical_hash, passed=passed,
             wq_alpha_id=result.alpha_id, sharpe=result.sharpe, fitness=result.fitness,
-            turnover=result.turnover, self_corr=self_corr, sims_used=1,
+            turnover=result.turnover, self_corr=self_corr, sims_used=sims_used,
             stop_reason=stop_reason, power_pool_eligible=power_pool,
             sim_settings=sim_cfg.to_settings(), source=source,
             stage_reached="passed" if passed else "simmed", fail_check=fail_check,

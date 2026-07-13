@@ -512,3 +512,217 @@ def test_build_closed_loop_known_fields_loc_core_thieu_field(small_panel, repo) 
     for core in HYPOTHESIS_CORES:
         if core != value_quality_core:
             assert core not in exprs
+
+
+# --- Task 5: mini-sweep cho đường sim-thẳng alt-data (flip dấu + biến thể decay) ---
+# Mỗi hypothesis alt-data trước đây chỉ được sim ĐÚNG 1 LẦN rồi vứt (bằng chứng: seed social
+# từng SAI DẤU, Sharpe -0.48 -> đáng lẽ +0.48 nếu flip; analyst revision 1-shot 0.64 rồi bỏ).
+# `_sim_direct` nay sim thêm CÓ KỶ LUẬT (ngân sách `alt_sweep_budget`, mặc định 2) rồi chọn
+# outcome có điểm-nộp cao nhất trong toàn bộ các lần đã sim.
+
+
+def _sweep_cand(expr: str) -> ShortlistCandidate:
+    """Candidate alt-data (field ngoài panel local) — metrics=None/pnl rỗng như
+    AltDataIdeaSource thật yield (không tự backtest local)."""
+    return ShortlistCandidate(
+        expr=expr, metrics=None, pnl=np.zeros(0),
+        dates=np.zeros(0, dtype="datetime64[ns]"),
+    )
+
+
+class _SweepRepo:
+    def __init__(self) -> None:
+        self.saved: list[tuple[str, str | None]] = []
+
+    def save_alpha(self, expr, **k):
+        self.saved.append((expr, k.get("source")))
+        return "alpha-1"
+
+    def save_simulation(self, *a, **k):
+        return None
+
+
+class _SweepPVData:
+    """Panel local chỉ có price/volume — field alt-data (snt_social_value) nằm NGOÀI đây nên
+    `_is_alt_data` nhận diện đúng, đi thẳng `_sim_direct`."""
+
+    def field_names(self):
+        return {"close", "open", "vwap", "volume", "high", "low", "returns"}
+
+
+def _sweep_boom_tune(*a, **k):
+    raise AssertionError("nhánh alt-data KHÔNG được gọi tune local")
+
+
+class _SeqSimulator:
+    """Simulator giả trả kết quả THEO THỨ TỰ lần gọi — dùng để dựng kịch bản mini-sweep
+    (sim #1 core, sim #2 flip/decay...). Lần gọi vượt quá danh sách kết quả -> lặp lại phần tử
+    cuối (an toàn nếu implementation gọi nhiều hơn dự kiến, test vẫn assert đúng `calls`)."""
+
+    def __init__(self, results: list) -> None:
+        self._results = list(results)
+        self.calls = 0
+        self.seen: list[tuple[str, dict]] = []
+
+    def simulate(self, expr, settings=None):
+        self.calls += 1
+        self.seen.append((expr, settings))
+        idx = min(self.calls - 1, len(self._results) - 1)
+        return self._results[idx]
+
+
+_SWEEP_EXPR = "ts_mean(snt_social_value, 5)"
+_SWEEP_EXPR_FLIPPED = "multiply(-1, ts_mean(snt_social_value, 5))"
+
+
+def _sweep_result(expr, *, status, sharpe, fitness=1.0, alpha_id="wq-x"):
+    from src.simulation.simulator import SimulationResult
+
+    return SimulationResult(
+        expression=expr, alpha_id=alpha_id, status=status, sharpe=sharpe,
+        fitness=fitness, turnover=0.2, drawdown=0.1, raw={},
+    )
+
+
+def _sweep_refiner(sim, *, sim_config=None, local_decay=4, alt_sweep_budget=2):
+    from src.app.closed_loop_adapters import LocalTunerRefiner
+    from src.backtest.config import PortfolioConfig
+    from src.simulation.config import SimConfig
+
+    return LocalTunerRefiner(
+        simulator=sim, repo=_SweepRepo(), data=_SweepPVData(),
+        local_config=PortfolioConfig(decay=local_decay, truncation=0.08),
+        sim_config=sim_config or SimConfig.default(),
+        tune_fn=_sweep_boom_tune,  # nếu bị gọi -> test đỏ (chứng minh alt-data không tune local)
+        alt_sweep_budget=alt_sweep_budget,
+    )
+
+
+def test_flip_sign_boc_neu_da_multiply_am_1() -> None:
+    """AST (không xử lý chuỗi): expr gốc dạng multiply(-1, X) -> flip BÓC thành X."""
+    from src.app.closed_loop_adapters import _flip_sign
+
+    assert _flip_sign(_SWEEP_EXPR_FLIPPED) == _SWEEP_EXPR
+
+
+def test_flip_sign_boc_neu_chua_co_dau_am() -> None:
+    """Expr gốc chưa có multiply(-1, ...) -> flip BỌC bằng multiply(-1, <expr>)."""
+    from src.app.closed_loop_adapters import _flip_sign
+
+    assert _flip_sign(_SWEEP_EXPR) == _SWEEP_EXPR_FLIPPED
+
+
+def test_sim_direct_sharpe_am_sau_flip_dau_va_sim_lai() -> None:
+    """Kịch bản (a): sharpe core -0.9 (<= -ALT_SWEEP_MIN_ABS_SHARPE) -> đúng 2 lần simulate,
+    lần 2 với expr đã flip dấu, outcome cuối lấy kết quả TỐT HƠN (flip), sims_used == 2."""
+    r1 = _sweep_result(_SWEEP_EXPR, status="failed", sharpe=-0.9, fitness=0.3, alpha_id="wq-1")
+    r2 = _sweep_result(_SWEEP_EXPR_FLIPPED, status="passed", sharpe=1.6, fitness=1.2, alpha_id="wq-2")
+    sim = _SeqSimulator([r1, r2])
+    refiner = _sweep_refiner(sim)
+
+    out = refiner.refine_and_sim(_sweep_cand(_SWEEP_EXPR))
+
+    assert sim.calls == 2
+    assert sim.seen[1][0] == _SWEEP_EXPR_FLIPPED
+    assert out.sims_used == 2
+    assert out.expr == _SWEEP_EXPR_FLIPPED
+    assert out.sharpe == 1.6
+    assert out.passed is True
+
+
+def test_sim_direct_sharpe_yeu_duoi_nguong_khong_sweep() -> None:
+    """Kịch bản (b): sharpe core 0.2 (|sharpe| < ALT_SWEEP_MIN_ABS_SHARPE) -> KHÔNG đủ tín hiệu
+    để biết nên flip hay đổi decay -> đúng 1 sim, không sweep."""
+    r1 = _sweep_result(_SWEEP_EXPR, status="failed", sharpe=0.2, fitness=0.4, alpha_id="wq-1")
+    sim = _SeqSimulator([r1])
+    refiner = _sweep_refiner(sim)
+
+    out = refiner.refine_and_sim(_sweep_cand(_SWEEP_EXPR))
+
+    assert sim.calls == 1
+    assert out.sims_used == 1
+    assert out.sharpe == 0.2
+
+
+def test_sim_direct_budget_0_khong_sweep_du_sharpe_am() -> None:
+    """Kịch bản (c): alt_sweep_budget=0 -> đúng 1 sim dù sharpe -0.9 đủ điều kiện flip (ngân
+    sách 0 = không còn lượt sweep nào)."""
+    r1 = _sweep_result(_SWEEP_EXPR, status="failed", sharpe=-0.9, fitness=0.3, alpha_id="wq-1")
+    sim = _SeqSimulator([r1])
+    refiner = _sweep_refiner(sim, alt_sweep_budget=0)
+
+    out = refiner.refine_and_sim(_sweep_cand(_SWEEP_EXPR))
+
+    assert sim.calls == 1
+    assert out.sims_used == 1
+    assert out.sharpe == -0.9
+
+
+def test_sim_direct_sharpe_duong_yeu_thu_decay_khac_0_thanh_4() -> None:
+    """Kịch bản decay (0.5 <= sharpe, chưa pass): sim #1 dùng decay mặc định 0 (SimConfig.
+    default()) -> sim #2 lại BEST-SO-FAR với decay đổi sang 4 ('ngược lại -> 4'), expr KHÔNG
+    đổi (chỉ config đổi). sim #2 pass -> dừng sweep, outcome lấy kết quả tốt hơn."""
+    r1 = _sweep_result(_SWEEP_EXPR, status="failed", sharpe=0.6, fitness=0.5, alpha_id="wq-1")
+    r2 = _sweep_result(_SWEEP_EXPR, status="passed", sharpe=1.6, fitness=1.2, alpha_id="wq-2")
+    sim = _SeqSimulator([r1, r2])
+    refiner = _sweep_refiner(sim)  # SimConfig.default() -> decay=0
+
+    out = refiner.refine_and_sim(_sweep_cand(_SWEEP_EXPR))
+
+    assert sim.calls == 2
+    assert sim.seen[0][1]["decay"] == 0
+    assert sim.seen[1][1]["decay"] == 4
+    assert sim.seen[1][0] == _SWEEP_EXPR  # expr không đổi, chỉ decay đổi
+    assert out.sims_used == 2
+    assert out.sharpe == 1.6
+
+
+def test_sim_direct_sharpe_duong_yeu_thu_decay_khac_4_thanh_8() -> None:
+    """Kịch bản decay hướng ngược lại: sim_config gốc đã decay=4 -> sweep đổi sang 8."""
+    from src.simulation.config import SimConfig
+
+    r1 = _sweep_result(_SWEEP_EXPR, status="failed", sharpe=0.7, fitness=0.5, alpha_id="wq-1")
+    r2 = _sweep_result(_SWEEP_EXPR, status="passed", sharpe=1.5, fitness=1.2, alpha_id="wq-2")
+    sim = _SeqSimulator([r1, r2])
+    refiner = _sweep_refiner(sim, sim_config=SimConfig.default().with_overrides(decay=4))
+
+    out = refiner.refine_and_sim(_sweep_cand(_SWEEP_EXPR))
+
+    assert sim.seen[0][1]["decay"] == 4
+    assert sim.seen[1][1]["decay"] == 8
+    assert out.sims_used == 2
+
+
+def test_sim_direct_khong_sweep_khi_sim_dau_da_pass() -> None:
+    """sim #1 đã 'passed' -> dừng ngay (rule 4), không đốt thêm sim dù còn ngân sách."""
+    r1 = _sweep_result(_SWEEP_EXPR, status="passed", sharpe=1.8, fitness=1.3, alpha_id="wq-1")
+    sim = _SeqSimulator([r1])
+    refiner = _sweep_refiner(sim)
+
+    out = refiner.refine_and_sim(_sweep_cand(_SWEEP_EXPR))
+
+    assert sim.calls == 1
+    assert out.sims_used == 1
+    assert out.passed is True
+
+
+def test_sim_direct_quota_het_giua_luc_sweep_nem_quota_exhausted() -> None:
+    """Sweep phải dừng gọn khi sim thêm (không phải sim #1) gặp QuotaExceededError -> map
+    sang QuotaExhausted như code hiện tại (không nuốt lỗi rồi coi như 'sim thường')."""
+    from src.pipeline.closed_loop import QuotaExhausted
+    from src.simulation.simulator import QuotaExceededError
+
+    class _BoomOnSecondCall:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def simulate(self, expr, settings=None):
+            self.calls += 1
+            if self.calls == 1:
+                return _sweep_result(_SWEEP_EXPR, status="failed", sharpe=-0.9, fitness=0.3)
+            raise QuotaExceededError("hết quota ngày")
+
+    refiner = _sweep_refiner(_BoomOnSecondCall())
+
+    with pytest.raises(QuotaExhausted):
+        refiner.refine_and_sim(_sweep_cand(_SWEEP_EXPR))

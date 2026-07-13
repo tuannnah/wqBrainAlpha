@@ -80,6 +80,17 @@ SUBMIT_SHARPE_REF: float = 1.25  # tham chiếu Sharpe local ứng với ngưỡ
 SUBMIT_FITNESS_REF: float = 1.0  # tham chiếu fitness — khớp docs consultant (fitness > 1)
 
 
+# --- Mini-sweep alt-data (Task 5 — cứu hypothesis thay vì vứt sau 1 sim) ---
+# Ngưỡng |sharpe| dùng để quyết định kiểu sweep khi sim CORE (nhánh alt-data đi thẳng Brain,
+# `LocalTunerRefiner._sim_direct`) CHƯA pass:
+#   sharpe <= -ngưỡng      -> thử FLIP DẤU (bằng chứng: seed social từng SAI DẤU, Sharpe -0.48
+#                              lẽ ra +0.48 nếu được flip thay vì vứt thẳng hypothesis).
+#   sharpe >= +ngưỡng      -> thử DECAY KHÁC quanh best-so-far (bằng chứng: analyst revision
+#                              sim 1 phát ra 0.64 rồi vứt — đáng thử thêm 1-2 lần có kỷ luật).
+#   |sharpe| < ngưỡng      -> chưa đủ tín hiệu để biết nên flip hay đổi decay -> KHÔNG sweep.
+ALT_SWEEP_MIN_ABS_SHARPE: float = 0.5
+
+
 def calibrated_floor(target_brain_sharpe: float = PRE_SIM_TARGET_BRAIN_SHARPE) -> float:
     """Floor local sharpe suy từ mục tiêu Brain: local >= target/1.28 thì Brain kỳ vọng >=
     target. Thay ngưỡng cứng 0.5 (Pha 4) — chỉnh mục tiêu Brain, floor tự suy theo hiệu chỉnh."""
