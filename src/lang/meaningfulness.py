@@ -17,6 +17,14 @@ Ba nhóm quy tắc (xem `check_meaningful`):
    `power(x, mũ ÂM)` -> nổ giá trị khi cơ số gần 0.
 3. Tự lồng dư thừa: cùng một ts-operator lồng trực tiếp vào chính nó quá `MAX_SAME_TS_NEST`
    tầng (vd `ts_std_dev(ts_std_dev(ts_std_dev(x, d), d), d)`).
+4. (Task 4) `power(sign(x), k)` với `k` số mũ CHẴN: `sign(x)` ∈ {-1,0,1} nên nâng lũy thừa
+   chẵn luôn suy biến thành hằng số ∈ {0,1} — bằng chứng thật (log 07-12): sim Brain ra
+   Sharpe 0.00/turnover 0.00 (đốt 13 phút sim cho một vị thế hằng số). Xem `_check_constant_power`.
+5. (Task 4) Biểu thức mà TOÀN BỘ tập field tham chiếu ⊆ nhóm "chỉ khối lượng" (không field
+   hướng giá) — vô nghĩa kinh tế vì không mang thông tin hướng giá nào (chỉ đếm/đo khối
+   lượng giao dịch). Bằng chứng thật: sim Brain ra Sharpe -0.13. Áp trên TOÀN CÂY (không phải
+   từng subtree — một biểu thức con dùng riêng `volume` vẫn ổn nếu biểu thức TỔNG kết hợp với
+   field giá khác). Xem `_check_no_price_direction`.
 
 Nguyên tắc CONSERVATIVE: từ chối oan một biểu thức có thể tốt còn tốn kém hơn để lọt một
 biểu thức rác (biểu thức rác dù sao cũng bị gate/backtest chặn ở bước sau nếu KHÔNG khớp quy
@@ -27,7 +35,7 @@ from __future__ import annotations
 
 from src.lang.ast import Call, Constant, Field, Node
 from src.lang.registry import OpCategory, OperatorRegistry, default_registry
-from src.lang.visitors import Serializer, all_subtrees
+from src.lang.visitors import FieldCollector, Serializer, all_subtrees
 
 # Ngưỡng tự lồng cùng một ts-operator: cho phép tối đa 2 tầng (vd
 # ts_std_dev(ts_std_dev(x, d), d) vẫn hợp lệ); từ 3 tầng trở lên (>MAX_SAME_TS_NEST) coi là
@@ -48,6 +56,16 @@ _MAYBE_NEGATIVE_CALL_OPS = frozenset(
 # Toán tử nhị phân coi là no-op khi 2 tham số GIỐNG HỆT CẤU TRÚC (so bằng Serializer).
 _NOOP_SAME_ARG_OPS = frozenset({"min", "max", "subtract", "divide"})
 
+# Field CHỈ đo khối lượng giao dịch, KHÔNG mang thông tin hướng giá (Task 4). Danh sách rút
+# từ các seed/family hiện có trong repo (src/generation/families.py, alt_data_seeds.py) —
+# chỉ liệt kê field THẬT SỰ vô hướng, tránh nhận nhầm field khác (vd "cap"/market-cap dù
+# không phải giá OHLC vẫn phản ánh gián tiếp mức định giá, KHÔNG đưa vào đây để bảo thủ).
+_VOLUME_ONLY_FIELDS = frozenset({"volume", "adv20", "sharesout"})
+
+# Field mang thông tin hướng giá (kể cả returns, phái sinh từ close). Biểu thức CHỈ cần dùng
+# 1 trong các field này (kết hợp với volume hay không) là đã CÓ hướng giá -> không bị chặn.
+_PRICE_DIRECTION_FIELDS = frozenset({"close", "open", "high", "low", "vwap", "returns"})
+
 
 def check_meaningful(
     node: Node, registry: OperatorRegistry | None = None,
@@ -55,8 +73,15 @@ def check_meaningful(
     """Duyệt TOÀN BỘ cây (preorder, cha trước con -- xem `all_subtrees`), trả
     `(False, lý_do)` ngay tại node vi phạm ĐẦU TIÊN gặp (nếu một chuỗi tự lồng vi phạm, node
     cao nhất trong chuỗi được báo cáo, không cần dò tiếp xuống con). Trả `(True, "")` nếu
-    không node nào trong cây vi phạm quy tắc nào."""
+    không node nào trong cây vi phạm quy tắc nào.
+
+    `_check_no_price_direction` chạy MỘT LẦN trên TOÀN CÂY (không phải per-subtree như các
+    rule khác) -- rule này xét tập field của CẢ biểu thức, không phải từng node con (xem
+    docstring module, nhóm quy tắc 5)."""
     reg = registry if registry is not None else default_registry()
+    no_direction_reason = _check_no_price_direction(node, reg)
+    if no_direction_reason is not None:
+        return False, no_direction_reason
     serializer = Serializer()
     for sub in all_subtrees(node):
         if not isinstance(sub, Call):
@@ -70,9 +95,14 @@ def check_meaningful(
 def _check_call(
     node: Call, serializer: Serializer, registry: OperatorRegistry,
 ) -> tuple[bool, str]:
-    """Áp lần lượt 3 nhóm quy tắc lên một node `Call`; dừng ở vi phạm đầu tiên tìm được."""
-    reason = _check_noop(node, serializer) or _check_domain_invalid(node) or _check_self_nest(
-        node, registry,
+    """Áp lần lượt các nhóm quy tắc PER-NODE lên một node `Call`; dừng ở vi phạm đầu tiên tìm
+    được. (`_check_no_price_direction` KHÔNG ở đây -- rule đó chạy một lần trên toàn cây,
+    xem `check_meaningful`.)"""
+    reason = (
+        _check_noop(node, serializer)
+        or _check_domain_invalid(node)
+        or _check_self_nest(node, registry)
+        or _check_constant_power(node)
     )
     if reason is not None:
         return False, reason
@@ -145,3 +175,33 @@ def _self_nest_depth(node: Node, op: str) -> int:
         return 0
     child_depths = [_self_nest_depth(c, op) for c in node.children()]
     return 1 + (max(child_depths) if child_depths else 0)
+
+
+def _check_constant_power(node: Call) -> str | None:
+    """`power(sign(x), k)` với `k` nguyên CHẴN -- `sign(x)` chỉ nhận {-1,0,1} nên lũy thừa
+    chẵn của nó luôn suy biến thành hằng số ∈ {0,1} (mất hết thông tin hướng). Số mũ LẺ được
+    BỎ QUA (sign(x)**lẻ == sign(x), không suy biến); base KHÔNG phải `sign(...)` cũng bỏ qua
+    (power(close, 2) hợp lệ -- xem `test_accepts_power_with_positive_exponent`)."""
+    if node.op != "power" or len(node.args) != 2:
+        return None
+    base, exp = node.args
+    if not (isinstance(base, Call) and base.op == "sign"):
+        return None
+    if not isinstance(exp, Constant):
+        return None
+    k = exp.value
+    if k != int(k) or int(k) % 2 != 0:
+        return None
+    return f"power(sign(x), {exp.value}) — số mũ CHẴN của sign(x) luôn suy biến thành hằng số"
+
+
+def _check_no_price_direction(node: Node, registry: OperatorRegistry) -> str | None:
+    """Tập field tham chiếu trong TOÀN BỘ biểu thức ⊆ nhóm chỉ-khối-lượng
+    (`_VOLUME_ONLY_FIELDS`) -- không field nào mang hướng giá -> vô nghĩa kinh tế (chỉ đếm
+    khối lượng giao dịch, không biết giá tăng hay giảm). Biểu thức không tham chiếu field nào
+    (toàn hằng số) không khớp rule này (tập rỗng luôn là subset -- nhưng khi đó không có gì để
+    "chặn oan", cố tình loại trừ để tránh false-positive vô nghĩa trên biểu thức hằng đơn thuần)."""
+    fields = FieldCollector(registry).visit(node)
+    if fields and fields.issubset(_VOLUME_ONLY_FIELDS):
+        return f"chỉ dùng field khối lượng {sorted(fields)} — không có hướng giá"
+    return None
