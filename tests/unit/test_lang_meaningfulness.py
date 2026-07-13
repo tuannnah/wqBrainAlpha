@@ -10,6 +10,7 @@ import src.operators_local  # noqa: F401  side-effect: đăng ký toàn bộ ope
 from src.app.closed_loop_adapters import VERIFIED_CORES
 from src.generation.alt_data_seeds import ALT_DATA_CORES
 from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
+from src.generation.hypothesis_seeds import HYPOTHESIS_CORES
 from src.lang.meaningfulness import MAX_SAME_TS_NEST, check_meaningful
 from src.lang.parser import parse
 
@@ -197,5 +198,13 @@ def test_alt_data_cores_khong_bi_chan_oan(expr):
 
 @pytest.mark.parametrize("expr", FUNDAMENTAL_CORES)
 def test_fundamental_cores_khong_bi_chan_oan(expr):
+    ok, reason = check_meaningful(parse(expr))
+    assert (ok, reason) == (True, "")
+
+
+@pytest.mark.parametrize("expr", HYPOTHESIS_CORES)
+def test_hypothesis_cores_khong_bi_chan_oan(expr):
+    """Mọi core hypothesis (kể cả seed short-interest mới thay field verify LIVE 14/07)
+    phải qua filter degenerate — seed có chủ đích không được chết trước khi chạm refiner."""
     ok, reason = check_meaningful(parse(expr))
     assert (ok, reason) == (True, "")

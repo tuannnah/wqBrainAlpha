@@ -62,6 +62,24 @@ def test_family_analyst():
     assert classify_family("ts_delta(snt1_d1_netearningsrevision, 20)") == "analyst"
 
 
+def test_family_short_interest_theo_field_securities_lending():
+    """Field securities-lending verify LIVE 14/07 (shortinterest3: loan_utilization_ratio,
+    mean_loan_rate) phải phân loại short_interest — KHÔNG rơi vào 'fundamental' chỉ vì có
+    ts_backfill (nhánh fundamental match substring 'ts_backfill' phía sau)."""
+    assert classify_family(
+        "multiply(-1, ts_mean(ts_backfill(loan_utilization_ratio, 5), 22))"
+    ) == "short_interest"
+    assert classify_family(
+        "multiply(-1, ts_delta(ts_backfill(mean_loan_rate, 5), 22))"
+    ) == "short_interest"
+
+
+def test_family_short_interest_theo_si_surprise():
+    assert classify_family(
+        "multiply(-1, ts_backfill(short_interest_surprise_ratio, 66))"
+    ) == "short_interest"
+
+
 def test_family_unknown():
     assert classify_family("rank(some_unknown_field)") == "other"
 

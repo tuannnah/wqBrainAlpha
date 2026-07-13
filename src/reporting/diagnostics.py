@@ -73,7 +73,12 @@ def classify_family(expr: str) -> str:
         return "earnings_drift"
     if has("afv4_eps_mean", "afv4_cfps_mean"):
         return "analyst_revision"
-    if has("days_to_cover", "shares_short", "short_interest"):
+    # Field verify LIVE 2026-07-14 (logs/verified_fields_20260714.json): securities lending
+    # (shortinterest3: loan_utilization_ratio/mean_loan_rate) + SI surprise (short_interest_pred).
+    # Kiểm TRƯỚC nhánh fundamental bên dưới — nếu không, ts_backfill trong core sẽ nuốt các
+    # field cho vay chứng khoán vào bucket "fundamental" sai. Giữ days_to_cover/shares_short
+    # trong luật để alpha lịch sử (nếu có) vẫn phân loại đúng họ.
+    if has("days_to_cover", "shares_short", "short_interest", "loan_utilization", "loan_rate"):
         return "short_interest"
     if has("operating_income") and has("sales_growth"):
         # Conditioning quality x growth (2 field fundamental cùng lúc) -> khác hẳn 1 core

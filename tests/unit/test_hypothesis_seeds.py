@@ -1,8 +1,9 @@
 """HYPOTHESIS_CORES: core hypothesis-driven cho 4 HỌ NHÂN TỐ MỚI (analyst_revision/
 short_interest/earnings_drift/value_quality) — mở khỏi 5 cụm đã bão hòa (pv_reversal/
-momentum/fundamental ratio đơn/options_iv/news_social). Field analyst4/short-interest CHƯA
-verify live (field-validity guard ở closed_loop_adapters tự lọc nếu account thiếu) — test ở
-đây chỉ đảm bảo core parse được + phân loại family đúng, KHÔNG khẳng định field tồn tại thật."""
+momentum/fundamental ratio đơn/options_iv/news_social). Field analyst4 + short-interest ĐÃ
+verify LIVE 2026-07-14 qua tools/verify_datasets.py (logs/verified_fields_20260714.json);
+field short-interest suy đoán cũ (days_to_cover/shares_short) account KHÔNG có -> đã thay
+bằng field securities-lending (shortinterest3) + SI-surprise (short_interest_pred) có thật."""
 
 from __future__ import annotations
 
@@ -56,6 +57,19 @@ def test_moi_core_phan_loai_ra_family_moi_rieng_biet():
 
 def test_co_it_nhat_5_core():
     assert len(HYPOTHESIS_CORES) >= 5
+
+
+def test_seed_short_interest_dung_field_verify_live():
+    """Field short-interest phải là field verify LIVE 14/07 (logs/verified_fields_20260714.json):
+    loan_utilization_ratio + mean_loan_rate (shortinterest3, securities lending, coverage 1.0)
+    và short_interest_surprise_ratio (short_interest_pred, coverage 0.9987). Tên suy đoán cũ
+    days_to_cover/shares_short account KHÔNG có (field guard từng chặn cả họ) — cấm tái xuất."""
+    joined = " ".join(HYPOTHESIS_CORES)
+    assert "days_to_cover" not in joined
+    assert "shares_short" not in joined
+    assert "loan_utilization_ratio" in joined
+    assert "mean_loan_rate" in joined
+    assert "short_interest_surprise_ratio" in joined
 
 
 def test_khong_dung_group_neutralize_wrapper():

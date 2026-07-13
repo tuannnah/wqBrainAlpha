@@ -2,14 +2,15 @@
 momentum, fundamental value/quality đơn-ratio, option IV skew, social sentiment) để bớt trùng
 self-corr khi pool đã đông (RC1/RC2 fix idea-generator).
 
-QUAN TRỌNG (cardinal rule #1, không có phiên auth để verify live tại thời điểm viết module
-này): field analyst4/short-interest dưới đây là TÊN TỐT NHẤT SUY RA từ quy ước đặt tên đã
-verify trong `src/generation/families.py` (anl4_afv4_*, anl4_af_*) và tài liệu dataset
-`shortinterest30` (`docs/worldquantbrain/docs/advanced-topics/fast-d1-documentation.md`) —
-CHƯA xác nhận live cho account này. Đây chính xác là lý do field-validity guard ở
-`closed_loop_adapters.build_closed_loop(known_fields=...)` tồn tại: nếu field sai, core bị
-LỌC BỎ + log trước khi chạm Brain (không đốt quota/sai dấu như bug cũ). Field fundamental
-(operating_income/assets/sales_growth) ĐÃ verify live (khớp `fundamental_seeds.FUNDAMENTAL_FIELDS`).
+QUAN TRỌNG (cardinal rule #1): TOÀN BỘ field trong module này đã verify LIVE 2026-07-14 qua
+`tools/verify_datasets.py` (`logs/verified_fields_20260714.json`) — analyst4 (anl4_afv4_*,
+anl4_af_*), securities lending (shortinterest3: loan_utilization_ratio/mean_loan_rate),
+SI surprise (short_interest_pred: short_interest_surprise_ratio) và fundamental
+(operating_income/assets/sales_growth). Tên short-interest SUY ĐOÁN cũ (days_to_cover/
+shares_short) account KHÔNG có -> field-validity guard (`build_closed_loop(known_fields=...)`)
+chặn cả họ suốt — đã thay bằng field có thật ở trên. Guard vẫn giữ nguyên vai trò: field nào
+không nằm trong CATALOG CACHE của account (data_fields:USA:TOP3000:1) vẫn bị lọc + log; nếu
+cache tải trước 14/07 thiếu field shortinterest3 thì chạy menu 2 (tải lại fields) trước menu 5.
 
 Mỗi core: signal THUẦN (không group_neutralize/scale/decay — Brain áp qua sim settings,
 xem `neutralization_for_expr`). Cấu trúc GAP/RATIO/CONDITIONING, không LEVEL đơn thuần.
@@ -33,16 +34,36 @@ _ANALYST_REVISION_CORES: tuple[str, ...] = (
     "ts_delta(ts_backfill(anl4_afv4_cfps_mean, 66), 20)",
 )
 
-# --- Family "short_interest": bán khống / days-to-cover ---------------------------------------
-# Asquith-Pathak-Ritter (2005) "Short interest, institutional ownership and stock returns":
-# short-seller là nhà đầu tư CÓ THÔNG TIN -> short interest/days-to-cover cao dự báo lợi suất
-# THẤP hơn -> fade (dấu âm). Boehmer-Jones-Zhang (2008): THAY ĐỔI short interest cũng có tín
-# hiệu (short-selling gia tăng gần đây dự báo underperform mạnh hơn mức tĩnh).
+# --- Family "short_interest": cho vay chứng khoán (securities lending) + SI surprise ---------
+# Field verify LIVE 2026-07-14 qua tools/verify_datasets.py (logs/verified_fields_20260714.json):
+# tên suy đoán cũ days_to_cover/shares_short account KHÔNG có (field guard chặn cả họ suốt) —
+# thay bằng shortinterest3 (securities lending, coverage 1.0, daily) và short_interest_pred
+# (coverage 0.9987, theo kỳ công bố SI ~2 tuần).
+#
+# Hypothesis 4 phần cho từng core:
+# (1) Fade utilization — [quan sát] loan_utilization_ratio = cầu vay / cung cho vay chứng
+#     khoán; [nền tảng] Cohen-Diether-Malloy (2007) "Supply and Demand Shifts in the Shorting
+#     Market" + Asquith-Pathak-Ritter (2005); [cơ chế] short-seller là nhà đầu tư CÓ THÔNG
+#     TIN — cầu vay chiếm gần hết cung = bear crowding có conviction -> lợi suất tương lai
+#     THẤP; [đặc tả] fade mức utilization làm mượt ~1 tháng (22 phiên), dấu âm.
+# (2) Borrow-cost momentum — [quan sát] mean_loan_rate = phí vay chứng khoán; [nền tảng]
+#     Jones-Lamont (2002) "Short-sale constraints and stock returns" + Drechsler-Drechsler
+#     (2014) shorting premium; [cơ chế] phí vay TĂNG nhanh = cầu short mới với conviction cao,
+#     tin xấu chưa phản ánh hết vào giá -> tiếp tục underperform; [đặc tả] fade thay đổi phí
+#     ~1 tháng (ts_delta 22).
+# (3) SI surprise — [quan sát] short_interest_surprise_ratio = SI công bố vượt mức dự đoán;
+#     [nền tảng] Boehmer-Jones-Zhang (2008): THAY ĐỔI/bất ngờ short interest có tín hiệu mạnh
+#     hơn mức tĩnh; [cơ chế] SI bất ngờ cao = thông tin bear MỚI chưa được giá hấp thụ ->
+#     drift âm sau công bố; [đặc tả] fade surprise, backfill 66 giữ tín hiệu sống giữa các kỳ
+#     công bố (~2 tuần/kỳ, cùng quy ước event-seed 66 của earnings_drift).
 _SHORT_INTEREST_CORES: tuple[str, ...] = (
-    # Mức days-to-cover cao (nhiều ngày mới đóng hết vị thế short) -> fade.
-    "multiply(-1, ts_backfill(days_to_cover, 66))",
-    # Thay đổi số cổ phần bị short ~1 tháng -> short interest TĂNG nhanh -> fade mạnh hơn.
-    "multiply(-1, ts_delta(ts_backfill(shares_short, 66), 20))",
+    # (1) shortinterest3 daily coverage 1.0 — backfill NGẮN 5 chỉ vá lỗ dữ liệu cục bộ,
+    # ts_mean 22 làm mượt mức utilization (signal chậm, smooth không giết edge).
+    "multiply(-1, ts_mean(ts_backfill(loan_utilization_ratio, 5), 22))",
+    # (2) Thay đổi phí vay ~1 tháng — cấu trúc DELTA (không phải LEVEL đơn thuần).
+    "multiply(-1, ts_delta(ts_backfill(mean_loan_rate, 5), 22))",
+    # (3) Surprise ratio đã là cấu trúc GAP (thực tế vs dự đoán) do dataset tính sẵn.
+    "multiply(-1, ts_backfill(short_interest_surprise_ratio, 66))",
 )
 
 # --- Family "earnings_drift": PEAD (post-earnings-announcement drift) qua surprise -----------
@@ -80,20 +101,25 @@ HYPOTHESIS_CORES: tuple[str, ...] = (
     _ANALYST_REVISION_CORES[1],
     _SHORT_INTEREST_CORES[1],
     _EARNINGS_DRIFT_CORES[1],
+    _SHORT_INTEREST_CORES[2],
 )
 
-# Field xuất hiện trong HYPOTHESIS_CORES — dùng để test/tra cứu; KHÔNG có nghĩa "đã verify
-# live" (khác FUNDAMENTAL_FIELDS) — chỉ operating_income/assets/sales_growth (value_quality)
-# là verify live thật; phần còn lại chờ field-validity guard (known_fields) tự lọc nếu sai.
+# Field xuất hiện trong HYPOTHESIS_CORES — TOÀN BỘ đã verify LIVE 2026-07-14 qua
+# tools/verify_datasets.py (logs/verified_fields_20260714.json): analyst4 (anl4_*),
+# securities lending (shortinterest3), SI surprise (short_interest_pred), fundamental
+# (fundamental6). LƯU Ý: verify live ≠ có trong catalog cache DB — field guard (known_fields)
+# đọc cache data_fields:USA:TOP3000:1; nếu cache cũ hơn 14/07 thiếu field shortinterest3 thì
+# cần tải lại fields (menu 2 run.bat) để seed (1)(2) không bị lọc oan.
 HYPOTHESIS_FIELDS: frozenset[str] = frozenset({
     "anl4_afv4_eps_mean", "anl4_afv4_cfps_mean",
-    "days_to_cover", "shares_short",
+    "loan_utilization_ratio", "mean_loan_rate", "short_interest_surprise_ratio",
     "anl4_af_eps_value",
     "operating_income", "assets", "sales_growth",
 })
 
-# Field ĐÃ verify live (khớp fundamental_seeds.FUNDAMENTAL_FIELDS) — subset của HYPOTHESIS_FIELDS.
-_VERIFIED_LIVE_FIELDS: frozenset[str] = frozenset({"operating_income", "assets", "sales_growth"})
+# Field ĐÃ verify live — sau lần verify 2026-07-14, TRÙNG với HYPOTHESIS_FIELDS (giữ tên
+# riêng cho tương thích: trước 14/07 đây là subset fundamental duy nhất đã verify).
+_VERIFIED_LIVE_FIELDS: frozenset[str] = HYPOTHESIS_FIELDS
 
 
 def hypothesis_fields_in(expr: str, registry=None) -> set[str]:
