@@ -311,45 +311,58 @@ class LocalTunerRefiner:
         # quota + tạo alpha trùng vô ích. Nhớ tập (expr, cfg.key()) đã sim trong vòng sweep này
         # để chặn biến thể trùng thay vì sim lại.
         tried: set[tuple[str, str]] = {(cur_expr, cur_cfg.key())}
-        while budget_left > 0 and cur_result.status != "passed":
-            sharpe = cur_result.sharpe
-            if sharpe is None:
-                break  # không đủ tín hiệu để quyết định sweep tiếp -> dừng an toàn
-            if sharpe <= -ALT_SWEEP_MIN_ABS_SHARPE:
-                next_expr, next_cfg = _flip_sign(cur_expr), cur_cfg
-                logger.info(
-                    "Sweep alt-data: sharpe {:.2f} quá âm -> thử FLIP DẤU: {!r}",
-                    sharpe, next_expr,
-                )
-            elif sharpe >= ALT_SWEEP_MIN_ABS_SHARPE:
-                next_decay = 8 if cur_cfg.decay == 4 else 4
-                next_expr, next_cfg = cur_expr, cur_cfg.with_overrides(decay=next_decay)
-                logger.info(
-                    "Sweep alt-data: sharpe {:.2f} dương nhưng chưa pass -> thử decay {}->{}",
-                    sharpe, cur_cfg.decay, next_decay,
-                )
-            else:
-                break  # |sharpe| < ngưỡng -> chưa đủ tín hiệu để biết nên flip hay đổi decay
-            next_key = (next_expr, next_cfg.key())
-            if next_key in tried:
-                logger.info(
-                    "Sweep alt-data: biến thể {!r} TRÙNG cấu hình đã sim -> dừng sweep, "
-                    "không đốt thêm quota.", next_key,
-                )
-                break
-            tried.add(next_key)
-            try:
-                next_result = self.simulator.simulate(next_expr, settings=next_cfg.to_settings())
-            except (AuthExpiredError, QuotaExceededError) as exc:
-                raise QuotaExhausted(str(exc)) from exc
-            budget_left -= 1
-            if next_result.presim_reason is not None:
-                # Biến thể sweep (hiếm) bị PreFilter chặn -> không phải sim thật, dừng sweep
-                # thay vì cố đưa presim reject vào so điểm-nộp (sharpe/fitness None).
-                break
-            sims_used += 1
-            attempts.append((next_expr, next_cfg, next_result))
-            cur_expr, cur_cfg, cur_result = next_expr, next_cfg, next_result
+        try:
+            while budget_left > 0 and cur_result.status != "passed":
+                sharpe = cur_result.sharpe
+                if sharpe is None:
+                    break  # không đủ tín hiệu để quyết định sweep tiếp -> dừng an toàn
+                if sharpe <= -ALT_SWEEP_MIN_ABS_SHARPE:
+                    next_expr, next_cfg = _flip_sign(cur_expr), cur_cfg
+                    logger.info(
+                        "Sweep alt-data: sharpe {:.2f} quá âm -> thử FLIP DẤU: {!r}",
+                        sharpe, next_expr,
+                    )
+                elif sharpe >= ALT_SWEEP_MIN_ABS_SHARPE:
+                    next_decay = 8 if cur_cfg.decay == 4 else 4
+                    next_expr, next_cfg = cur_expr, cur_cfg.with_overrides(decay=next_decay)
+                    logger.info(
+                        "Sweep alt-data: sharpe {:.2f} dương nhưng chưa pass -> thử decay {}->{}",
+                        sharpe, cur_cfg.decay, next_decay,
+                    )
+                else:
+                    break  # |sharpe| < ngưỡng -> chưa đủ tín hiệu để biết nên flip hay đổi decay
+                next_key = (next_expr, next_cfg.key())
+                if next_key in tried:
+                    logger.info(
+                        "Sweep alt-data: biến thể {!r} TRÙNG cấu hình đã sim -> dừng sweep, "
+                        "không đốt thêm quota.", next_key,
+                    )
+                    break
+                tried.add(next_key)
+                try:
+                    next_result = self.simulator.simulate(
+                        next_expr, settings=next_cfg.to_settings(),
+                    )
+                except (AuthExpiredError, QuotaExceededError) as exc:
+                    raise QuotaExhausted(str(exc)) from exc
+                budget_left -= 1
+                if next_result.presim_reason is not None:
+                    # Biến thể sweep (hiếm) bị PreFilter chặn -> không phải sim thật, dừng sweep
+                    # thay vì cố đưa presim reject vào so điểm-nộp (sharpe/fitness None).
+                    break
+                sims_used += 1
+                attempts.append((next_expr, next_cfg, next_result))
+                cur_expr, cur_cfg, cur_result = next_expr, next_cfg, next_result
+        except QuotaExhausted:
+            # Finding #5 (review): hết quota GIỮA sweep -> không còn "best" để _finalize (đã
+            # ném exception, hàm sẽ thoát ngay ở re-raise dưới) nhưng MỌI attempt trong
+            # `attempts` (kể cả sim #1) ĐÃ sim THẬT, đã đốt quota + tạo alpha thật trên Brain —
+            # phải persist qua `_persist_sweep_attempt_thua` (không _finalize: tránh gọi thêm
+            # pool_corr_fn có thể tốn quota) TRƯỚC KHI re-raise, nếu không attempt đã sim mất
+            # trắng dấu vết audit/calibration (alpha mồ côi trên Brain).
+            for a_expr, a_cfg, a_result in attempts:
+                self._persist_sweep_attempt_thua(a_expr, a_cfg, a_result)
+            raise
         best_idx, (best_expr, best_cfg, best_result) = max(
             enumerate(attempts), key=lambda ia: _submit_score(ia[1][2].sharpe, ia[1][2].fitness)
         )

@@ -823,6 +823,42 @@ def test_sim_direct_quota_het_giua_luc_sweep_nem_quota_exhausted() -> None:
         refiner.refine_and_sim(_sweep_cand(_SWEEP_EXPR))
 
 
+def test_sim_direct_quota_het_giua_sweep_van_luu_attempt_da_sim_that() -> None:
+    """Finding #5 (Important): sim #1 (sim THẬT, đã tạo alpha thật trên Brain) không được
+    finalize làm 'best' vì sim #2 (mini-sweep) ném QuotaExceededError giữa chừng -> toàn bộ
+    hàm ném QuotaExhausted TRƯỚC khi chạm tới đoạn persist attempts (vốn chỉ chạy SAU vòng
+    while) -> attempt #1 mất cả save_alpha/save_simulation (alpha mồ côi trên Brain, mất dấu
+    vết audit/calibration). Sau fix: attempts đã sim THẬT (sim #1) phải được persist qua
+    `_persist_sweep_attempt_thua` TRƯỚC khi re-raise QuotaExhausted."""
+    from src.pipeline.closed_loop import QuotaExhausted
+    from src.simulation.simulator import QuotaExceededError
+
+    class _BoomOnSecondCall:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def simulate(self, expr, settings=None):
+            self.calls += 1
+            if self.calls == 1:
+                return _sweep_result(_SWEEP_EXPR, status="failed", sharpe=-0.9, fitness=0.3,
+                                     alpha_id="wq-1")
+            raise QuotaExceededError("hết quota ngày")
+
+    refiner = _sweep_refiner(_BoomOnSecondCall())
+
+    with pytest.raises(QuotaExhausted):
+        refiner.refine_and_sim(_sweep_cand(_SWEEP_EXPR))
+
+    repo = refiner.repo
+    # sim #1 ĐÃ sim thật (alpha_id="wq-1") -> phải có bản ghi local dù QuotaExhausted đã raise.
+    assert len(repo.saved) == 1
+    assert repo.sim_saved == 1
+    saved_expr, saved_source, saved_desc = repo.saved[0]
+    assert saved_expr == _SWEEP_EXPR
+    assert saved_source == "alt_data"
+    assert saved_desc == "alt-data sweep attempt (thua)"
+
+
 # --- Task 6: build_closed_loop nối simulator/sim_config của LocalTunerRefiner xuống
 # AltDataIdeaSource -> batch core alt-data đầu tiên sim CẢ NHÓM 1 lần qua simulate_many, rồi
 # refine_and_sim đọc lại cache thay vì sim lần 2. ------------------------------------------------
