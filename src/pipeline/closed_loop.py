@@ -284,17 +284,18 @@ class ClosedLoop:
                     for r in ready
                 )
                 logger.info(
-                    "🚀 SẴN SÀNG NỘP: {} alpha đạt CẢ BA điều kiện Regular thật (status=passed, "
-                    "failed_checks=[], self_corr<{:.2f} đã verify) — KHÁC \"Power Pool eligible\" "
-                    "ở trên (đó chỉ là cờ CẤU TRÚC, không xác nhận nộp được), khối này LÀ xác "
-                    "nhận nộp được. Nộp ngay bằng lệnh:\n"
+                    "🚀 SẴN SÀNG NỘP: {} alpha đạt CẢ BỐN điều kiện Regular thật (status=passed, "
+                    "failed_checks=[], Sharpe/Fitness đạt ngưỡng NỘP THẬT, self_corr<{:.2f} đã "
+                    "verify) — KHÁC \"Power Pool eligible\" ở trên (đó chỉ là cờ CẤU TRÚC, không "
+                    "xác nhận nộp được), khối này LÀ xác nhận nộp được. Nộp ngay bằng lệnh:\n"
                     "   ./venv/Scripts/python.exe main.py submit --no-dry-run\n{}",
                     len(ready), SELF_CORR_MAX, detail,
                 )
             else:
                 logger.info(
                     "🚀 SẴN SÀNG NỘP: 0 alpha sẵn sàng (chưa có alpha nào đạt cả status=passed "
-                    "+ failed_checks=[] + self_corr<{:.2f} đã verify trong DB). Muốn kiểm tra "
+                    "+ failed_checks=[] + Sharpe/Fitness đạt ngưỡng NỘP THẬT + self_corr<{:.2f} "
+                    "đã verify trong DB). Muốn kiểm tra "
                     "thủ công: ./venv/Scripts/python.exe main.py submit --dry-run",
                     SELF_CORR_MAX,
                 )

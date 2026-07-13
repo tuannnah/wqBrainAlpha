@@ -33,6 +33,17 @@ IS_LADDER_PASS: dict[int, float] = {
 IS_LADDER_LOW_TURNOVER_CUTOFF: float = 0.30  # turnover < mức này -> nhân PASS ×mult
 IS_LADDER_LOW_TURNOVER_MULT: float = 0.85  # chỉ nhân lên ngưỡng PASS, KHÔNG nhân FAIL
 
+# --- Ngưỡng NỘP THẬT (submit, khác hẳn "sim status=passed" — Bug 2 fix-submit-async) ---
+# `failed_checks == []` lúc SIM KHÔNG đủ để coi alpha "sẵn sàng nộp": bằng chứng thật
+# 2026-07-14, alpha KP9nwpEg (Sharpe 1.41, fitness 0.99, self-corr 0.4265, failed_checks=[]
+# lúc sim) vẫn bị Brain trả 403 REJECTED lúc `POST /alphas/{id}/submit` với body
+# `is.checks = [{"name":"LOW_SHARPE","result":"FAIL","limit":1.58,"value":1.41},
+# {"name":"LOW_FITNESS","result":"FAIL","limit":1.0,"value":0.99}, ...]` — hai số dưới đây
+# đo TRỰC TIẾP từ `limit` trong response 403 đó, khớp `IS_LADDER_FAIL` (docs IS-Ladder) cho
+# Sharpe nhưng là gate NỘP riêng (đơn giản, không theo cửa sổ năm như IS-Ladder).
+SUBMIT_MIN_SHARPE: float = 1.58
+SUBMIT_MIN_FITNESS: float = 1.0
+
 # --- Calibration (tin cậy cả tool) ---
 CALIBRATION_RHO_BAR: float = 0.5  # Spearman ρ tối thiểu để tin ranking local
 # Pre-sim floor cho closed-loop: local Sharpe < mức này -> KHÔNG đốt sim Brain (chắc chắn

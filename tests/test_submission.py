@@ -97,6 +97,54 @@ def test_select_candidates_chi_lay_dat_nguong_sap_theo_score():
     assert ids == ["WQ1", "WQ2"]  # đúng 2 alpha đạt, sắp theo score giảm dần
 
 
+def test_select_candidates_loai_alpha_duoi_nguong_nop_that_du_status_passed():
+    """Bug 2 (bằng chứng thật 2026-07-14): alpha KP9nwpEg Sharpe 1.41/fitness 0.99,
+    `status='passed'` lúc sim (WQ tự PASS `is.checks` lúc đó) nhưng KHÔNG đạt ngưỡng NỘP
+    THẬT (Sharpe>=1.58, fitness>=1.0) -> select_candidates() KHÔNG được chọn, tránh tốn
+    quota nộp cho alpha chắc chắn bị 403 REJECTED."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    session = sf()
+    try:
+        session.add(AlphaModel(id="kp9", expression="rank(close)", source="ga"))
+        session.add(
+            SimulationModel(
+                id="s_kp9", alpha_id="kp9", wq_alpha_id="KP9nwpEg", region="USA",
+                universe="TOP3000", sharpe=1.41, fitness=0.99, score=0.99, status="passed",
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    mgr = SubmissionManager(FakeClient(), sf, FakeCorr())
+    ids = [c.wq_alpha_id for c in mgr.select_candidates()]
+    assert "KP9nwpEg" not in ids
+
+
+def test_run_daily_khong_chon_alpha_duoi_nguong_nop_that():
+    """Cùng bằng chứng KP9nwpEg — run_daily() (dùng select_candidates() ở khâu chọn) cũng
+    không được chọn ứng viên dưới ngưỡng Sharpe/fitness nộp thật."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    session = sf()
+    try:
+        session.add(AlphaModel(id="kp9", expression="rank(close)", source="ga"))
+        session.add(
+            SimulationModel(
+                id="s_kp9", alpha_id="kp9", wq_alpha_id="KP9nwpEg", region="USA",
+                universe="TOP3000", sharpe=1.41, fitness=0.99, score=0.99, status="passed",
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    mgr = SubmissionManager(FakeClient(), sf, FakeCorr(value=0.1))
+    selected = mgr.run_daily(dry_run=True)
+    assert "KP9nwpEg" not in [c.wq_alpha_id for c in selected]
+
+
 def test_submit_reject_khi_correlation_cao():
     engine = init_db(_engine())
     sf = make_session_factory(engine)

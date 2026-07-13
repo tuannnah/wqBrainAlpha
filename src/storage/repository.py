@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
+from config.thresholds import SUBMIT_MIN_FITNESS, SUBMIT_MIN_SHARPE
 from src.backtest.metrics_local import AlphaMetrics
 from src.local_types import Dates
 from src.simulation.simulator import SimulationResult
@@ -224,12 +225,15 @@ class AlphaRepository:
 
 @dataclass(frozen=True, slots=True)
 class SubmitReadyAlpha:
-    """Một alpha đạt CẢ BA điều kiện nộp Regular thật (Task 8): `SimulationModel.status ==
-    'passed'` (WQ đã chấm Sharpe/Fitness/Turnover/IS-Ladder theo tier tài khoản — không tự
-    đoán lại ngưỡng, xem `SubmissionManager.select_candidates`), `failed_checks == []` (không
-    WQ check nào tự FAIL), và `self_corr` ĐÃ VERIFY (đo Brain thật, khác cờ Power Pool eligible
-    chỉ là cấu trúc — commit `e27821d`) nhỏ hơn `SELF_CORR_MAX`. Dùng cho khối "SẴN SÀNG NỘP"
-    in cuối phiên `ClosedLoop._report`."""
+    """Một alpha đạt CẢ BỐN điều kiện nộp Regular thật (Task 8 + Bug 2 fix-submit-async):
+    `SimulationModel.status == 'passed'` (WQ đã chấm Sharpe/Fitness/Turnover/IS-Ladder LÚC
+    SIM — xem `SubmissionManager.select_candidates`), `failed_checks == []` (không WQ check
+    nào tự FAIL lúc sim), `sharpe`/`fitness` đạt `SUBMIT_MIN_SHARPE`/`SUBMIT_MIN_FITNESS`
+    (config/thresholds.py — ngưỡng NỘP THẬT, khác ngưỡng sim: bằng chứng thật 2026-07-14
+    alpha KP9nwpEg Sharpe 1.41/fitness 0.99/`failed_checks=[]` lúc sim vẫn bị Brain 403
+    REJECTED lúc nộp thật), và `self_corr` ĐÃ VERIFY (đo Brain thật, khác cờ Power Pool
+    eligible chỉ là cấu trúc — commit `e27821d`) nhỏ hơn `SELF_CORR_MAX`. Dùng cho khối
+    "SẴN SÀNG NỘP" in cuối phiên `ClosedLoop._report`."""
 
     wq_alpha_id: str
     expression: str
@@ -633,17 +637,22 @@ class MiniBrainRepository:
             session.close()
 
     def submit_ready_alphas(self, self_corr_max: float) -> list[SubmitReadyAlpha]:
-        """Task 8: alpha THẬT SỰ sẵn sàng nộp Regular — `SimulationModel.status == 'passed'`
-        + `failed_checks == []` + `self_corr` đã verify (< `self_corr_max`). `self_corr` KHÔNG
-        có cột trên `SimulationModel` (chỉ WQ tính bất đồng bộ lúc submit thật) — tra theo
-        `wq_alpha_id` trong `BrainSimLinkModel.self_corr`, nguồn duy nhất trong DB đã ghi
-        self-corr Brain thật (`ClosedLoop.run` ghi qua `record_brain_sim` mỗi lần refine+sim).
-        Alpha đã pass nhưng CHƯA từng có self-corr ghi lại (self_corr=None, vd nộp qua đường
-        `research`/`submit` cũ trước khi cầu này tồn tại) KHÔNG được liệt ở đây — cần tự chạy
-        `submit --dry-run` để verify trước khi nộp thật, tránh báo sai "sẵn sàng" khi chưa biết
-        self-corr. `abs(self_corr)` (nhất quán `src/backtest/gates.py`): anti-correlation cũng
-        đáng ngại như correlation dương. Loại alpha đã `SubmissionModel.status == 'submitted'`
-        (đỡ báo lại cái đã nộp rồi). Sort sharpe giảm dần (ứng viên mạnh nhất lên đầu)."""
+        """Task 8 + Bug 2 (fix-submit-async): alpha THẬT SỰ sẵn sàng nộp Regular —
+        `SimulationModel.status == 'passed'` + `failed_checks == []` + `sharpe`/`fitness` đạt
+        `SUBMIT_MIN_SHARPE`/`SUBMIT_MIN_FITNESS` (ngưỡng NỘP THẬT, khác ngưỡng lúc sim — bằng
+        chứng thật 2026-07-14: alpha KP9nwpEg Sharpe 1.41/fitness 0.99/`failed_checks=[]` lúc
+        sim vẫn bị Brain 403 REJECTED lúc nộp thật) + `self_corr` đã verify (< `self_corr_max`).
+        `self_corr` KHÔNG có cột trên `SimulationModel` (chỉ WQ tính bất đồng bộ lúc submit
+        thật) — tra theo `wq_alpha_id` trong `BrainSimLinkModel.self_corr`, nguồn duy nhất
+        trong DB đã ghi self-corr Brain thật (`ClosedLoop.run` ghi qua `record_brain_sim` mỗi
+        lần refine+sim). Alpha đã pass nhưng CHƯA từng có self-corr ghi lại (self_corr=None,
+        vd nộp qua đường `research`/`submit` cũ trước khi cầu này tồn tại) KHÔNG được liệt ở
+        đây — cần tự chạy `submit --dry-run` để verify trước khi nộp thật, tránh báo sai "sẵn
+        sàng" khi chưa biết self-corr. `abs(self_corr)` (nhất quán `src/backtest/gates.py`):
+        anti-correlation cũng đáng ngại như correlation dương. `fitness=None` -> loại (nhất
+        quán triết lý NULL=chưa biết của method này, giống cách self_corr=None bị loại). Loại
+        alpha đã `SubmissionModel.status == 'submitted'` (đỡ báo lại cái đã nộp rồi). Sort
+        sharpe giảm dần (ứng viên mạnh nhất lên đầu)."""
         session = self.session_factory()
         try:
             submitted_ids = {
@@ -679,6 +688,13 @@ class MiniBrainRepository:
                 except (json.JSONDecodeError, TypeError):
                     continue  # dữ liệu hỏng -> không dám khẳng định "sẵn sàng"
                 if checks != []:
+                    continue
+                # Bug 2 (bằng chứng thật 2026-07-14 KP9nwpEg): `failed_checks == []` lúc SIM
+                # KHÔNG đủ — Brain enforce lại Sharpe/Fitness lúc NỘP THẬT. `fitness=None` bị
+                # loại (nhất quán None=chưa biết như self_corr ở dưới).
+                if sim.sharpe is None or sim.sharpe < SUBMIT_MIN_SHARPE:
+                    continue
+                if sim.fitness is None or sim.fitness < SUBMIT_MIN_FITNESS:
                     continue
                 corr_row = (
                     session.query(BrainSimLinkModel.self_corr)

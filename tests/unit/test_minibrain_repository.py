@@ -205,36 +205,101 @@ def test_top_n_orders_by_sharpe_desc_passed_only(repo):
 
 def _seed_passed_sim(
     repo, alpha_repo, *, expr: str, wq_alpha_id: str, sharpe: float, failed_checks: list[str],
+    fitness: float = 1.0,
 ) -> str:
     """Ghi 1 alpha + simulation status='passed' (đúng đường AlphaRepository thật dùng bởi
-    lệnh `submit`) — trả alpha_id (khoá để gắn SubmissionModel/BrainSimLinkModel nếu cần)."""
+    lệnh `submit`) — trả alpha_id (khoá để gắn SubmissionModel/BrainSimLinkModel nếu cần).
+    `fitness` mặc định 1.0 (đúng bằng `SUBMIT_MIN_FITNESS`) để không ảnh hưởng các test có
+    sẵn chỉ quan tâm tới sharpe/failed_checks (Bug 2 fix-submit-async)."""
     alpha_id = alpha_repo.save_alpha(expr, source="test")
     result = SimulationResult(
         expression=expr, alpha_id=wq_alpha_id, status="passed", sharpe=sharpe,
-        fitness=1.0, turnover=0.3, failed_checks=failed_checks,
+        fitness=fitness, turnover=0.3, failed_checks=failed_checks,
     )
     alpha_repo.save_simulation(result, region="USA", universe="TOP3000", alpha_id=alpha_id)
     return alpha_id
 
 
-def test_submit_ready_alphas_bao_gom_alpha_dat_ca_ba_dieu_kien(repo):
-    """status=passed + failed_checks=[] + self_corr<ngưỡng (đã verify qua BrainSimLinkModel,
-    tra theo wq_alpha_id) -> có mặt trong danh sách sẵn sàng nộp."""
+def test_submit_ready_alphas_bao_gom_alpha_dat_ca_bon_dieu_kien(repo):
+    """status=passed + failed_checks=[] + Sharpe/fitness đạt ngưỡng NỘP THẬT + self_corr<ngưỡng
+    (đã verify qua BrainSimLinkModel, tra theo wq_alpha_id) -> có mặt trong danh sách sẵn sàng
+    nộp. Sharpe 1.60 (>= SUBMIT_MIN_SHARPE 1.58) — trước Bug 2 test này dùng 1.57 (dưới ngưỡng
+    nộp thật) vì lúc đó `submit_ready_alphas` chưa gate Sharpe/fitness lúc nộp."""
     alpha_repo = AlphaRepository(repo.session_factory)
     _seed_passed_sim(
-        repo, alpha_repo, expr="close - open", wq_alpha_id="rKlkG9O8", sharpe=1.57,
+        repo, alpha_repo, expr="close - open", wq_alpha_id="rKlkG9O8", sharpe=1.60,
         failed_checks=[],
     )
     repo.record_brain_sim(
         canonical_hash="h1", expr_string="close - open", wq_alpha_id="rKlkG9O8",
-        region="USA", universe="TOP3000", sharpe=1.57, fitness=0.73, turnover=0.55,
+        region="USA", universe="TOP3000", sharpe=1.60, fitness=0.73, turnover=0.55,
         self_corr=0.49, status="passed",
     )
     ready = repo.submit_ready_alphas(self_corr_max=0.70)
     assert len(ready) == 1
     assert ready[0].wq_alpha_id == "rKlkG9O8"
-    assert ready[0].sharpe == pytest.approx(1.57)
+    assert ready[0].sharpe == pytest.approx(1.60)
     assert ready[0].self_corr == pytest.approx(0.49)
+
+
+def test_submit_ready_alphas_loai_alpha_duoi_nguong_sharpe_nop_that(repo):
+    """Bug 2 (bằng chứng thật 2026-07-14): alpha KP9nwpEg Sharpe 1.41/fitness 0.99,
+    failed_checks=[] lúc sim vẫn bị Brain 403 REJECTED lúc nộp thật (LOW_SHARPE limit=1.58,
+    LOW_FITNESS limit=1.0) -> KHÔNG được liệt là 'sẵn sàng nộp' dù mọi điều kiện khác đạt."""
+    alpha_repo = AlphaRepository(repo.session_factory)
+    _seed_passed_sim(
+        repo, alpha_repo, expr="ts_delta(close, 5)", wq_alpha_id="KP9nwpEg", sharpe=1.41,
+        fitness=0.99, failed_checks=[],
+    )
+    repo.record_brain_sim(
+        canonical_hash="hkp9", expr_string="ts_delta(close, 5)", wq_alpha_id="KP9nwpEg",
+        region="USA", universe="TOP3000", sharpe=1.41, fitness=0.99, turnover=0.29,
+        self_corr=0.4265, status="passed",
+    )
+    assert repo.submit_ready_alphas(self_corr_max=0.70) == []
+
+
+def test_submit_ready_alphas_loai_alpha_duoi_nguong_fitness_nop_that(repo):
+    """Sharpe đạt ngưỡng nhưng fitness dưới SUBMIT_MIN_FITNESS -> vẫn loại (2 ngưỡng độc lập,
+    cả hai đều phải đạt)."""
+    alpha_repo = AlphaRepository(repo.session_factory)
+    _seed_passed_sim(
+        repo, alpha_repo, expr="ts_delta(volume, 5)", wq_alpha_id="LOWFIT", sharpe=1.8,
+        fitness=0.5, failed_checks=[],
+    )
+    repo.record_brain_sim(
+        canonical_hash="hlowfit", expr_string="ts_delta(volume, 5)", wq_alpha_id="LOWFIT",
+        region="USA", universe="TOP3000", sharpe=1.8, fitness=0.5, turnover=0.3,
+        self_corr=0.3, status="passed",
+    )
+    assert repo.submit_ready_alphas(self_corr_max=0.70) == []
+
+
+def test_submit_ready_alphas_loai_alpha_fitness_null(repo):
+    """fitness=None (chưa biết) -> loại, nhất quán triết lý NULL=chưa biết của method này
+    (giống cách self_corr=None bị loại)."""
+    from src.storage.models import AlphaModel, SimulationModel
+
+    alpha_repo = AlphaRepository(repo.session_factory)
+    alpha_id = alpha_repo.save_alpha("legacy_fitness_null", source="test")
+    session = repo.session_factory()
+    try:
+        session.add(
+            SimulationModel(
+                id="simfitnull", alpha_id=alpha_id, wq_alpha_id="NOFIT", region="USA",
+                universe="TOP3000", sharpe=1.8, fitness=None, status="passed",
+                failed_checks="[]",
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+    repo.record_brain_sim(
+        canonical_hash="hnofit", expr_string="legacy_fitness_null", wq_alpha_id="NOFIT",
+        region="USA", universe="TOP3000", sharpe=1.8, fitness=None, turnover=0.3,
+        self_corr=0.3, status="passed",
+    )
+    assert repo.submit_ready_alphas(self_corr_max=0.70) == []
 
 
 def test_submit_ready_alphas_rong_khi_khong_co_alpha_dat_chuan(repo):
@@ -361,14 +426,16 @@ def test_submit_ready_alphas_loai_alpha_da_nop_roi(repo):
 
 
 def test_submit_ready_alphas_sort_sharpe_giam_dan(repo):
-    """Nhiều alpha sẵn sàng -> sort Sharpe giảm dần (ứng viên mạnh nhất lên đầu)."""
+    """Nhiều alpha sẵn sàng -> sort Sharpe giảm dần (ứng viên mạnh nhất lên đầu). LOW dùng
+    Sharpe 1.6 (>= SUBMIT_MIN_SHARPE 1.58, khác bản trước Bug 2 dùng 1.2 — nay sẽ bị gate
+    Sharpe/fitness loại thẳng nếu để dưới ngưỡng nộp thật)."""
     alpha_repo = AlphaRepository(repo.session_factory)
     _seed_passed_sim(
-        repo, alpha_repo, expr="a_expr", wq_alpha_id="LOW", sharpe=1.2, failed_checks=[],
+        repo, alpha_repo, expr="a_expr", wq_alpha_id="LOW", sharpe=1.6, failed_checks=[],
     )
     repo.record_brain_sim(
         canonical_hash="hlow", expr_string="a_expr", wq_alpha_id="LOW", region="USA",
-        universe="TOP3000", sharpe=1.2, fitness=0.7, turnover=0.3, self_corr=0.3,
+        universe="TOP3000", sharpe=1.6, fitness=0.7, turnover=0.3, self_corr=0.3,
         status="passed",
     )
     _seed_passed_sim(

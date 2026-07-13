@@ -100,12 +100,32 @@ Các nguồn ý tưởng được bọc lồng nhau (ngoài cùng chạy trướ
 
 ## Ngưỡng nộp (Brain thật, Delay-1)
 
-- `failed_checks == []` (qua hết IS submission checks).
-- Brain enforce: `IS_LADDER_SHARPE`, `LOW_2Y_SHARPE`, `LOW_SUB_UNIVERSE_SHARPE`, LOW_SHARPE, LOW_FITNESS.
-- Sharpe tham chiếu ~1.58; `fitness > 1` KHÔNG phải hard-check với mọi account.
+**QUAN TRỌNG — `failed_checks == []` lúc SIM chỉ là điều kiện CẦN, không phải ĐỦ.** Bằng
+chứng thật 2026-07-14 (lần nộp THẬT đầu tiên qua tool, alpha `KP9nwpEg`): sim cho Sharpe 1.41,
+fitness 0.99, self-corr 0.4265, `failed_checks=[]` — tưởng đã sẵn sàng — nhưng `POST
+/alphas/{id}/submit` khi nộp THẬT vẫn trả **403** với body:
+```json
+{"is":{"checks":[
+  {"name":"LOW_SHARPE","result":"FAIL","limit":1.58,"value":1.41},
+  {"name":"LOW_FITNESS","result":"FAIL","limit":1.0,"value":0.99},
+  {"name":"LOW_TURNOVER","result":"PASS","limit":0.01,"value":0.2908},
+  {"name":"HIGH_TURNOVER","result":"PASS","limit":0.7,"value":0.2908}
+]}}
+```
+Alpha vẫn `stage: IS, status: UNSUBMITTED` sau đó — không hề được nộp dù `POST /submit` ban
+đầu trả 200 (WQ tính bất đồng bộ, phải poll `GET /alphas/{id}/submit` mới ra kết quả thật —
+xem `SubmissionManager._poll_submit_result`, fix `fix-submit-async`).
+
+- Ngưỡng NỘP THẬT (hard, đo trực tiếp từ `limit` trong response 403 trên):
+  **Sharpe ≥ 1.58** và **Fitness ≥ 1.0** (`config/thresholds.py`:
+  `SUBMIT_MIN_SHARPE`/`SUBMIT_MIN_FITNESS`) — khác ngưỡng lúc SIM (`status=passed` +
+  `failed_checks=[]`), Brain enforce lại lúc nộp. `SubmissionManager.select_candidates`,
+  `MiniBrainRepository.submit_ready_alphas` và khối "SẴN SÀNG NỘP" đều đã áp 2 ngưỡng này.
+- `failed_checks == []` (qua hết IS submission checks LÚC SIM — điều kiện CẦN).
+- Brain enforce thêm: `IS_LADDER_SHARPE`, `LOW_2Y_SHARPE`, `LOW_SUB_UNIVERSE_SHARPE`.
 - self-corr < 0.70.
-- Bằng chứng đạt chuẩn: alpha VWAP intraday-reversal Sharpe 1.41-1.57, fitness 0.73-1.04,
-  self-corr ~0.49 → PASSED.
+- Bằng chứng REJECTED (không đạt chuẩn, đã sửa hiểu lầm cũ): alpha `KP9nwpEg` Sharpe 1.41,
+  fitness 0.99, self-corr 0.4265, `failed_checks=[]` lúc sim → **403 REJECTED** lúc nộp thật.
 
 ## Bẫy cần nhớ
 

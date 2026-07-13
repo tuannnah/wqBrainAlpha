@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from loguru import logger
 
+from config.thresholds import SUBMIT_MIN_FITNESS, SUBMIT_MIN_SHARPE
 from src.storage.models import AlphaModel, SimulationModel, SubmissionModel, _utcnow
 
 
@@ -110,10 +111,14 @@ class SubmissionManager:
 
     # --------------------------------------------------------------- selection
     def select_candidates(self) -> list[Candidate]:
-        """Chọn alpha đã pass sim để nộp. `status == "passed"` ĐÃ phản ánh đúng
-        Sharpe/Fitness/Turnover/Weight/IS-Ladder thật theo tier tài khoản — WQ Brain tự chấm
-        qua `is.checks` (xem `Simulator._fetch_metrics`), KHÔNG tự đoán lại ngưỡng ở đây
-        (sub-project B, xem docs/superpowers/specs/2026-07-02-submission-compliance-roadmap-design.md)."""
+        """Chọn alpha đã pass sim để nộp. `status == "passed"` phản ánh `is.checks` LÚC SIM
+        (xem `Simulator._fetch_metrics`) nhưng KHÔNG ĐỦ — Bug 2 (bằng chứng thật 2026-07-14,
+        alpha KP9nwpEg: Sharpe 1.41, fitness 0.99, `failed_checks=[]` lúc sim vẫn bị Brain
+        403 REJECTED lúc `POST /submit` thật với `is.checks` LOW_SHARPE/LOW_FITNESS) chứng
+        minh Brain ENFORCE LẠI Sharpe/Fitness lúc NỘP THẬT, khác lúc sim. Lọc thêm
+        `SUBMIT_MIN_SHARPE`/`SUBMIT_MIN_FITNESS` (config/thresholds.py, đo trực tiếp từ
+        response 403 đó) ở đây để không chọn ứng viên chắc chắn bị từ chối, tốn quota nộp
+        oan."""
         session = self.session_factory()
         try:
             submitted = {
@@ -137,6 +142,10 @@ class SubmissionManager:
         seen: set[str] = set()
         for sim, alpha in rows:
             if sim.wq_alpha_id in submitted or sim.wq_alpha_id in seen:
+                continue
+            if sim.sharpe is None or sim.sharpe < SUBMIT_MIN_SHARPE:
+                continue
+            if sim.fitness is None or sim.fitness < SUBMIT_MIN_FITNESS:
                 continue
             seen.add(sim.wq_alpha_id)
             candidates.append(

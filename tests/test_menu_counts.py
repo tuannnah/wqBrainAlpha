@@ -135,7 +135,9 @@ def test_menu_view_submit_xac_nhan_yes_thi_nop_that(monkeypatch):
     from tests.fakes import FakeClient, FakeResponse
 
     sf = make_session_factory(init_db(make_engine("sqlite:///:memory:")))
-    _seed_candidate(sf)  # không có hypothesis -> không kích hoạt gắn tag Power Pool (đã test riêng)
+    # sharpe=1.6 (Bug 2: >= SUBMIT_MIN_SHARPE 1.58, khác mặc định 1.5 của helper — dưới
+    # ngưỡng nộp thật sẽ bị select_candidates() loại thẳng, không có gì để nộp).
+    _seed_candidate(sf, sharpe=1.6)  # không có hypothesis -> không kích hoạt gắn tag Power Pool (đã test riêng)
     state = main._MenuState()
     state.session_factory = sf
     state.client = FakeClient()
