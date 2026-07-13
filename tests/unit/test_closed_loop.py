@@ -265,6 +265,90 @@ def test_power_pool_eligible_log_khong_ngu_y_nop_duoc(repo) -> None:  # noqa: AN
     assert "tự xem lại" in joined and "WQ Brain" in joined
 
 
+def test_report_in_khoi_san_sang_nop_khi_repo_co_alpha_dat_chuan() -> None:
+    """Task 8: alpha đạt CẢ BA (status=passed, failed_checks=[], self_corr<ngưỡng đã verify)
+    -> cuối phiên in khối SẴN SÀNG NỘP kèm wq_alpha_id + lệnh nộp chính xác, PHÂN BIỆT rạch
+    ròi với "Power Pool eligible" (chỉ là cờ cấu trúc, không xác nhận nộp được)."""
+    from loguru import logger
+
+    from src.storage.repository import SubmitReadyAlpha
+
+    class _RepoWithReady:
+        def avoided_exprs(self):
+            return set()
+
+        def record_brain_sim(self, **kw):
+            return None
+
+        def submit_ready_alphas(self, self_corr_max):
+            return [
+                SubmitReadyAlpha(
+                    wq_alpha_id="rKlkG9O8", expression="close - open", sharpe=1.57,
+                    self_corr=0.49,
+                )
+            ]
+
+    msgs: list[str] = []
+    sink_id = logger.add(lambda m: msgs.append(str(m)), level="INFO")
+    try:
+        src = _FakeIdeaSource([])  # cạn ý tưởng ngay -> _report gọi ngay lượt đầu
+        ClosedLoop(idea_source=src, refiner=_FakeRefiner({}), repo=_RepoWithReady()).run()
+    finally:
+        logger.remove(sink_id)
+
+    joined = "\n".join(msgs)
+    assert "SẴN SÀNG NỘP" in joined
+    assert "rKlkG9O8" in joined
+    assert "1 alpha" in joined
+    assert "submit --no-dry-run" in joined
+    # Phân biệt rạch ròi với Power Pool eligible — không được lẫn 2 khối.
+    assert "KHÁC \"Power Pool eligible\"" in joined
+
+
+def test_report_in_0_alpha_san_sang_khi_repo_khong_co(repo) -> None:  # noqa: ANN001
+    """Repo không có alpha nào đạt chuẩn (DB rỗng, repo thật MiniBrainRepository) -> in rõ
+    "0 alpha sẵn sàng", không âm thầm im lặng."""
+    from loguru import logger
+
+    msgs: list[str] = []
+    sink_id = logger.add(lambda m: msgs.append(str(m)), level="INFO")
+    try:
+        src = _FakeIdeaSource([])
+        ClosedLoop(idea_source=src, refiner=_FakeRefiner({}), repo=repo).run()
+    finally:
+        logger.remove(sink_id)
+
+    joined = "\n".join(msgs)
+    assert "SẴN SÀNG NỘP" in joined
+    assert "0 alpha sẵn sàng" in joined
+
+
+def test_report_khong_vo_repo_thieu_submit_ready_alphas() -> None:
+    """Repo fake tối giản (không có submit_ready_alphas, như nhiều fake khác trong test file
+    này) vẫn chạy được — guard getattr+callable, coi như 0 alpha sẵn sàng (tương thích ngược)."""
+    from loguru import logger
+
+    class _MinimalRepo:
+        def avoided_exprs(self):
+            return set()
+
+        def record_brain_sim(self, **kw):
+            return None
+
+    msgs: list[str] = []
+    sink_id = logger.add(lambda m: msgs.append(str(m)), level="INFO")
+    try:
+        src = _FakeIdeaSource([])
+        report = ClosedLoop(
+            idea_source=src, refiner=_FakeRefiner({}), repo=_MinimalRepo(),
+        ).run()
+    finally:
+        logger.remove(sink_id)
+
+    assert isinstance(report, ClosedLoopReport)
+    assert "0 alpha sẵn sàng" in "\n".join(msgs)
+
+
 def test_closed_loop_goi_alpha_logger_moi_y_tuong():
     """ClosedLoop gọi alpha_logger.log cho mỗi ý tưởng có outcome (index tăng dần)."""
     from src.pipeline.closed_loop import ClosedLoop, IdeaOutcome

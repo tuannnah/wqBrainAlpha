@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
@@ -22,6 +23,7 @@ from src.storage.models import (
     InvalidFieldModel,
     PoolPnlModel,
     SimulationModel,
+    SubmissionModel,
     TriedHashModel,
 )
 
@@ -220,10 +222,29 @@ class AlphaRepository:
             session.close()
 
 
+@dataclass(frozen=True, slots=True)
+class SubmitReadyAlpha:
+    """Một alpha đạt CẢ BA điều kiện nộp Regular thật (Task 8): `SimulationModel.status ==
+    'passed'` (WQ đã chấm Sharpe/Fitness/Turnover/IS-Ladder theo tier tài khoản — không tự
+    đoán lại ngưỡng, xem `SubmissionManager.select_candidates`), `failed_checks == []` (không
+    WQ check nào tự FAIL), và `self_corr` ĐÃ VERIFY (đo Brain thật, khác cờ Power Pool eligible
+    chỉ là cấu trúc — commit `e27821d`) nhỏ hơn `SELF_CORR_MAX`. Dùng cho khối "SẴN SÀNG NỘP"
+    in cuối phiên `ClosedLoop._report`."""
+
+    wq_alpha_id: str
+    expression: str
+    sharpe: float | None
+    self_corr: float
+
+
 class MiniBrainRepository:
     """Repository cho luồng MiniBrain local (Expression/Evaluation/PoolPnl/DeadField).
     Tách khỏi AlphaRepository (luồng Brain-sim cũ) — hai luồng dữ liệu độc lập, schema
-    khác nhau, không chia sẻ session pattern ngoài cấu trúc try/finally."""
+    khác nhau, không chia sẻ session pattern ngoài cấu trúc try/finally. NGOẠI LỆ có chủ đích:
+    `submit_ready_alphas` (Task 8) đọc CHÉO sang AlphaModel/SimulationModel/SubmissionModel —
+    báo cáo cuối phiên cần bức tranh đầy đủ CẢ HAI luồng (một alpha sẵn sàng nộp có thể sinh
+    ra từ luồng cũ `research`/`submit` HOẶC từ closed-loop), không phải ghi dữ liệu mới nên
+    không phá vỡ ranh giới ghi (write) giữa hai luồng."""
 
     # session_factory không annotate, giữ nhất quán AlphaRepository/InvalidFieldRepository
     # (constructor pattern hiện có, mypy --strict đã báo no-untyped-def tiền-tồn ở đó).
@@ -608,5 +629,68 @@ class MiniBrainRepository:
                     continue
                 pairs.append((float(ev.sharpe), float(link.sharpe)))
             return pairs
+        finally:
+            session.close()
+
+    def submit_ready_alphas(self, self_corr_max: float) -> list[SubmitReadyAlpha]:
+        """Task 8: alpha THẬT SỰ sẵn sàng nộp Regular — `SimulationModel.status == 'passed'`
+        + `failed_checks == []` + `self_corr` đã verify (< `self_corr_max`). `self_corr` KHÔNG
+        có cột trên `SimulationModel` (chỉ WQ tính bất đồng bộ lúc submit thật) — tra theo
+        `wq_alpha_id` trong `BrainSimLinkModel.self_corr`, nguồn duy nhất trong DB đã ghi
+        self-corr Brain thật (`ClosedLoop.run` ghi qua `record_brain_sim` mỗi lần refine+sim).
+        Alpha đã pass nhưng CHƯA từng có self-corr ghi lại (self_corr=None, vd nộp qua đường
+        `research`/`submit` cũ trước khi cầu này tồn tại) KHÔNG được liệt ở đây — cần tự chạy
+        `submit --dry-run` để verify trước khi nộp thật, tránh báo sai "sẵn sàng" khi chưa biết
+        self-corr. `abs(self_corr)` (nhất quán `src/backtest/gates.py`): anti-correlation cũng
+        đáng ngại như correlation dương. Loại alpha đã `SubmissionModel.status == 'submitted'`
+        (đỡ báo lại cái đã nộp rồi). Sort sharpe giảm dần (ứng viên mạnh nhất lên đầu)."""
+        session = self.session_factory()
+        try:
+            submitted_ids = {
+                row[0]
+                for row in session.query(SubmissionModel.alpha_id)
+                .filter(SubmissionModel.status == "submitted")
+                .all()
+            }
+            rows = (
+                session.query(SimulationModel, AlphaModel)
+                .join(AlphaModel, SimulationModel.alpha_id == AlphaModel.id)
+                .filter(SimulationModel.status == "passed")
+                .filter(SimulationModel.wq_alpha_id.isnot(None))
+                .all()
+            )
+            ready: list[SubmitReadyAlpha] = []
+            seen_wq_ids: set[str] = set()
+            for sim, alpha in rows:
+                wq_id = sim.wq_alpha_id
+                if wq_id in seen_wq_ids or sim.alpha_id in submitted_ids:
+                    continue
+                try:
+                    checks = json.loads(sim.failed_checks or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    continue  # dữ liệu hỏng -> không dám khẳng định "sẵn sàng"
+                if checks != []:
+                    continue
+                corr_row = (
+                    session.query(BrainSimLinkModel.self_corr)
+                    .filter(BrainSimLinkModel.wq_alpha_id == wq_id)
+                    .filter(BrainSimLinkModel.self_corr.isnot(None))
+                    .order_by(BrainSimLinkModel.created_at.desc())
+                    .first()
+                )
+                if corr_row is None or corr_row[0] is None:
+                    continue  # self-corr chưa verify -> không liệt là sẵn sàng
+                self_corr = float(corr_row[0])
+                if abs(self_corr) >= self_corr_max:
+                    continue
+                seen_wq_ids.add(wq_id)
+                ready.append(
+                    SubmitReadyAlpha(
+                        wq_alpha_id=wq_id, expression=alpha.expression,
+                        sharpe=sim.sharpe, self_corr=self_corr,
+                    )
+                )
+            ready.sort(key=lambda r: r.sharpe if r.sharpe is not None else float("-inf"), reverse=True)
+            return ready
         finally:
             session.close()

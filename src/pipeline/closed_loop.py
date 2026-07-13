@@ -17,6 +17,7 @@ from typing import Protocol
 import numpy as np
 from loguru import logger
 
+from config.thresholds import SELF_CORR_MAX
 from src.calibration.stats import spearman
 from src.pipeline.shortlist import ShortlistCandidate
 from src.storage.repository import MiniBrainRepository
@@ -243,6 +244,37 @@ class ClosedLoop:
                     "Pool hay không (đạt cấu trúc ≠ được chấp nhận): {}",
                     len(power_pool_only),
                     ", ".join(_short(e, 40) for e in power_pool_only),
+                )
+            # Task 8: khối "SẴN SÀNG NỘP" — PHÂN BIỆT RẠCH RÒI với "Power Pool eligible" ở
+            # trên (đó chỉ là cờ CẤU TRÚC, KHÔNG xác nhận nộp được — commit e27821d). Khối
+            # này LÀ xác nhận nộp được Regular thật: status=passed (WQ đã chấm Sharpe/Fitness/
+            # Turnover/IS-Ladder) + failed_checks=[] (không WQ check nào tự FAIL) + self_corr
+            # ĐÃ VERIFY < SELF_CORR_MAX (config/thresholds.py, không hardcode). Guard
+            # getattr+callable: repo fake/cũ thiếu method này (nhiều test dùng fake tối giản)
+            # vẫn chạy được, coi như 0 alpha sẵn sàng — tương thích ngược, giống pattern
+            # avoided_hashes_original ở đầu run().
+            _submit_ready_fn = getattr(self.repo, "submit_ready_alphas", None)
+            ready = _submit_ready_fn(SELF_CORR_MAX) if callable(_submit_ready_fn) else []
+            if ready:
+                detail = "\n".join(
+                    f"   • {r.wq_alpha_id}  Sharpe={_fmt(r.sharpe)}  self_corr={r.self_corr:.2f}"
+                    f"  {_short(r.expression, 60)}"
+                    for r in ready
+                )
+                logger.info(
+                    "🚀 SẴN SÀNG NỘP: {} alpha đạt CẢ BA điều kiện Regular thật (status=passed, "
+                    "failed_checks=[], self_corr<{:.2f} đã verify) — KHÁC \"Power Pool eligible\" "
+                    "ở trên (đó chỉ là cờ CẤU TRÚC, không xác nhận nộp được), khối này LÀ xác "
+                    "nhận nộp được. Nộp ngay bằng lệnh:\n"
+                    "   ./venv/Scripts/python.exe main.py submit --no-dry-run\n{}",
+                    len(ready), SELF_CORR_MAX, detail,
+                )
+            else:
+                logger.info(
+                    "🚀 SẴN SÀNG NỘP: 0 alpha sẵn sàng (chưa có alpha nào đạt cả status=passed "
+                    "+ failed_checks=[] + self_corr<{:.2f} đã verify trong DB). Muốn kiểm tra "
+                    "thủ công: ./venv/Scripts/python.exe main.py submit --dry-run",
+                    SELF_CORR_MAX,
                 )
             return ClosedLoopReport(
                 ideas_tried, sims_used, n_passed, n_abandoned, stop_reason,
