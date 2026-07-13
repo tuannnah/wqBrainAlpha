@@ -80,6 +80,14 @@ def combine_stage(
     tự-so) để dựng scorer chấm gate bằng pool = PnL local của CHÍNH các tín hiệu Brain-
     proven, không phải toàn bộ pool tích luỹ. Không có factory -> giữ `score_fn` cũ (tương
     thích ngược cho test/call site hiện hữu).
+    Chốt ngữ nghĩa pool (deviation plan Fix 2/Task 2, review final): "ngoài combo" nghĩa là
+    MỌI signal trong `signals` không thuộc combo hiện tại (khớp test spec {A,B,C}→combo(A,B)
+    thì pool={C}), KHÔNG PHẢI thu hẹp về "chỉ signal Brain-proven ngoài combo" — mọi phần tử
+    của `signals` được coi là ứng viên pool hợp lệ, bất kể `source` ("run" hay "db").
+    Loại "ngoài combo" tính theo CHUỖI expr (Finding #3 review, không phải id() Python): 2
+    SubSignal khác object nhưng CÙNG expr (vd 1 bản "run" + 1 bản "db" trùng nhau) đều bị loại
+    khỏi pool nếu expr đó có mặt trong combo — id() để lọt bản sao vào pool sẽ tạo tự-so
+    (|rho|≈1 với chính combo) khiến gate giết oan combo.
 
     `drop_stats` (Fix 4, Task 2 — instrumentation): mutate in-place, đếm tại 4 điểm rớt —
     "greedy_empty" (0 combo thô sau greedy, thường vì < n_min tín hiệu đủ shallow/ít tương
@@ -109,8 +117,13 @@ def combine_stage(
             _bump(drop_stats, "depth")
             continue
         if score_fn_factory is not None:
-            combo_ids = {id(s) for s in combo}
-            others = [s for s in signals if id(s) not in combo_ids]
+            # Finding #3 (review): loại theo CHUỖI expr, không phải id() — `signals` có thể
+            # chứa CÙNG một expr 2 bản (vd 1 bản "run" phiên hiện tại + 1 bản "db" nạp lại từ
+            # kho, khác object/id). Lọc bằng id() để lọt bản sao vào pool "others" dù expr đã
+            # nằm trong combo -> pool tự-so với chính combo (|rho|≈1) -> gate giết oan combo
+            # (đúng loại tự-so Fix 2 phải khử).
+            combo_exprs = {s.expr for s in combo}
+            others = [s for s in signals if s.expr not in combo_exprs]
             local_score_fn = score_fn_factory(others)
         else:
             local_score_fn = score_fn

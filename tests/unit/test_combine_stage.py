@@ -134,6 +134,46 @@ def test_score_fn_factory_uu_tien_loai_thanh_vien_combo_khoi_pool():
     assert {s.expr for s in received[0]} == {c.expr}  # pool CHỈ chứa C (loại A,B = combo)
 
 
+def test_score_fn_factory_loai_ban_sao_expr_ngoai_combo_khoi_pool():
+    """Finding #3 (Important): combine_stage loại thành viên combo khỏi pool bằng id() —
+    nếu `signals` chứa CÙNG một expr 2 bản (vd 1 bản "run" của phiên hiện tại + 1 bản "db"
+    nạp lại từ kho, cùng expr nhưng khác object) thì greedy KHÔNG cho 2 bản vào cùng combo
+    (rho pnl ~1.0 >= tau -> tự loại), nhưng bản sao còn lại (id khác) vẫn lọt vào pool
+    "others" của score_fn_factory với |rho|≈1 so với chính combo -> gate tự-so giết oan combo
+    (đúng loại tự-so mà Fix 2 phải khử). Sau fix, others phải loại theo CHUỖI expr."""
+    a, b = _two_uncorrelated()
+    # a_dup: CÙNG expr + CÙNG pnl với a (mô phỏng bản ghi trùng từ nguồn "db"), khác object/id,
+    # điểm hơi thấp hơn a để không đổi thứ tự seed nhưng vẫn cao hơn b (ranked: a > a_dup > b).
+    a_dup = _sig(a.expr, a.pnl.copy(), score=a.score - 0.05)
+    all_sigs = [a, b, a_dup]
+    combined_expr = build_combined_expression([a.expr, b.expr]).expr
+
+    received: list[list[SubSignal]] = []
+
+    def factory(others: list[SubSignal]):
+        received.append(others)
+
+        def score_fn(expr: str) -> _FakeScore:
+            fit = 2.0 if expr == combined_expr else 0.5
+            return _FakeScore(
+                _FakeMetrics(fitness=fit, sharpe=fit), _FakeVerdict(True), np.zeros(200),
+                DATES.copy(),
+            )
+
+        return score_fn
+
+    out = combine_stage(
+        all_sigs, _scorer({}),
+        tau=0.5, n_min=2, n_max=2, max_combos=1, score_fn_factory=factory,
+    )
+
+    assert len(out) == 1
+    assert len(received) == 1
+    pool_exprs = {s.expr for s in received[0]}
+    # Bản sao a_dup (cùng expr với a, thành viên combo) KHÔNG được lọt vào pool.
+    assert a.expr not in pool_exprs
+
+
 # ------------------------- Fix 3: depth-aware pre-filter -------------------------
 # Diag đo được (logs/diag_combiner_20260712.md: 3/5 combo, 20260713.md: 2/5 combo) chết vì
 # component quá sâu -> build_combined_expression không lọt trần MAX_DEPTH sau khi bọc
