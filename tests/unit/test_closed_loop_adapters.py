@@ -811,8 +811,12 @@ def test_build_closed_loop_noi_simulate_many_xuong_alt_data_source(small_panel, 
 
     batch = loop.idea_source.next_batch()
     assert len(sim.multi_calls) == 1
-    assert len(sim.multi_calls[0]) == len(ALT_DATA_CORES)
+    # Finding #1: max_ideas=2 -> presim_cap=2, chỉ 2 job vào batch multi-sim (KHÔNG sim cả 6
+    # core rồi để ClosedLoop vứt 4 kết quả vượt trần — lãng phí quota lặp qua các phiên).
+    assert len(sim.multi_calls[0]) == 2
     assert sim.single_calls == 0  # chưa refine_and_sim gì — chỉ next_batch() đã sim xong batch
+    # Core vượt trần vẫn được yield làm candidate (đi đường sim đơn nếu tới lượt, không mất).
+    assert len(batch) == len(ALT_DATA_CORES)
 
     # refine_and_sim CORE đầu tiên phải đọc lại cache, KHÔNG sim đơn lần 2.
     outcome = refiner.refine_and_sim(batch[0])

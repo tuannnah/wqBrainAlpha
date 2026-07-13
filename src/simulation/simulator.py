@@ -363,6 +363,15 @@ class Simulator:
            `/alphas/{alpha_id}`). Tool này tự giới hạn 2-8 biểu thức/lần (quy ước RIÊNG của
            tool, KHÔNG phải giới hạn cứng của API — giới hạn cứng là 2..10 theo nguồn (1)).
 
+        LƯU Ý TRUNG THỰC về thứ tự children (review Finding #2): KHÔNG nguồn nào XÁC NHẬN thứ
+        tự `children` == thứ tự payload gửi đi — tài liệu (1) chỉ nói "the list of child
+        simulation ids are available when the parent simulation is complete", còn wqb-mcp (2)
+        cũng chỉ zip theo index (cùng GIẢ ĐỊNH, không phải bằng chứng). Vì response mỗi child
+        echo lại request data (`...<the request object data>...`, brain-api.md:336 — gồm field
+        `regular` = biểu thức gốc), code TỰ ĐỐI CHIẾU echo `regular` với expr kỳ vọng để xác
+        minh (xem `_match_children_to_exprs`): khớp -> gán như giả định; lệch -> map lại theo
+        biểu thức + log WARNING; không match được -> status='error' thay vì gán bừa.
+
         Hành vi (khớp `Simulator.simulate` đường đơn, xem interface Task 6):
         - Giữ NGUYÊN THỨ TỰ `jobs` trong kết quả trả về.
         - Job bị `pre_sim_validator` chặn (field/toán tử bịa) -> `SimulationResult(presim_
@@ -466,8 +475,15 @@ class Simulator:
                 f"multi-sim: số children ({len(children)}) khác số job đã gửi ({len(chunk)})"
             )
 
-        results: list[SimulationResult] = []
-        for expr, child_id in zip(exprs, children):
+        # Poll TẤT CẢ children trước, thu (echo, payload, error) từng slot. LƯU Ý (review
+        # Finding #2): thứ tự `children` == thứ tự payload gửi đi chỉ là GIẢ ĐỊNH chung của cả
+        # 2 nguồn (tài liệu Brain chỉ nói "list of child ids available when parent complete",
+        # wqb-mcp cũng zip theo index) — KHÔNG nguồn nào XÁC NHẬN. Response mỗi child echo lại
+        # request data (field `regular` = biểu thức gốc, brain-api.md:336) -> tự đối chiếu echo
+        # với expr kỳ vọng để xác minh, thay vì tin mù thứ tự (sai -> gán nhầm sharpe/alpha_id
+        # cho biểu thức khác một cách âm thầm).
+        polled: list[tuple[str | None, dict | None, SimulationError | None]] = []
+        for child_id in children:
             child_location = (
                 child_id if child_id.startswith(("http://", "https://", "/"))
                 else f"/simulations/{child_id}"
@@ -475,21 +491,74 @@ class Simulator:
             try:
                 progress = self._poll(child_location, deadline=deadline)
             except SimulationError as exc:
-                logger.error("Multi-sim: con lỗi/timeout: {} | expr={}", exc, expr)
+                polled.append((None, None, exc))
+                continue
+            echo = progress.get("regular")
+            polled.append((echo if isinstance(echo, str) else None, progress, None))
+
+        ordered = self._match_children_to_exprs(exprs, polled)
+
+        results: list[SimulationResult] = []
+        for expr, (progress, err) in zip(exprs, ordered):
+            if err is not None:
+                logger.error("Multi-sim: con lỗi/timeout: {} | expr={}", err, expr)
                 if self.on_invalid_field is not None:
-                    bad_field = extract_invalid_field(str(exc))
+                    bad_field = extract_invalid_field(str(err))
                     if bad_field:
                         self.on_invalid_field(bad_field)
-                    for event_field in extract_event_fields(str(exc), expr):
+                    for event_field in extract_event_fields(str(err), expr):
                         self.on_invalid_field(event_field)
-                results.append(SimulationResult(expression=expr, status="error", raw={"error": str(exc)}))
+                results.append(SimulationResult(expression=expr, status="error", raw={"error": str(err)}))
                 continue
+            assert progress is not None  # bất biến: err None <=> progress có payload
             alpha_id = progress.get("alpha")
             if not alpha_id:
                 results.append(SimulationResult(expression=expr, status="error", raw=progress))
                 continue
             results.append(self._fetch_metrics(expr, alpha_id))
         return results
+
+    @staticmethod
+    def _match_children_to_exprs(
+        exprs: list[str],
+        polled: list[tuple[str | None, dict | None, "SimulationError | None"]],
+    ) -> list[tuple[dict | None, "SimulationError | None"]]:
+        """Đối chiếu kết quả children với danh sách expr đã gửi (Finding #2).
+
+        - Echo `regular` của mọi child KHỚP vị trí (hoặc vắng mặt/không thuộc tập expr đã gửi —
+          vd Brain chuẩn hoá lại chuỗi) -> tin thứ tự như giả định (hành vi cũ).
+        - Phát hiện child có echo là biểu thức của JOB KHÁC (thứ tự children lệch payload) ->
+          log WARNING + tự xây map expr->kết quả từ chính các echo; expr không match được child
+          nào -> (None, SimulationError) để caller trả status='error' thay vì gán bừa kết quả
+          của biểu thức khác."""
+        known = set(exprs)
+        misordered = any(
+            echo is not None and echo in known and echo != exprs[i]
+            for i, (echo, _p, _e) in enumerate(polled)
+        )
+        if not misordered:
+            return [(payload, err) for (_echo, payload, err) in polled]
+
+        logger.warning(
+            "Multi-sim: thứ tự children LỆCH thứ tự payload đã gửi (phát hiện qua echo "
+            "'regular') — tự đối chiếu lại theo biểu thức thay vì tin thứ tự."
+        )
+        used = [False] * len(polled)
+        ordered: list[tuple[dict | None, SimulationError | None]] = []
+        for expr in exprs:
+            matched: tuple[dict | None, SimulationError | None] | None = None
+            for j, (echo, payload, err) in enumerate(polled):
+                if not used[j] and echo == expr:
+                    used[j] = True
+                    matched = (payload, err)
+                    break
+            if matched is None:
+                matched = (None, SimulationError(
+                    "multi-sim: không đối chiếu được child nào với biểu thức "
+                    "(echo 'regular' lệch) — không gán kết quả để tránh ghi nhầm"
+                ))
+            ordered.append(matched)
+        return ordered
 
     def _poll_parent_children(self, location: str, deadline: float) -> list[str]:
         """Poll simulation CHA tới khi JSON body xuất hiện `children` (list id con) khác rỗng —

@@ -708,7 +708,14 @@ class AltDataIdeaSource:
     khi đưa vào batch multi-sim (giống CuratedIdeaSource) — quan trọng để KHÔNG gửi core trùng
     (đã sim phiên trước) vào payload multi-sim, vừa lãng phí 1 slot mảng (tối đa 10, xem
     `Simulator.MULTI_SIM_MAX`) vừa tốn quota vô ích (ClosedLoop.run() dù sao cũng sẽ tự bỏ core
-    trùng qua `seen`, nhưng lúc đó quota multi-sim đã tốn rồi)."""
+    trùng qua `seen`, nhưng lúc đó quota multi-sim đã tốn rồi).
+
+    `presim_cap` (review Finding #1): trần số core được sim TRƯỚC theo batch — build_closed_loop
+    wire = `max_ideas` của phiên. Không có trần này, phiên `--max-ideas` nhỏ sẽ sim cả nhóm
+    (vd 6 core) rồi ClosedLoop chỉ tiêu thụ 2: 4 kết quả sim THẬT còn lại bị vứt (không
+    `_finalize`, không vào avoided_hashes) -> PHIÊN SAU sim lại đúng các core đó, lãng phí quota
+    lặp vô hạn. Core vượt trần vẫn được yield làm candidate bình thường (đi đường sim đơn trong
+    `_sim_direct` nếu tới lượt — KHÔNG mất). None (mặc định) = không trần."""
 
     def __init__(
         self, *, fallback, cores: tuple[str, ...] = ALT_DATA_CORES,
@@ -718,6 +725,7 @@ class AltDataIdeaSource:
         simulator: Any = None, sim_config: Any = None,
         pp_allowed_neutralizations: frozenset[str] = frozenset(),
         presim_cache: "dict[str, Any] | None" = None,
+        presim_cap: int | None = None,
     ) -> None:
         self._fallback = fallback
         self._registry = registry if registry is not None else default_registry()
@@ -731,6 +739,7 @@ class AltDataIdeaSource:
         self._sim_config = sim_config
         self._pp_allowed_neutralizations = pp_allowed_neutralizations
         self._presim_cache = presim_cache
+        self._presim_cap = presim_cap
 
     def set_saturated_families(self, fams: "set[str] | frozenset[str]") -> None:
         self._saturated = set(fams)
@@ -738,26 +747,30 @@ class AltDataIdeaSource:
             self._fallback.set_saturated_families(fams)
 
     def _presim_batch(self, cores: list[str]) -> None:
-        """Task 6: sim CẢ NHÓM `cores` 1 lần qua `simulate_many` (thay vì N lần tuần tự sau
-        này trong `_sim_direct`), ghi kết quả vào `self._presim_cache` (khoá = expr thô — cùng
-        khoá `_sim_direct` dùng để tra lại). CHỈ chạy khi đủ cấu hình (simulator/sim_config/
-        cache) VÀ ≥2 core (khớp giới hạn API: mảng multi-sim cần ≥2 phần tử — 1 core thì tự
+        """Task 6: sim NHÓM `cores` (cắt trần `presim_cap` — xem docstring class, Finding #1)
+        1 lần qua `simulate_many` (thay vì N lần tuần tự sau này trong `_sim_direct`), ghi kết
+        quả vào `self._presim_cache` (khoá = expr thô — cùng khoá `_sim_direct` dùng để tra
+        lại). CHỈ chạy khi đủ cấu hình (simulator/sim_config/cache) VÀ nhóm sau khi cắt trần
+        còn ≥2 core (khớp giới hạn API: mảng multi-sim cần ≥2 phần tử — 1 core thì tự
         `_sim_direct` sim đường đơn như cũ, khỏi tốn thêm 1 lần round-trip vô ích).
 
         LỖI BẤT KỲ (multi-sim hỏng, mất mạng, quota cạn...) -> log warning, KHÔNG cache gì —
         `_sim_direct` sẽ tự sim tuần tự từng core như hành vi CŨ (an toàn, không chết phiên;
         quota cạn thật vẫn được `_sim_direct` phát hiện + báo QuotaExhausted đúng như trước,
         chỉ trễ hơn 1 nhịp vì phải chạm Brain lại ở đường đơn)."""
-        if (
-            self._simulator is None or self._sim_config is None
-            or self._presim_cache is None or len(cores) < 2
-        ):
+        if self._simulator is None or self._sim_config is None or self._presim_cache is None:
+            return
+        # Finding #1: chỉ sim trước tối đa `presim_cap` core (= max_ideas phiên) — sim vượt
+        # trần sẽ bị ClosedLoop vứt kết quả (không _finalize/avoided_hashes) rồi PHIÊN SAU sim
+        # lại, lãng phí quota lặp. Core bị cắt vẫn nằm trong batch yield (không mất).
+        batch_cores = cores if self._presim_cap is None else cores[: self._presim_cap]
+        if len(batch_cores) < 2:
             return
         jobs = [
             (expr, self._sim_config.with_overrides(
                 neutralization=_neutralization_for(expr, self._pp_allowed_neutralizations, self._registry)
             ).to_settings())
-            for expr in cores
+            for expr in batch_cores
         ]
         try:
             results = self._simulator.simulate_many(jobs)
@@ -767,7 +780,7 @@ class AltDataIdeaSource:
                 exc,
             )
             return
-        for expr, result in zip(cores, results):
+        for expr, result in zip(batch_cores, results):
             self._presim_cache[expr] = result
 
     def next_batch(self):
@@ -1139,6 +1152,10 @@ def build_closed_loop(
             sim_config=getattr(refiner, "sim_config", None),
             pp_allowed_neutralizations=getattr(refiner, "pp_allowed_neutralizations", frozenset()),
             presim_cache=_presim_cache,
+            # Finding #1: trần batch = trần ý tưởng phiên — không sim trước nhiều hơn số
+            # candidate ClosedLoop sẽ thực sự tiêu thụ (kết quả vượt trần bị vứt, phiên sau
+            # sim lại -> lãng phí quota lặp). None = không trần (phiên không giới hạn).
+            presim_cap=max_ideas,
         )
     # Combiner bọc NGOÀI CÙNG: nối tiếp mỗi batch (sau curated/alt-data) bằng alpha ghép từ
     # chính tín hiệu con batch đó + kho DB -> tự động chạy sau mỗi run (spec 2026-07-09).

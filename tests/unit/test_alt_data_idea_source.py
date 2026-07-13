@@ -112,6 +112,41 @@ def test_multi_sim_loi_khong_lam_hong_batch():
     assert cache == {}
 
 
+def test_presim_cap_gioi_han_so_job_multi_sim_nhung_van_yield_du_core():
+    """Finding Important #1: khi phiên có trần ý tưởng (--max-ideas nhỏ), _presim_batch KHÔNG
+    được sim TOÀN BỘ cores trước — các sim vượt trần sẽ bị ClosedLoop bỏ (không _finalize,
+    không vào avoided_hashes) -> phiên sau sim lại, lãng phí quota lặp. `presim_cap` giới hạn
+    số job gửi simulate_many = trần; core còn lại VẪN được yield làm candidate (sẽ đi đường
+    sim đơn trong _sim_direct như cũ nếu tới lượt, KHÔNG mất)."""
+    sim = _FakeMultiSimulator()
+    cache: dict[str, object] = {}
+    src = AltDataIdeaSource(
+        fallback=_FakeFallback(), cores=ALT_DATA_CORES,  # 6 core
+        simulator=sim, sim_config=SimConfig.default(), presim_cache=cache,
+        presim_cap=2,
+    )
+    batch = src.next_batch()
+    assert len(sim.calls) == 1
+    assert len(sim.calls[0]) == 2                       # chỉ 2 job (bằng trần), không phải 6
+    assert set(cache.keys()) == set(ALT_DATA_CORES[:2])  # cache đúng 2 core đầu
+    assert [c.expr for c in batch] == list(ALT_DATA_CORES)  # core 3+ vẫn trong batch, không mất
+
+
+def test_presim_cap_1_khong_goi_multi_sim():
+    """presim_cap=1 -> chỉ còn 1 core được phép sim trước -> KHÔNG gọi simulate_many (mảng
+    multi-sim cần ≥2 phần tử) — core đó tự đi đường đơn trong _sim_direct như cũ."""
+    sim = _FakeMultiSimulator()
+    cache: dict[str, object] = {}
+    src = AltDataIdeaSource(
+        fallback=_FakeFallback(), cores=ALT_DATA_CORES[:3],
+        simulator=sim, sim_config=SimConfig.default(), presim_cache=cache,
+        presim_cap=1,
+    )
+    src.next_batch()
+    assert sim.calls == []
+    assert cache == {}
+
+
 def test_avoided_hashes_loc_truoc_khi_batch_multi_sim():
     """Core đã Brain-sim & lưu tried_hashes phiên trước (avoided_hashes) -> lọc TRƯỚC khi vào
     batch multi-sim (giống CuratedIdeaSource) — tránh gửi core trùng vào payload, vừa lãng phí

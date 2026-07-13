@@ -492,9 +492,10 @@ def test_simulate_many_post_1_lan_mang_3_payload_dung_thu_tu():
     client.queue_get(
         FakeResponse(200, json_data={"status": "COMPLETE", "children": ["c1", "c2", "c3"]})
     )
-    # Poll + fetch từng con theo ĐÚNG thứ tự c1, c2, c3.
-    for cid, sharpe, alpha_id in [("c1", 1.1, "alpha-c1"), ("c2", 1.2, "alpha-c2"), ("c3", 1.3, "alpha-c3")]:
+    # Poll TẤT CẢ con trước (c1, c2, c3), rồi mới fetch metrics từng alpha theo thứ tự exprs.
+    for alpha_id in ["alpha-c1", "alpha-c2", "alpha-c3"]:
         client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": alpha_id}))
+    for sharpe, alpha_id in [(1.1, "alpha-c1"), (1.2, "alpha-c2"), (1.3, "alpha-c3")]:
         client.queue_get(_metrics_response(sharpe, alpha_id))
 
     sim = Simulator(
@@ -519,8 +520,9 @@ def test_simulate_many_presim_reject_khong_chiem_slot_payload():
     client = FakeClient()
     client.queue_post(FakeResponse(201, headers={"Location": "/simulations/parent-2"}))
     client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "children": ["c1", "c2"]}))
-    for cid, sharpe, alpha_id in [("c1", 0.9, "alpha-c1"), ("c2", 1.0, "alpha-c2")]:
+    for alpha_id in ["alpha-c1", "alpha-c2"]:
         client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": alpha_id}))
+    for sharpe, alpha_id in [(0.9, "alpha-c1"), (1.0, "alpha-c2")]:
         client.queue_get(_metrics_response(sharpe, alpha_id))
 
     def validator(expr):
@@ -595,8 +597,9 @@ def test_simulate_many_chunk_qua_10_thanh_nhieu_request():
     client.queue_post(FakeResponse(201, headers={"Location": "/simulations/parent-big"}))
     children = [f"c{i}" for i in range(10)]
     client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "children": children}))
-    for i, cid in enumerate(children):
+    for i, cid in enumerate(children):  # poll TẤT CẢ con trước...
         client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": f"alpha-{i}"}))
+    for i in range(10):  # ...rồi fetch metrics theo thứ tự exprs
         client.queue_get(_metrics_response(1.0 + i * 0.01, f"alpha-{i}"))
     # Chunk 2: 1 job còn lại -> đường đơn.
     client.queue_post(FakeResponse(201, headers={"Location": "/simulations/single-11"}))
@@ -615,6 +618,73 @@ def test_simulate_many_chunk_qua_10_thanh_nhieu_request():
     assert isinstance(post_calls[1][2]["json"], dict)  # chunk cuối: object đơn (không phải mảng)
     assert len(results) == 11
     assert results[-1].sharpe == 2.0
+
+
+def test_simulate_many_children_dao_thu_tu_van_map_dung_theo_echo_regular():
+    """Finding Important #2: tài liệu Brain KHÔNG đảm bảo thứ tự `children` == thứ tự payload
+    (cả docs lẫn wqb-mcp đều chỉ GIẢ ĐỊNH). Response mỗi child echo lại request data (field
+    `regular` = biểu thức gốc, brain-api.md:336) -> code phải ĐỐI CHIẾU echo với expr kỳ vọng:
+    children bị đảo thứ tự -> vẫn map đúng kết quả về job gốc + log WARNING, không gán nhầm
+    sharpe/alpha_id cho biểu thức khác một cách âm thầm."""
+    client = FakeClient()
+    client.queue_post(FakeResponse(201, headers={"Location": "/simulations/parent-swap"}))
+    client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "children": ["c1", "c2"]}))
+    # Brain trả children ĐẢO: c1 thực ra là sim của rank(b), c2 của rank(a) — echo `regular` nói thật.
+    client.queue_get(
+        FakeResponse(200, json_data={"status": "COMPLETE", "alpha": "alpha-b", "regular": "rank(b)"})
+    )
+    client.queue_get(
+        FakeResponse(200, json_data={"status": "COMPLETE", "alpha": "alpha-a", "regular": "rank(a)"})
+    )
+    # Fetch metrics theo thứ tự exprs SAU khi map: rank(a)->alpha-a trước, rank(b)->alpha-b sau.
+    client.queue_get(_metrics_response(1.1, "alpha-a"))
+    client.queue_get(_metrics_response(2.2, "alpha-b"))
+
+    from loguru import logger as _logger
+
+    warnings: list[str] = []
+    sink_id = _logger.add(lambda m: warnings.append(str(m)), level="WARNING")
+    try:
+        sim = Simulator(
+            client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None,
+            time_func=lambda: 0.0,
+        )
+        results = sim.simulate_many([("rank(a)", None), ("rank(b)", None)])
+    finally:
+        _logger.remove(sink_id)
+
+    assert [r.expression for r in results] == ["rank(a)", "rank(b)"]
+    assert [r.alpha_id for r in results] == ["alpha-a", "alpha-b"]  # KHÔNG bị tráo
+    assert [r.sharpe for r in results] == [1.1, 2.2]
+    assert any("thứ tự" in w for w in warnings)  # có cảnh báo thứ tự children lệch
+
+
+def test_simulate_many_echo_lech_khong_match_duoc_thi_error_thay_vi_gan_bua():
+    """Echo `regular` lệch mà KHÔNG đối chiếu được biểu thức nào -> job đó nhận status='error'
+    thay vì gán bừa kết quả của job khác (thà mất 1 kết quả còn hơn ghi sai sharpe/alpha_id)."""
+    client = FakeClient()
+    client.queue_post(FakeResponse(201, headers={"Location": "/simulations/parent-bad"}))
+    client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "children": ["c1", "c2"]}))
+    # CẢ HAI child đều echo 'rank(b)' (bất thường) -> rank(a) không có child nào khớp.
+    client.queue_get(
+        FakeResponse(200, json_data={"status": "COMPLETE", "alpha": "alpha-b1", "regular": "rank(b)"})
+    )
+    client.queue_get(
+        FakeResponse(200, json_data={"status": "COMPLETE", "alpha": "alpha-b2", "regular": "rank(b)"})
+    )
+    # Chỉ rank(b) fetch metrics (match child ĐẦU TIÊN chưa dùng: alpha-b1).
+    client.queue_get(_metrics_response(1.5, "alpha-b1"))
+
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0
+    )
+    results = sim.simulate_many([("rank(a)", None), ("rank(b)", None)])
+
+    assert results[0].expression == "rank(a)"
+    assert results[0].status == "error"          # không gán bừa alpha-b2 cho rank(a)
+    assert results[0].alpha_id is None
+    assert results[1].alpha_id == "alpha-b1"
+    assert results[1].sharpe == 1.5
 
 
 def test_simulate_many_rong_tra_rong_khong_goi_api():
