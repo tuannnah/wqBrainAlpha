@@ -294,9 +294,17 @@ class LocalTunerRefiner:
                 break  # không đủ tín hiệu để quyết định sweep tiếp -> dừng an toàn
             if sharpe <= -ALT_SWEEP_MIN_ABS_SHARPE:
                 next_expr, next_cfg = _flip_sign(cur_expr), cur_cfg
+                logger.info(
+                    "Sweep alt-data: sharpe {:.2f} quá âm -> thử FLIP DẤU: {!r}",
+                    sharpe, next_expr,
+                )
             elif sharpe >= ALT_SWEEP_MIN_ABS_SHARPE:
                 next_decay = 8 if cur_cfg.decay == 4 else 4
                 next_expr, next_cfg = cur_expr, cur_cfg.with_overrides(decay=next_decay)
+                logger.info(
+                    "Sweep alt-data: sharpe {:.2f} dương nhưng chưa pass -> thử decay {}->{}",
+                    sharpe, cur_cfg.decay, next_decay,
+                )
             else:
                 break  # |sharpe| < ngưỡng -> chưa đủ tín hiệu để biết nên flip hay đổi decay
             try:
@@ -311,13 +319,40 @@ class LocalTunerRefiner:
             sims_used += 1
             attempts.append((next_expr, next_cfg, next_result))
             cur_expr, cur_cfg, cur_result = next_expr, next_cfg, next_result
-        best_expr, best_cfg, best_result = max(
-            attempts, key=lambda a: _submit_score(a[2].sharpe, a[2].fitness)
+        best_idx, (best_expr, best_cfg, best_result) = max(
+            enumerate(attempts), key=lambda ia: _submit_score(ia[1][2].sharpe, ia[1][2].fitness)
         )
+        # Finding reviewer (Important): sim Brain THẬT không thắng vẫn ĐÃ đốt quota và tạo
+        # alpha thật trên platform (wq_alpha_id) -> phải có bản ghi local (save_alpha +
+        # save_simulation) để không mất dữ liệu calibration/audit (alpha mồ côi trên Brain).
+        # Outcome trả về VẪN chỉ 1 (best) — chỉ persist, không tạo thêm IdeaOutcome.
+        for i, (a_expr, a_cfg, a_result) in enumerate(attempts):
+            if i == best_idx:
+                continue  # bản thắng do _finalize lưu (kèm chấm Power Pool/self-corr đầy đủ)
+            self._persist_sweep_attempt_thua(a_expr, a_cfg, a_result)
         return self._finalize(
             best_result, best_expr, CanonicalHasher().visit(parse(best_expr)), best_cfg,
             stop_reason="alt_data_direct", source="alt_data", description="alt-data direct",
             sims_used=sims_used,
+        )
+
+    def _persist_sweep_attempt_thua(self, expr: str, sim_cfg, result) -> None:
+        """Lưu 1 attempt sweep THUA (sim Brain thật nhưng không được chọn làm outcome cuối) —
+        cùng repo/pattern `_finalize` dùng (save_alpha + save_simulation, score qua
+        score_vector_fn) nhưng KHÔNG chấm Power Pool/self-corr (không đáng tốn corr-check cho
+        bản thua) và KHÔNG tạo IdeaOutcome (hợp đồng refine_and_sim: 1 outcome duy nhất)."""
+        vector = self.score_vector_fn(result)
+        alpha_id = self.repo.save_alpha(
+            expr, source="alt_data", hypothesis={},
+            description="alt-data sweep attempt (thua)", parent_id=None,
+        )
+        self.repo.save_simulation(
+            result, region=self.region, universe=self.universe,
+            score=vector.total, alpha_id=alpha_id, config_key=sim_cfg.key(),
+        )
+        logger.info(
+            "Sweep alt-data: attempt THUA đã lưu — expr={!r} wq_alpha_id={} sharpe={}",
+            expr if len(expr) <= 80 else expr[:77] + "...", result.alpha_id, result.sharpe,
         )
 
     def _finalize(

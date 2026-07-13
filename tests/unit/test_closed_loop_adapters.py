@@ -532,13 +532,17 @@ def _sweep_cand(expr: str) -> ShortlistCandidate:
 
 class _SweepRepo:
     def __init__(self) -> None:
-        self.saved: list[tuple[str, str | None]] = []
+        # (expr, source, description) — description để phân biệt bản ghi THẮNG (finalize)
+        # với bản ghi attempt THUA của sweep.
+        self.saved: list[tuple[str, str | None, str | None]] = []
+        self.sim_saved: int = 0
 
     def save_alpha(self, expr, **k):
-        self.saved.append((expr, k.get("source")))
-        return "alpha-1"
+        self.saved.append((expr, k.get("source"), k.get("description")))
+        return f"alpha-{len(self.saved)}"
 
     def save_simulation(self, *a, **k):
+        self.sim_saved += 1
         return None
 
 
@@ -628,6 +632,21 @@ def test_sim_direct_sharpe_am_sau_flip_dau_va_sim_lai() -> None:
     assert out.expr == _SWEEP_EXPR_FLIPPED
     assert out.sharpe == 1.6
     assert out.passed is True
+    # Finding reviewer (Important): sim THẬT không thắng (sim #1, sharpe -0.9) đã đốt quota +
+    # tạo alpha thật trên platform -> PHẢI có bản ghi local (save_alpha + save_simulation),
+    # không được vứt không dấu vết (mất dữ liệu calibration/audit; alpha mồ côi trên Brain).
+    repo = refiner.repo
+    assert len(repo.saved) == 2
+    assert repo.sim_saved == 2
+    saved_exprs = {expr for expr, _src, _desc in repo.saved}
+    assert saved_exprs == {_SWEEP_EXPR, _SWEEP_EXPR_FLIPPED}
+    assert all(src == "alt_data" for _e, src, _d in repo.saved)
+    # Bản ghi attempt THUA phải phân biệt được với bản ghi thắng qua description.
+    desc_by_expr = {expr: desc for expr, _src, desc in repo.saved}
+    assert desc_by_expr[_SWEEP_EXPR] == "alt-data sweep attempt (thua)"
+    assert desc_by_expr[_SWEEP_EXPR_FLIPPED] == "alt-data direct"
+    # Hợp đồng outcome KHÔNG đổi: refine_and_sim vẫn trả đúng 1 IdeaOutcome (best).
+    assert isinstance(out, IdeaOutcome)
 
 
 def test_sim_direct_sharpe_yeu_duoi_nguong_khong_sweep() -> None:
