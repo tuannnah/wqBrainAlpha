@@ -439,12 +439,25 @@
   tin floor. (4) Chưa có multi-simulation → 5 seed alt-data tốn ~57′ tuần tự. (5) Hoãn vá fidelity
   panel local (giảm phụ thuộc local thay vì tăng ρ). (6) `days_to_cover`/`shares_short` bị field
   guard chặn — cần verify LIVE dataset trước khi seed lại.
-- **In progress:** Chưa thực thi task nào — chờ user chọn cách chạy (subagent-driven / inline).
-- **Blockers / open risks:** T7 (verify field) + nghiệm thu tổng cần session Brain (QR terminal
-  thật). Alpha `rKlkG9O8` (Sharpe 1.57, self-corr 0.49, failed_checks=[]) vẫn nằm trong DB
-  sẵn sàng nộp — user có thể `submit --no-dry-run` không cần chạy thêm phiên.
-- **Next step:** Thực thi plan theo thứ tự T1 (diag combiner offline — không tốn quota) → T2.
-- **Tests:** Không đổi code phiên này (chỉ docs + plan).
+- **In progress:** KHÔNG — cả 8 task ĐÃ THỰC THI XONG (subagent-driven) trên nhánh
+  `feature/alpha-submittable` (30 commit e27821d..0ea5a0e), mỗi task qua task-review riêng +
+  final whole-branch review **READY TO MERGE = YES** (5 finding cuối đã fix: 1 Critical sweep
+  sim trùng + 4 Important). pytest **1434 passed**, 1 fail psycopg có sẵn. Chi tiết từng task +
+  Minor deferred: `.superpowers/sdd/progress.md`.
+  - Kết quả nổi bật: (a) Combiner nguồn Brain-proven + gate pool trung thực (hết 0-combo im
+    lặng, có drop_stats); (b) cap GP 3 sim/phiên đếm theo sims_used; (c) degenerate gate; (d)
+    mini-sweep flip-dấu/decay cho alt-data (sim thua vẫn persist); (e) `simulate_many`
+    multi-sim + presim_cap + đối chiếu echo `regular`; (f) `tools/verify_datasets.py`; (g)
+    khối "SẴN SÀNG NỘP" cuối phiên — **DB thật hiện có 7 alpha đạt chuẩn nộp** (E5EqYQRL,
+    omlnv9jn, +5); CSV có cột `origin` đo tiêu chí nghiệm thu.
+- **Blockers / open risks:** Nghiệm thu live cần session Brain (QR terminal thật): (1) chạy
+  `tools/verify_datasets.py` để chốt seed short-interest (Task 7 bước 3 treo); (2) menu-5 một
+  phiên — canh log "thứ tự children LỆCH" + quyền MULTI_SIMULATION (multi-sim lần đầu chạy
+  thật); (3) trước khi nộp 7 alpha sẵn sàng: LUÔN `submit` dry-run (re-check self-corr) rồi
+  mới `--no-dry-run`.
+- **Next step:** User quyết định merge nhánh `feature/alpha-submittable` vào `main`; sau đó
+  nghiệm thu live theo 3 mục trên.
+- **Tests:** 1434 passed, 1 fail psycopg pre-existing.
 
 ### [2026-07-10] Session 08 (tiếp) — Kiểm định độc lập + fix 3 gap
 - **Phase:** Sub-agent (general-purpose) đối chiếu code vs IMPROVEMENT_SPEC từng acceptance ->
