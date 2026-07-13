@@ -306,6 +306,11 @@ class LocalTunerRefiner:
         sims_used = 1
         budget_left = self.alt_sweep_budget
         cur_expr, cur_cfg, cur_result = expr, sim_cfg, result
+        # Finding reviewer #1 (CRITICAL): toggle decay qua lại (4<->8) không nhớ config đã thử
+        # -> ở lần thứ 3 có thể quay lại ĐÚNG (expr, decay) của sim #1 -> sim TRÙNG y hệt, đốt
+        # quota + tạo alpha trùng vô ích. Nhớ tập (expr, cfg.key()) đã sim trong vòng sweep này
+        # để chặn biến thể trùng thay vì sim lại.
+        tried: set[tuple[str, str]] = {(cur_expr, cur_cfg.key())}
         while budget_left > 0 and cur_result.status != "passed":
             sharpe = cur_result.sharpe
             if sharpe is None:
@@ -325,6 +330,14 @@ class LocalTunerRefiner:
                 )
             else:
                 break  # |sharpe| < ngưỡng -> chưa đủ tín hiệu để biết nên flip hay đổi decay
+            next_key = (next_expr, next_cfg.key())
+            if next_key in tried:
+                logger.info(
+                    "Sweep alt-data: biến thể {!r} TRÙNG cấu hình đã sim -> dừng sweep, "
+                    "không đốt thêm quota.", next_key,
+                )
+                break
+            tried.add(next_key)
             try:
                 next_result = self.simulator.simulate(next_expr, settings=next_cfg.to_settings())
             except (AuthExpiredError, QuotaExceededError) as exc:

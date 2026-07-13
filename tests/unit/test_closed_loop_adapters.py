@@ -712,6 +712,35 @@ def test_sim_direct_sharpe_duong_yeu_thu_decay_khac_4_thanh_8() -> None:
     assert out.sims_used == 2
 
 
+def test_sim_direct_toggle_decay_khong_sim_trung_cau_hinh_da_thu() -> None:
+    """Finding #1 (CRITICAL): decay khởi điểm 4 (mặc định production), budget=2, sharpe dương
+    yếu (>= ngưỡng) nhưng CHƯA pass ở cả 2 lần đầu -> toggle decay 4->8->4 khiến sim #3 TRÙNG
+    y hệt sim #1 (cùng expr, cùng decay=4) — đốt quota + tạo alpha trùng vô ích. Sau khi nhớ
+    tập (expr, cfg.key()) đã sim trong vòng sweep, biến thể trùng phải bị chặn -> DỪNG ở sim #2,
+    KHÔNG có sim #3."""
+    from src.simulation.config import SimConfig
+
+    r1 = _sweep_result(_SWEEP_EXPR, status="failed", sharpe=0.6, fitness=0.5, alpha_id="wq-1")
+    r2 = _sweep_result(_SWEEP_EXPR, status="failed", sharpe=0.7, fitness=0.55, alpha_id="wq-2")
+    # Nếu bug còn sống, sim #3 sẽ được gọi lại với đúng cấu hình sim #1 (decay=4) -> để lộ
+    # bug, "gài mìn" bằng cách nếu bị gọi lần 3 thì trả kết quả rất khác (sharpe cao ngất) mà
+    # test assert KHÔNG được nhìn thấy.
+    r3_neu_bi_goi_trung = _sweep_result(
+        _SWEEP_EXPR, status="passed", sharpe=9.9, fitness=9.9, alpha_id="wq-3-KHONG-DUOC-GOI",
+    )
+    sim = _SeqSimulator([r1, r2, r3_neu_bi_goi_trung])
+    refiner = _sweep_refiner(sim, sim_config=SimConfig.default().with_overrides(decay=4))
+
+    out = refiner.refine_and_sim(_sweep_cand(_SWEEP_EXPR))
+
+    assert sim.calls == 2, "sim #3 trùng hệt sim #1 (expr+decay=4) lẽ ra phải bị chặn"
+    assert out.sims_used == 2
+    assert out.sharpe == 0.7  # best trong 2 attempt thật, KHÔNG phải 9.9 (sim trùng ảo)
+    # Không attempt nào lặp cấu hình: (expr, decay) của 2 lần sim phải khác nhau.
+    seen_configs = {(e, s["decay"]) for e, s in sim.seen}
+    assert len(seen_configs) == sim.calls
+
+
 def test_sim_direct_khong_sweep_khi_sim_dau_da_pass() -> None:
     """sim #1 đã 'passed' -> dừng ngay (rule 4), không đốt thêm sim dù còn ngân sách."""
     r1 = _sweep_result(_SWEEP_EXPR, status="passed", sharpe=1.8, fitness=1.3, alpha_id="wq-1")
