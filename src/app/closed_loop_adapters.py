@@ -13,7 +13,12 @@ if TYPE_CHECKING:
 
 from loguru import logger
 
-from config.thresholds import COMBINER_MIN_BRAIN_SHARPE, calibrated_floor
+from config.thresholds import (
+    COMBINER_MIN_BRAIN_SHARPE,
+    DEGENERATE_SHARPE,
+    DEGENERATE_TURNOVER,
+    calibrated_floor,
+)
 from src.backtest.gate import local_usable
 from src.backtest.local_tuner import tune as _tune
 from src.generation.alt_data_seeds import (
@@ -334,6 +339,25 @@ class LocalTunerRefiner:
         # Lưu local-eval để calibration ρ khớp hash với Brain sim ghi sau (chỉ khi có kho + metrics).
         if self.calib_repo is not None and tr.local_metrics is not None:
             self._luu_local_eval_calibration(tr, canonical_hash)
+        # Gate "degenerate position" (Task 4, backtest-cheap): turnover local GẦN NHƯ 0 VÀ
+        # |sharpe| local GẦN NHƯ 0 ĐỒNG THỜI -> vị thế suy biến/gần hằng số (backtest local
+        # KHÔNG suy biến hoàn toàn nhưng vẫn lộ dấu hiệu vô nghĩa mà rule AST structural
+        # (src/lang/meaningfulness.py) không chắc bắt được, vd base khác sign(...) hoặc field
+        # trộn lẫn). Chạy TRƯỚC gate floor/ρ-untrusted (Task 5) — đây là backstop CẤU TRÚC độc
+        # lập với việc có tin ranking local hay không, nên KHÔNG được phép bị ρ-bypass tắt như
+        # floor thường. Bằng chứng thật (log 07-12): các biểu thức dạng này đốt sim Brain thật
+        # ra đúng Sharpe 0.00/turnover 0.00.
+        if tr.local_metrics is not None:
+            m = tr.local_metrics
+            if m.turnover < DEGENERATE_TURNOVER and abs(m.sharpe) < DEGENERATE_SHARPE:
+                return IdeaOutcome(
+                    expr=tr.best_expr, canonical_hash=canonical_hash, passed=False,
+                    wq_alpha_id=None, sharpe=None, fitness=None, turnover=None,
+                    self_corr=None, sims_used=0, stop_reason="degenerate_position",
+                    stage_reached="degenerate", fail_check="DEGENERATE_POSITION",
+                    family=_family, expr_depth=_depth, dedup_key=canonical_hash,
+                    local_sharpe=tr.local_sharpe, backtest_ms=backtest_ms, is_brain_sim=False,
+                )
         # Sàn floor HIỆU LỰC phụ thuộc ρ (Task 5): ρ toàn cục đo độ tin ranking local so Brain.
         # ρ < rho_bar (VD 0.36 log thật) nghĩa ranking local hết tin -> floor local_sharpe chỉ
         # là NHIỄU, vừa giết oan ứng viên tốt (local thấp/Brain tốt) vừa không đáng dùng để lọc

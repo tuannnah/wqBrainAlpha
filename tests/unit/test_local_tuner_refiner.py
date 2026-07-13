@@ -339,3 +339,81 @@ def test_refiner_rho_cao_thi_van_bi_sub_universe_chan(monkeypatch):
     assert out.sims_used == 0
     assert out.stop_reason == "sub_universe"
     assert out.passed is False
+
+
+# --- Task 4: gate backtest-cheap "degenerate position" -- sau self._tune, TRƯỚC floor/sim.
+# turnover local < DEGENERATE_TURNOVER (0.005) VÀ |sharpe| local < DEGENERATE_SHARPE (0.05)
+# ĐỒNG THỜI -> vị thế suy biến/gần hằng số (bằng chứng log thật 07-12: sim Brain thật ra đúng
+# Sharpe 0.00/turnover 0.00 cho dạng biểu thức này) -> chặn TRƯỚC khi đốt sim Brain.
+
+
+def _degenerate_metrics_refiner(*, sharpe: float, turnover: float, monkeypatch):
+    """Refiner với local_metrics có sharpe/turnover TUỲ CHỈNH (khác `_refiner_local_metrics`
+    vốn hardcode turnover=0.3) -- cần để dựng đúng ranh giới DEGENERATE_TURNOVER/SHARPE.
+    sub_universe_ok mock True (không liên quan gate đang test, cô lập đúng gate degenerate)."""
+    monkeypatch.setattr("src.backtest.sub_universe.sub_universe_ok", lambda *a, **kw: True)
+    from src.backtest.local_tuner import TuneResult
+    from src.backtest.metrics_local import AlphaMetrics
+
+    metrics = AlphaMetrics(
+        sharpe=sharpe, annual_return=0.0, turnover=turnover, max_drawdown=0.0,
+        fitness=0.01, per_year_sharpe={2020: sharpe}, weight_concentration=0.05,
+    )
+
+    class _Sim:
+        def __init__(self):
+            self.calls = 0
+
+        def simulate(self, expr, settings=None):
+            self.calls += 1
+            return _passed_result(expr, settings)
+
+    def fake_tune(expr, cfg, data, **kw):
+        return TuneResult(
+            best_expr="power(sign(close), 2)",
+            best_config=PortfolioConfig(decay=3, truncation=0.02),
+            local_sharpe=sharpe, local_metrics=metrics,
+        )
+
+    sim = _Sim()
+    r = LocalTunerRefiner(
+        simulator=sim, repo=_Repo(), data=object(),
+        local_config=PortfolioConfig(decay=4, truncation=0.08),
+        sim_config=SimConfig.default(), tune_fn=fake_tune,
+    )
+    return r, sim
+
+
+def test_refiner_degenerate_position_thi_khong_sim(monkeypatch):
+    """turnover (0.001) < 0.005 VÀ |sharpe| (0.02) < 0.05 ĐỒNG THỜI -> chặn TRƯỚC sim, 0 sim,
+    outcome trung thực (stage/fail_check RIÊNG, khác 'local_floor' chung chung -- phân biệt rõ
+    'vị thế suy biến' khỏi 'sharpe thấp bình thường' cho mục đích chẩn đoán/audit)."""
+    r, sim = _degenerate_metrics_refiner(sharpe=0.02, turnover=0.001, monkeypatch=monkeypatch)
+    out = r.refine_and_sim(_cand())
+    assert sim.calls == 0
+    assert out.sims_used == 0
+    assert out.passed is False
+    assert out.is_brain_sim is False
+    assert out.stage_reached == "degenerate"
+    assert out.fail_check == "DEGENERATE_POSITION"
+
+
+def test_refiner_turnover_thap_nhung_sharpe_du_thi_khong_bi_chan(monkeypatch):
+    """turnover CỰC thấp (0.001 < 0.005) NHƯNG |sharpe| ĐỦ (1.6 >= 0.05) -- CHỈ 1 trong 2 điều
+    kiện đúng (không phải AND) -> KHÔNG phải vị thế suy biến (tín hiệu chậm nhưng CÓ ý nghĩa
+    thật) -- KHÔNG bị gate degenerate chặn, đi tiếp tới sim Brain bình thường."""
+    r, sim = _degenerate_metrics_refiner(sharpe=1.6, turnover=0.001, monkeypatch=monkeypatch)
+    out = r.refine_and_sim(_cand())
+    assert sim.calls == 1
+    assert out.is_brain_sim is True
+    assert out.stage_reached != "degenerate"
+
+
+def test_refiner_sharpe_thap_nhung_turnover_du_thi_khong_bi_chan_degenerate(monkeypatch):
+    """|sharpe| thấp (0.02 < 0.05) NHƯNG turnover ĐỦ (0.3 >= 0.005) -- không phải AND -> KHÔNG
+    bị gate degenerate chặn. Local sharpe (0.02) vẫn dưới floor calibrated mặc định (~0.5) nên
+    bị chặn ở gate `local_floor` NHƯ CŨ (khác gate degenerate), không tới simulate()."""
+    r, sim = _degenerate_metrics_refiner(sharpe=0.02, turnover=0.3, monkeypatch=monkeypatch)
+    out = r.refine_and_sim(_cand())
+    assert sim.calls == 0
+    assert out.stage_reached == "local_floor"        # đúng gate cũ, KHÔNG phải degenerate mới

@@ -49,6 +49,17 @@ CALIBRATION_LOCAL_TO_BRAIN: float = 1.28
 PRE_SIM_TARGET_BRAIN_SHARPE: float = 0.64
 
 
+# --- Degenerate position (Task 4 — chặn trước sim, xem src/lang/meaningfulness.py cho rule
+# structural AST; đây là backtest-cheap rule, chạy SAU backtest local trong LocalTunerRefiner) ---
+# Bằng chứng thật (log 07-12): vị thế gần hằng số/vô hướng vẫn có thể lọt qua rule AST (base
+# không phải sign(...) hoặc field không thuần volume) mà local backtest vẫn cho turnover≈0
+# VÀ |sharpe|≈0 đồng thời -- đó chính là dấu hiệu vị thế suy biến (không đổi/không tương quan
+# gì với lợi suất) -> không đáng đốt sim Brain. Ngưỡng CHẶT (turnover<0.005, |sharpe|<0.05)
+# để không chặn oan alpha turnover thấp NHƯNG sharpe có ý nghĩa thật.
+DEGENERATE_TURNOVER: float = 0.005
+DEGENERATE_SHARPE: float = 0.05
+
+
 # --- Combiner (Task 2 — sửa 0-combo, xem logs/diag_combiner_20260712.md) ---
 # Sàn sharpe BRAIN THẬT để một expr được coi là "component quý" cho combiner (Fix 1):
 # KHÔNG lọc theo status — alpha 'failed' vì LOW_SHARPE (vd sharpe 1.04 < IS_LADDER_FAIL 1.58)
