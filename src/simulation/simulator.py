@@ -111,6 +111,12 @@ def _is_quota_exhausted(resp) -> bool:
         return False
 
 
+# Giới hạn số phần tử/mảng multi-simulation (POST /simulations với body là MẢNG) — nguồn:
+# docs/worldquantbrain/docs/_/brain-api.md dòng 266 (tài liệu chính thức /simulations POST):
+# "Multiple simulations can be run by posting an array of length 2..10 of the above simulation
+# objects." Mảng > 10 phần tử phải chia nhiều request (simulate_many tự chunk).
+MULTI_SIM_MAX = 10
+
 SIM_DEFAULTS: dict[str, Any] = {
     "type": "REGULAR",
     "settings": {
@@ -264,6 +270,13 @@ class Simulator:
                     raw={"error": f"pre-sim reject: {reason}"},
                     presim_reason=reason,
                 )
+        return self._simulate_one(expression, settings)
+
+    def _simulate_one(self, expression: str, settings: dict | None) -> SimulationResult:
+        """Đường sim ĐƠN đầy đủ: POST /simulations (body 1 object) -> poll Location -> GET
+        /alphas/{id}. Tách khỏi `simulate()` (đã qua pre_sim_validator) để `simulate_many` tái
+        dùng cho phần tử lẻ (chunk 1 job — WQ Brain KHÔNG chấp nhận mảng multi-sim 1 phần tử,
+        xem docstring `simulate_many`) và cho fallback tuần tự khi multi-sim lỗi."""
         body = self._build_body(expression, settings)
 
         with self.rate_limiter:
@@ -316,8 +329,200 @@ class Simulator:
 
         return self._fetch_metrics(expression, alpha_id)
 
-    def _poll(self, location: str) -> dict:
+    def simulate_many(self, jobs: list[tuple[str, dict | None]]) -> list[SimulationResult]:
+        """Mô phỏng NHIỀU biểu thức trong 1 lần chờ, dùng tính năng multi-simulation của WQ
+        Brain (POST /simulations với body là MẢNG payload) thay vì N lần POST/poll tuần tự.
+
+        NGUỒN xác nhận định dạng (điều tra Task 6, KHÔNG đoán mò):
+        1. `docs/worldquantbrain/docs/_/brain-api.md` (dòng 213-337, tài liệu BRAIN API chính
+           thức, mục `/simulations` POST) — nguồn CHUẨN, trích dẫn nguyên văn:
+           - "Multiple simulations can be run by posting an array of length 2..10 of the above
+             simulation objects. The user requires the MULTI_SIMULATION permission... Also the
+             settings for the simulation must be compatible, they must have the same simulation
+             type, instrument type, region, delay and language."
+           - Payload mẫu: `[{"type":"REGULAR",...}, {"type":"REGULAR",...}, ...]` — MỖI phần tử
+             có CÙNG hình dạng với body sim đơn (`{"type","settings","regular"}`).
+           - Response THÀNH CÔNG giống sim đơn: `201 Created` + header `Location: /simulations/
+             <id>` — nhưng `<id>` này là simulation CHA (parent).
+           - "Progress of multi-simulations is tracked by a parent simulation object. A child
+             simulation is created for each of the multi-simulation objects. The list of child
+             simulation ids are available when the parent simulation is complete."
+           - Poll `GET /simulations/<parent id>` trả cùng schema sim đơn (`status`, `progress`,
+             `Retry-After` header khi chưa xong) CỘNG thêm field `"children": [<id>, <id>, ...]`
+             khi cha đã có danh sách con. Chi tiết từng con: `GET /simulations/<child id>` —
+             CÙNG schema/luồng poll với sim đơn (status COMPLETE/WARNING -> field `alpha`).
+        2. `wqb_mcp/tools/simulation_tools.py::create_multi_simulation` + `_wait_for_multi
+           simulation_completion` (server MCP `wqb-mcp` cài local tại
+           `C:\\Users\\PC\\.venvs\\wqb-mcp\\Lib\\site-packages\\wqb_mcp\\tools\\simulation_tools.py`,
+           đối chiếu THỰC TẾ 1 cài đặt đã chạy production) — xác nhận lại đúng luồng trên: POST
+           `f"{base_url}/simulations"` với `json=multisimulation_data` (list các dict cùng hình
+           dạng sim đơn), đọc header `Location` làm parent, poll parent tới khi JSON body có
+           `children` (list) khác rỗng, rồi với mỗi `child_id` — GET `f"{base_url}/simulations/
+           {child_id}"` (hoặc dùng thẳng nếu `child_id` đã là URL đầy đủ) lặp lại CHÍNH XÁC vòng
+           poll của sim đơn (đọc `Retry-After`, `status`, cuối cùng lấy `alpha` rồi GET
+           `/alphas/{alpha_id}`). Tool này tự giới hạn 2-8 biểu thức/lần (quy ước RIÊNG của
+           tool, KHÔNG phải giới hạn cứng của API — giới hạn cứng là 2..10 theo nguồn (1)).
+
+        Hành vi (khớp `Simulator.simulate` đường đơn, xem interface Task 6):
+        - Giữ NGUYÊN THỨ TỰ `jobs` trong kết quả trả về.
+        - Job bị `pre_sim_validator` chặn (field/toán tử bịa) -> `SimulationResult(presim_
+          reason=...)` NGAY, KHÔNG chiếm slot trong mảng payload gửi Brain (giống đường đơn).
+        - Job hợp lệ còn lại được CHIA THÀNH CÁC CHUNK ≤ `MULTI_SIM_MAX` (10, theo nguồn (1)):
+          chunk 1 phần tử dùng ĐƯỜNG ĐƠN (`_simulate_one`, mảng 1 phần tử KHÔNG hợp lệ với API);
+          chunk ≥2 phần tử dùng multi-sim thật (1 lần POST mảng, 1 lần chờ chung).
+        - 429/quota hoặc auth hết hạn ở bước POST multi-sim -> raise `QuotaExceededError`/
+          `AuthExpiredError` GIỐNG HỆT đường đơn (không nuốt, không fallback — hết quota là
+          tín hiệu dừng thật).
+        - Lỗi KHÁC ở tầng multi-sim (POST hỏng theo cách khác, thiếu Location, mismatch số
+          children, timeout poll cha...) -> FALLBACK: sim TUẦN TỰ từng job trong chunk đó qua
+          `_simulate_one` (log warning, KHÔNG chết phiên) — an toàn hơn bỏ cuộc cả batch.
+        - `TIMEOUT_SECONDS` dùng CHUNG cho cả cha lẫn các con của 1 chunk (tính 1 deadline khi
+          bắt đầu POST chunk; poll con nối tiếp phần thời gian còn lại, không reset đồng hồ)."""
+        if not jobs:
+            return []
+        results: list[SimulationResult | None] = [None] * len(jobs)
+        eligible_idx: list[int] = []
+        eligible_jobs: list[tuple[str, dict | None]] = []
+        for i, (expr, settings) in enumerate(jobs):
+            if self.pre_sim_validator is not None:
+                ok, reason = self.pre_sim_validator(expr)
+                if not ok:
+                    logger.warning("Bỏ sim (tiền-kiểm, multi-sim): {} | expr={}", reason, expr)
+                    bad = extract_rejected_field(reason)
+                    if bad and self.on_invalid_field is not None:
+                        self.on_invalid_field(bad)
+                    results[i] = SimulationResult(
+                        expression=expr, status="error",
+                        raw={"error": f"pre-sim reject: {reason}"}, presim_reason=reason,
+                    )
+                    continue
+            eligible_idx.append(i)
+            eligible_jobs.append((expr, settings))
+
+        pos = 0
+        while pos < len(eligible_jobs):
+            chunk = eligible_jobs[pos: pos + MULTI_SIM_MAX]
+            chunk_idx = eligible_idx[pos: pos + MULTI_SIM_MAX]
+            pos += MULTI_SIM_MAX
+            if len(chunk) == 1:
+                expr, settings = chunk[0]
+                chunk_results = [self._simulate_one(expr, settings)]
+            else:
+                chunk_results = self._simulate_batch(chunk)
+            for gi, r in zip(chunk_idx, chunk_results):
+                results[gi] = r
+
+        return results  # type: ignore[return-value]  # mọi ô đã được điền ở trên
+
+    def _simulate_batch(self, chunk: list[tuple[str, dict | None]]) -> list[SimulationResult]:
+        """1 chunk (2..MULTI_SIM_MAX job) -> 1 request multi-sim. Lỗi tầng multi-sim (không
+        phải quota/auth) -> fallback sim TUẦN TỰ từng job qua `_simulate_one`."""
+        try:
+            return self._post_multi_sim(chunk)
+        except (QuotaExceededError, AuthExpiredError):
+            raise  # tín hiệu dừng thật — KHÔNG fallback (sim tuần tự cũng sẽ hết quota).
+        except Exception as exc:
+            logger.warning(
+                "Multi-sim lỗi ({}) — fallback sim TUẦN TỰ {} biểu thức.", exc, len(chunk),
+            )
+            return [self._simulate_one(expr, settings) for expr, settings in chunk]
+
+    def _post_multi_sim(self, chunk: list[tuple[str, dict | None]]) -> list[SimulationResult]:
+        exprs = [expr for expr, _ in chunk]
+        body = [self._build_body(expr, settings) for expr, settings in chunk]
+
+        with self.rate_limiter:
+            resp = self.client.post("/simulations", json=body)
+
+        if resp.status_code not in (200, 201):
+            logger.error("POST /simulations (multi) lỗi {}: {}", resp.status_code, resp.text)
+            if _is_quota_exhausted(resp):
+                raise QuotaExceededError(
+                    f"WQ Brain hết quota simulation ngày (multi-sim, HTTP {resp.status_code}, "
+                    f"X-Ratelimit-Remaining={resp.headers.get('X-Ratelimit-Remaining')})."
+                )
+            if _is_auth_error(resp.status_code, resp.text):
+                self._consecutive_auth_failures += 1
+                if self._consecutive_auth_failures >= self.MAX_CONSECUTIVE_AUTH_FAILURES:
+                    raise AuthExpiredError(
+                        f"Xác thực thất bại {self._consecutive_auth_failures} lần liên tiếp "
+                        "— dừng để tránh phí quota. Hãy đăng nhập lại (re-auth)."
+                    )
+            else:
+                self._consecutive_auth_failures = 0
+            raise SimulationError(f"multi-sim POST lỗi HTTP {resp.status_code}")
+
+        self._consecutive_auth_failures = 0
+        location = resp.headers.get("Location")
+        if not location:
+            raise SimulationError("multi-sim: thiếu Location header")
+
+        self._respect_rate_limit(resp)
+
         deadline = self._time() + self.TIMEOUT_SECONDS
+        children = self._poll_parent_children(location, deadline)
+        if len(children) != len(chunk):
+            raise SimulationError(
+                f"multi-sim: số children ({len(children)}) khác số job đã gửi ({len(chunk)})"
+            )
+
+        results: list[SimulationResult] = []
+        for expr, child_id in zip(exprs, children):
+            child_location = (
+                child_id if child_id.startswith(("http://", "https://", "/"))
+                else f"/simulations/{child_id}"
+            )
+            try:
+                progress = self._poll(child_location, deadline=deadline)
+            except SimulationError as exc:
+                logger.error("Multi-sim: con lỗi/timeout: {} | expr={}", exc, expr)
+                if self.on_invalid_field is not None:
+                    bad_field = extract_invalid_field(str(exc))
+                    if bad_field:
+                        self.on_invalid_field(bad_field)
+                    for event_field in extract_event_fields(str(exc), expr):
+                        self.on_invalid_field(event_field)
+                results.append(SimulationResult(expression=expr, status="error", raw={"error": str(exc)}))
+                continue
+            alpha_id = progress.get("alpha")
+            if not alpha_id:
+                results.append(SimulationResult(expression=expr, status="error", raw=progress))
+                continue
+            results.append(self._fetch_metrics(expr, alpha_id))
+        return results
+
+    def _poll_parent_children(self, location: str, deadline: float) -> list[str]:
+        """Poll simulation CHA tới khi JSON body xuất hiện `children` (list id con) khác rỗng —
+        đúng cách wqb-mcp (`_wait_for_multisimulation_completion`) xác định cha đã sẵn sàng, vì
+        tài liệu BRAIN API không đảm bảo field `status` của CHA phản ánh trạng thái CÁC CON (chỉ
+        đảm bảo `children` xuất hiện "khi simulation cha hoàn tất"). Vẫn theo dõi `status` lỗi
+        (ERROR/FAILED/CANCELLED/TIMEOUT) để không treo vô ích khi cả batch bị từ chối ở tầng cha
+        (vd settings không tương thích)."""
+        while True:
+            resp = self.client.get(location)
+            retry_after = resp.headers.get("Retry-After")
+            if resp.status_code in (200, 201):
+                payload = resp.json()
+                children = payload.get("children")
+                if children:
+                    return children
+                status = (payload.get("status") or "").upper()
+                if status in ("ERROR", "FAILED", "CANCELLED", "TIMEOUT"):
+                    detail = _error_detail(payload)
+                    msg = f"multi-sim parent status={status}: {detail}" if detail else f"multi-sim parent status={status}"
+                    raise SimulationError(msg)
+            elif resp.status_code >= 400:
+                raise SimulationError(f"poll multi-sim parent HTTP {resp.status_code}")
+
+            if self._time() >= deadline:
+                raise SimulationError("timeout khi poll multi-sim parent")
+
+            delay = float(retry_after) if retry_after else self.POLL_INTERVAL
+            self._sleep(delay)
+
+    def _poll(self, location: str, deadline: float | None = None) -> dict:
+        if deadline is None:
+            deadline = self._time() + self.TIMEOUT_SECONDS
         while True:
             resp = self.client.get(location)
             retry_after = resp.headers.get("Retry-After")

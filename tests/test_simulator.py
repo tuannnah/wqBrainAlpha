@@ -476,6 +476,157 @@ def test_simulate_khong_sleep_chu_dong_khi_con_remaining():
     assert result.status == "passed"
 
 
+def _metrics_response(sharpe, alpha_id):
+    return FakeResponse(
+        200,
+        json_data={"is": {"sharpe": sharpe, "fitness": 1.0, "checks": []}},
+    )
+
+
+def test_simulate_many_post_1_lan_mang_3_payload_dung_thu_tu():
+    """simulate_many với 3 job hợp lệ -> ĐÚNG 1 lần POST /simulations với body là MẢNG 3
+    phần tử, poll cha trả children, GET từng con -> 3 SimulationResult đúng thứ tự."""
+    client = FakeClient()
+    client.queue_post(FakeResponse(201, headers={"Location": "/simulations/parent-1"}))
+    # Poll cha: children xuất hiện ngay ở lần poll đầu.
+    client.queue_get(
+        FakeResponse(200, json_data={"status": "COMPLETE", "children": ["c1", "c2", "c3"]})
+    )
+    # Poll + fetch từng con theo ĐÚNG thứ tự c1, c2, c3.
+    for cid, sharpe, alpha_id in [("c1", 1.1, "alpha-c1"), ("c2", 1.2, "alpha-c2"), ("c3", 1.3, "alpha-c3")]:
+        client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": alpha_id}))
+        client.queue_get(_metrics_response(sharpe, alpha_id))
+
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0
+    )
+    jobs = [("rank(a)", None), ("rank(b)", None), ("rank(c)", None)]
+    results = sim.simulate_many(jobs)
+
+    post_calls = [c for c in client.calls if c[0] == "POST"]
+    assert len(post_calls) == 1
+    assert isinstance(post_calls[0][2]["json"], list)
+    assert len(post_calls[0][2]["json"]) == 3
+    assert [r.expression for r in results] == ["rank(a)", "rank(b)", "rank(c)"]
+    assert [r.alpha_id for r in results] == ["alpha-c1", "alpha-c2", "alpha-c3"]
+    assert [r.sharpe for r in results] == [1.1, 1.2, 1.3]
+    assert all(r.status == "passed" for r in results)
+
+
+def test_simulate_many_presim_reject_khong_chiem_slot_payload():
+    """1 job bị pre_sim_validator chặn -> KHÔNG vào mảng payload gửi Brain (chỉ 2 job còn lại
+    được POST); job bị chặn trả presim_reason ngay tại đúng vị trí trong kết quả."""
+    client = FakeClient()
+    client.queue_post(FakeResponse(201, headers={"Location": "/simulations/parent-2"}))
+    client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "children": ["c1", "c2"]}))
+    for cid, sharpe, alpha_id in [("c1", 0.9, "alpha-c1"), ("c2", 1.0, "alpha-c2")]:
+        client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": alpha_id}))
+        client.queue_get(_metrics_response(sharpe, alpha_id))
+
+    def validator(expr):
+        if expr == "rank(bad)":
+            return False, "Field/hằng không tồn tại: bad"
+        return True, "ok"
+
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None,
+        time_func=lambda: 0.0, pre_sim_validator=validator,
+    )
+    jobs = [("rank(a)", None), ("rank(bad)", None), ("rank(c)", None)]
+    results = sim.simulate_many(jobs)
+
+    post_calls = [c for c in client.calls if c[0] == "POST"]
+    assert len(post_calls) == 1
+    assert len(post_calls[0][2]["json"]) == 2  # job giữa bị chặn -> KHÔNG chiếm slot
+    assert results[1].presim_reason == "Field/hằng không tồn tại: bad"
+    assert results[1].status == "error"
+    # Thứ tự kết quả vẫn khớp jobs gốc (giữ đúng vị trí bị chặn).
+    assert [r.expression for r in results] == ["rank(a)", "rank(bad)", "rank(c)"]
+    assert results[0].alpha_id == "alpha-c1"
+    assert results[2].alpha_id == "alpha-c2"
+
+
+def test_simulate_many_429_raise_quota_exceeded_giong_duong_don():
+    """POST /simulations (multi) vẫn 429 -> raise QuotaExceededError giống hệt đường đơn,
+    KHÔNG fallback sim tuần tự (hết quota thì tuần tự cũng hết quota)."""
+    client = FakeClient()
+    client.queue_post(FakeResponse(429, text="Too Many Requests", headers={"Retry-After": "5"}))
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0
+    )
+    jobs = [("rank(a)", None), ("rank(b)", None)]
+    with pytest.raises(QuotaExceededError):
+        sim.simulate_many(jobs)
+    # KHÔNG có POST fallback tuần tự nào được thử thêm.
+    assert len([c for c in client.calls if c[0] == "POST"]) == 1
+
+
+def test_simulate_many_loi_khac_fallback_tuan_tu():
+    """Multi-sim lỗi KHÔNG PHẢI quota/auth (vd thiếu Location header) -> fallback: sim TUẦN
+    TỰ từng job qua đường đơn, không chết phiên, vẫn trả đủ kết quả đúng thứ tự."""
+    client = FakeClient()
+    # POST multi-sim: 201 nhưng THIẾU Location -> _post_multi_sim raise SimulationError.
+    client.queue_post(FakeResponse(201, headers={}))
+    # Fallback tuần tự: mỗi job đi lại đường đơn đầy đủ (POST -> poll -> fetch).
+    client.queue_post(FakeResponse(201, headers={"Location": "/simulations/single-1"}))
+    client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": "alpha-1"}))
+    client.queue_get(_metrics_response(1.5, "alpha-1"))
+    client.queue_post(FakeResponse(201, headers={"Location": "/simulations/single-2"}))
+    client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": "alpha-2"}))
+    client.queue_get(_metrics_response(1.6, "alpha-2"))
+
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0
+    )
+    jobs = [("rank(a)", None), ("rank(b)", None)]
+    results = sim.simulate_many(jobs)
+
+    post_calls = [c for c in client.calls if c[0] == "POST"]
+    assert len(post_calls) == 3  # 1 multi-sim hỏng + 2 sim đơn fallback
+    assert [r.status for r in results] == ["passed", "passed"]
+    assert [r.sharpe for r in results] == [1.5, 1.6]
+
+
+def test_simulate_many_chunk_qua_10_thanh_nhieu_request():
+    """11 job hợp lệ -> chia 2 chunk (10 + 1): chunk đầu multi-sim (mảng 10), chunk cuối dùng
+    đường đơn (mảng 1 phần tử KHÔNG hợp lệ với API multi-sim theo tài liệu 2..10)."""
+    client = FakeClient()
+    # Chunk 1: 10 job -> multi-sim.
+    client.queue_post(FakeResponse(201, headers={"Location": "/simulations/parent-big"}))
+    children = [f"c{i}" for i in range(10)]
+    client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "children": children}))
+    for i, cid in enumerate(children):
+        client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": f"alpha-{i}"}))
+        client.queue_get(_metrics_response(1.0 + i * 0.01, f"alpha-{i}"))
+    # Chunk 2: 1 job còn lại -> đường đơn.
+    client.queue_post(FakeResponse(201, headers={"Location": "/simulations/single-11"}))
+    client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": "alpha-10"}))
+    client.queue_get(_metrics_response(2.0, "alpha-10"))
+
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0
+    )
+    jobs = [(f"rank(f{i})", None) for i in range(11)]
+    results = sim.simulate_many(jobs)
+
+    post_calls = [c for c in client.calls if c[0] == "POST"]
+    assert len(post_calls) == 2
+    assert len(post_calls[0][2]["json"]) == 10  # chunk đầu: mảng 10 phần tử
+    assert isinstance(post_calls[1][2]["json"], dict)  # chunk cuối: object đơn (không phải mảng)
+    assert len(results) == 11
+    assert results[-1].sharpe == 2.0
+
+
+def test_simulate_many_rong_tra_rong_khong_goi_api():
+    """jobs rỗng -> trả [] ngay, KHÔNG gọi API nào."""
+    client = FakeClient()
+    sim = Simulator(
+        client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None, time_func=lambda: 0.0
+    )
+    assert sim.simulate_many([]) == []
+    assert client.calls == []
+
+
 def test_simulate_cap_sleep_khi_reset_la_epoch_tuyet_doi():
     """AN TOÀN: nếu X-Ratelimit-Reset là epoch tuyệt đối (khổng lồ), sleep phải bị CAP ở
     MAX_RATE_LIMIT_SLEEP thay vì chờ ~vô tận."""
