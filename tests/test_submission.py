@@ -67,6 +67,13 @@ def test_is_acceptable():
 
 
 # ------------------------------------------------------------------ selection
+def _queue_submit_success(client):
+    """Xếp sẵn 2 GET cho kịch bản submit thành công (Bug 1): poll /submit không FAIL nào,
+    rồi GET /alphas/{id} xác nhận dateSubmitted -> submit() mới dám báo 'submitted'."""
+    client.queue_get(FakeResponse(200, json_data={"is": {"checks": []}}, text="non-empty"))
+    client.queue_get(FakeResponse(200, json_data={"dateSubmitted": "2026-07-14T00:00:00Z"}))
+
+
 class FakeCorr:
     def __init__(self, value=0.1, max_self_corr=0.7):
         self.value = value
@@ -114,9 +121,116 @@ def test_submit_thanh_cong():
 
     client = FakeClient()
     client.queue_post(FakeResponse(201))
+    # Bug 1: sau POST 201, manager phải POLL GET /alphas/{id}/submit rồi XÁC NHẬN thêm
+    # bằng GET /alphas/{id} (dateSubmitted) trước khi dám báo "submitted".
+    _queue_submit_success(client)
     mgr = SubmissionManager(client, sf, FakeCorr(value=0.1))
     result = mgr.submit("WQ1")
     assert result.status == "submitted"
+
+
+# ------------------------------------------------------------- Bug 1: poll bất đồng bộ
+# Bằng chứng thật 2026-07-14 (alpha KP9nwpEg): POST /alphas/{id}/submit trả 200 NGAY
+# nhưng đó KHÔNG phải kết quả — WQ tính bất đồng bộ, phải poll GET cùng path (body rỗng +
+# Retry-After trong lúc tính, 403 kèm is.checks khi bị từ chối thật).
+
+
+def test_submit_poll_tra_ve_403_sau_2_lan_body_rong_thi_rejected():
+    """(a) GET /submit trả 200 body rỗng 2 lần (đang tính) rồi 403 với is.checks liệt kê
+    LOW_SHARPE/LOW_FITNESS -> rejected, detail liệt kê đúng check FAIL kiểu 'LOW_SHARPE 1.41<1.58'."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    _seed(sf)
+
+    client = FakeClient()
+    client.queue_post(FakeResponse(200))
+    client.queue_get(FakeResponse(200, text="", headers={"Retry-After": "1"}))
+    client.queue_get(FakeResponse(200, text="", headers={"Retry-After": "1"}))
+    client.queue_get(FakeResponse(
+        403,
+        json_data={"is": {"checks": [
+            {"name": "LOW_SHARPE", "result": "FAIL", "limit": 1.58, "value": 1.41},
+            {"name": "LOW_FITNESS", "result": "FAIL", "limit": 1.0, "value": 0.99},
+            {"name": "LOW_TURNOVER", "result": "PASS", "limit": 0.01, "value": 0.2908},
+        ]}},
+        text="non-empty",
+    ))
+    mgr = SubmissionManager(client, sf, FakeCorr(value=0.1), sleep_func=lambda _s: None)
+    result = mgr.submit("WQ1")
+
+    assert result.status == "rejected"
+    assert "LOW_SHARPE 1.41<1.58" in result.detail
+    assert "LOW_FITNESS 0.99<1.0" in result.detail
+    assert "LOW_TURNOVER" not in result.detail  # check PASS -> không liệt
+
+    session = sf()
+    try:
+        sub = session.query(SubmissionModel).filter_by(alpha_id="WQ1").one()
+        assert sub.status == "rejected"
+        assert "LOW_SHARPE" in sub.detail
+    finally:
+        session.close()
+
+
+def test_submit_poll_xong_roi_xac_nhan_dateSubmitted_thi_submitted():
+    """(b) Poll /submit trả 200 kèm is.checks không FAIL nào -> chưa vội tin, phải xác nhận
+    thêm GET /alphas/{id} thấy dateSubmitted mới báo submitted."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    _seed(sf)
+
+    client = FakeClient()
+    client.queue_post(FakeResponse(200))
+    client.queue_get(FakeResponse(200, json_data={"is": {"checks": [
+        {"name": "LOW_SHARPE", "result": "PASS", "limit": 1.58, "value": 2.0},
+    ]}}, text="non-empty"))
+    client.queue_get(FakeResponse(200, json_data={"dateSubmitted": "2026-07-14T00:00:00Z", "stage": "OS"}))
+    mgr = SubmissionManager(client, sf, FakeCorr(value=0.1), sleep_func=lambda _s: None)
+    result = mgr.submit("WQ1")
+    assert result.status == "submitted"
+
+
+def test_submit_poll_khong_fail_nhung_chua_xac_nhan_duoc_thi_unknown():
+    """2xx + is.checks không FAIL nào, nhưng GET /alphas/{id} lại KHÔNG có dateSubmitted/stage
+    OS -> KHÔNG được đoán bừa là submitted, phải trả 'unknown' kèm detail rõ."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    _seed(sf)
+
+    client = FakeClient()
+    client.queue_post(FakeResponse(200))
+    client.queue_get(FakeResponse(200, json_data={"is": {"checks": []}}, text="non-empty"))
+    client.queue_get(FakeResponse(200, json_data={"dateSubmitted": None, "stage": "IS"}))
+    mgr = SubmissionManager(client, sf, FakeCorr(value=0.1), sleep_func=lambda _s: None)
+    result = mgr.submit("WQ1")
+    assert result.status == "unknown"
+    assert result.detail  # có lời giải thích, không rỗng
+
+
+def test_submit_poll_qua_han_thi_pending():
+    """(c) Poll mãi vẫn body rỗng, tới khi vượt SUBMIT_POLL_TIMEOUT -> pending (KHÔNG ghi
+    submitted khi chưa biết kết quả thật)."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    _seed(sf)
+
+    client = FakeClient()
+    client.queue_post(FakeResponse(200))
+    client.queue_get(FakeResponse(200, text="", headers={"Retry-After": "1"}))
+    # time_func: lần 1 set deadline (0 + TIMEOUT), lần 2 (sau vòng poll đầu) đã vượt hạn.
+    times = iter([0.0, 10_000.0])
+    mgr = SubmissionManager(
+        client, sf, FakeCorr(value=0.1), sleep_func=lambda _s: None, time_func=lambda: next(times),
+    )
+    result = mgr.submit("WQ1")
+    assert result.status == "pending"
+
+    session = sf()
+    try:
+        sub = session.query(SubmissionModel).filter_by(alpha_id="WQ1").one()
+        assert sub.status == "pending"  # không được ghi 'submitted' khi chưa xác nhận
+    finally:
+        session.close()
 
 
 def test_run_daily_dry_run_khong_ghi_submission():
@@ -194,6 +308,7 @@ def test_set_properties_update_row_da_submit():
 
     client = FakeClient()
     client.queue_post(FakeResponse(201))
+    _queue_submit_success(client)
     mgr = SubmissionManager(client, sf, FakeCorr(value=0.1))
     mgr.submit("WQ1")  # tạo sẵn 1 row status=submitted
 
@@ -272,6 +387,7 @@ def test_submit_tu_gan_tag_power_pool_khi_du_dieu_kien():
 
     client = FakeClient()
     client.queue_post(FakeResponse(201))
+    _queue_submit_success(client)
     client.queue_patch(FakeResponse(200, json_data={"id": "WQ1"}))
     mgr = SubmissionManager(client, sf, FakeCorr(value=0.1))
 
@@ -299,6 +415,7 @@ def test_submit_khong_gan_tag_khi_khong_du_dieu_kien_power_pool():
 
     client = FakeClient()
     client.queue_post(FakeResponse(201))
+    _queue_submit_success(client)
     mgr = SubmissionManager(client, sf, FakeCorr(value=0.1))
 
     result = mgr.submit("WQ1")
@@ -320,6 +437,7 @@ def test_submit_khong_gan_tag_khi_thieu_hypothesis():
 
     client = FakeClient()
     client.queue_post(FakeResponse(201))
+    _queue_submit_success(client)
     mgr = SubmissionManager(client, sf, FakeCorr(value=0.1))
 
     result = mgr.submit("WQ1")

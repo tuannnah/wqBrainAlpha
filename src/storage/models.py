@@ -130,7 +130,7 @@ class SubmissionModel(Base):
 
     id = Column(String, primary_key=True)
     alpha_id = Column(String, ForeignKey("alphas.id"))
-    status = Column(String)  # submitted/rejected/error/properties_set
+    status = Column(String)  # submitted/rejected/error/pending/unknown/properties_set
     self_correlation = Column(Float)
     detail = Column(Text)
     submitted_at = Column(DateTime, default=_utcnow)

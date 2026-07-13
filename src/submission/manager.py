@@ -3,12 +3,48 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from dataclasses import dataclass
 
 from loguru import logger
 
 from src.storage.models import AlphaModel, SimulationModel, SubmissionModel, _utcnow
+
+
+def _parse_retry_after(raw: str | None) -> float | None:
+    """Parse header Retry-After thành float; None nếu thiếu/không parse được (an toàn,
+    không đoán mò khi header lạ) — cùng phong cách `_parse_positive_number` của Simulator."""
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_failed_checks(payload: dict) -> list[dict]:
+    """Trích các check FAIL trong body `GET /alphas/{id}/submit` khi bị từ chối — bằng chứng
+    thật 2026-07-14: `{"is": {"checks": [{"name":..., "result": "FAIL"|"PASS", "limit":...,
+    "value":...}, ...]}}`."""
+    if not isinstance(payload, dict):
+        return []
+    checks = ((payload.get("is") or {}).get("checks")) or []
+    if not isinstance(checks, list):
+        return []
+    return [c for c in checks if isinstance(c, dict) and c.get("result") == "FAIL"]
+
+
+def _format_check(check: dict) -> str:
+    """Định dạng 1 check FAIL kiểu 'LOW_SHARPE 1.41<1.58' (đúng bằng chứng response 403
+    thật) — so sánh trực tiếp value/limit để suy dấu `<`/`>`, không đoán theo tên check."""
+    name = check.get("name", "?")
+    value = check.get("value")
+    limit = check.get("limit")
+    if value is None or limit is None:
+        return str(name)
+    op = "<" if value < limit else (">" if value > limit else "=")
+    return f"{name} {value}{op}{limit}"
 
 
 @dataclass
@@ -23,7 +59,10 @@ class Candidate:
 @dataclass
 class SubmissionResult:
     wq_alpha_id: str
-    status: str  # submitted/rejected/error
+    # submitted/rejected/error (như cũ) + pending (Bug 1: hết SUBMIT_POLL_TIMEOUT mà WQ vẫn
+    # chưa tính xong) + unknown (Bug 1: poll không có check FAIL nhưng GET /alphas/{id} chưa
+    # xác nhận được dateSubmitted/stage OS — không dám đoán là đã nộp).
+    status: str
     detail: str = ""
     self_correlation: float | None = None
 
@@ -37,6 +76,14 @@ class PropertiesResult:
 
 class SubmissionManager:
     DAILY_QUOTA = 10
+    # Bug 1 (fix-submit-async, bằng chứng thật 2026-07-14 KP9nwpEg): `POST /alphas/{id}/submit`
+    # trả 200/201 NGAY nhưng đó KHÔNG phải kết quả — WQ tính bất đồng bộ, phải poll GET cùng
+    # path (`GET /alphas/{id}/submit`) tới khi có kết quả thật. Tổng thời gian chờ tối đa.
+    SUBMIT_POLL_TIMEOUT = 600.0
+    # Mặc định khi response poll thiếu header Retry-After.
+    SUBMIT_POLL_DEFAULT_RETRY = 3.0
+    # Cap 1 lần chờ giữa 2 lần poll — chống Retry-After bất thường làm treo quá lâu.
+    SUBMIT_POLL_MAX_RETRY = 30.0
 
     def __init__(
         self,
@@ -46,6 +93,8 @@ class SubmissionManager:
         daily_quota: int | None = None,
         diversify: bool = False,
         max_struct_similarity: float = 0.9,
+        sleep_func=time.sleep,
+        time_func=time.monotonic,
     ):
         self.client = client
         self.session_factory = session_factory
@@ -54,6 +103,10 @@ class SubmissionManager:
         # T7.1: loại alpha trùng cấu trúc (AST) với alpha đã chọn trong cùng tập nộp.
         self.diversify = diversify
         self.max_struct_similarity = max_struct_similarity
+        # Bug 1: cùng phong cách injectable clock của Simulator (_sleep/_time) để test poll
+        # bất đồng bộ không cần chờ thật.
+        self._sleep = sleep_func
+        self._time = time_func
 
     # --------------------------------------------------------------- selection
     def select_candidates(self) -> list[Candidate]:
@@ -108,14 +161,82 @@ class SubmissionManager:
             self._record(result)
             return result
 
-        if resp.status_code in (200, 201):
-            result = SubmissionResult(wq_alpha_id, "submitted", "ok", corr)
-        else:
+        if resp.status_code not in (200, 201):
             result = SubmissionResult(wq_alpha_id, "error", f"HTTP {resp.status_code}", corr)
+            self._record(result)
+            return result
+
+        # Bug 1: POST 200/201 KHÔNG có nghĩa đã nộp — WQ tính bất đồng bộ, phải poll GET
+        # /alphas/{id}/submit tới khi có kết quả thật (403 = từ chối, xác nhận GET
+        # /alphas/{id} = thành công thật).
+        status, detail = self._poll_submit_result(wq_alpha_id)
+        result = SubmissionResult(wq_alpha_id, status, detail, corr)
         self._record(result)
         if result.status == "submitted":
             self._tag_if_power_pool_eligible(wq_alpha_id)
         return result
+
+    def _poll_submit_result(self, wq_alpha_id: str) -> tuple[str, str]:
+        """Poll `GET /alphas/{id}/submit` tới khi có kết quả bất đồng bộ (Bug 1, bằng chứng
+        thật 2026-07-14 KP9nwpEg): body RỖNG + 200 = đang tính (chờ theo Retry-After rồi poll
+        tiếp, cùng kiểu `CorrelationChecker.max_self_correlation`); 403 với `is.checks` chứa
+        FAIL = bị từ chối THẬT (khác hẳn code cũ coi `status_code in (200,201)` là đã nộp);
+        2xx có kết quả không FAIL nào -> CHƯA vội tin đã nộp, xác nhận thêm bằng
+        `GET /alphas/{id}` (dateSubmitted/stage) trước khi trả 'submitted' — không đoán mò
+        khi chưa xác nhận được thì trả 'unknown'. Vượt `SUBMIT_POLL_TIMEOUT` mà vẫn rỗng ->
+        'pending' (đừng ghi submitted khi chưa biết kết quả thật)."""
+        deadline = self._time() + self.SUBMIT_POLL_TIMEOUT
+        while True:
+            try:
+                resp = self.client.get(f"/alphas/{wq_alpha_id}/submit")
+            except Exception as exc:  # noqa: BLE001 - không để pipeline crash
+                return "error", str(exc)
+
+            body = (getattr(resp, "text", "") or "").strip()
+            if resp.status_code in (200, 201) and not body:
+                if self._time() >= deadline:
+                    return "pending", f"chưa có kết quả sau {self.SUBMIT_POLL_TIMEOUT:.0f}s poll"
+                retry_after = _parse_retry_after(resp.headers.get("Retry-After"))
+                self._sleep(min(retry_after or self.SUBMIT_POLL_DEFAULT_RETRY, self.SUBMIT_POLL_MAX_RETRY))
+                continue
+
+            if resp.status_code == 403:
+                payload = resp.json() if body else {}
+                fails = _extract_failed_checks(payload)
+                detail = ", ".join(_format_check(c) for c in fails) if fails else "HTTP 403"
+                return "rejected", detail
+
+            if resp.status_code in (200, 201):
+                payload = resp.json()
+                fails = _extract_failed_checks(payload)
+                if fails:
+                    return "rejected", ", ".join(_format_check(c) for c in fails)
+                confirmed, confirm_detail = self._confirm_submitted(wq_alpha_id)
+                if confirmed:
+                    return "submitted", "ok"
+                return "unknown", confirm_detail
+
+            return "error", f"HTTP {resp.status_code}"
+
+    def _confirm_submitted(self, wq_alpha_id: str) -> tuple[bool, str]:
+        """Xác nhận nộp thật bằng `GET /alphas/{id}` (dateSubmitted/stage OS) — poll
+        /submit không FAIL nào chỉ là tín hiệu KHẢ NĂNG thành công, không phải bằng chứng
+        (chưa có bằng chứng thật cho body 2xx hoàn tất của endpoint /submit), nên xác nhận
+        chéo bằng endpoint alpha chính trước khi dám báo 'submitted'."""
+        try:
+            resp = self.client.get(f"/alphas/{wq_alpha_id}")
+        except Exception as exc:  # noqa: BLE001 - không để pipeline crash
+            return False, f"không xác nhận được qua GET /alphas/{{id}}: {exc}"
+        if resp.status_code not in (200, 201):
+            return False, f"không xác nhận được qua GET /alphas/{{id}}: HTTP {resp.status_code}"
+        payload = resp.json()
+        if payload.get("dateSubmitted") or payload.get("stage") == "OS":
+            return True, "ok"
+        return (
+            False,
+            "poll /submit không có check FAIL nhưng GET /alphas/{id} chưa thấy "
+            "dateSubmitted/stage OS -> không dám khẳng định đã nộp",
+        )
 
     def _tag_if_power_pool_eligible(self, wq_alpha_id: str) -> None:
         """Sau khi nộp REGULAR thành công, nếu alpha cũng đạt điều kiện Power Pool (Sharpe>=1.0,

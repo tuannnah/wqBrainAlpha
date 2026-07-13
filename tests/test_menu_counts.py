@@ -143,6 +143,9 @@ def test_menu_view_submit_xac_nhan_yes_thi_nop_that(monkeypatch):
     state.client.queue_get(FakeResponse(200, json_data={"max": 0.1}))  # nộp thật: is_acceptable lại
     state.client.queue_get(FakeResponse(200, json_data={"max": 0.1}))  # nộp thật: submit() tự check corr lần nữa trước POST
     state.client.queue_post(FakeResponse(201))  # submit thật
+    # Bug 1: sau POST, submit() poll GET /alphas/{id}/submit rồi xác nhận GET /alphas/{id}.
+    state.client.queue_get(FakeResponse(200, json_data={"is": {"checks": []}}, text="non-empty"))
+    state.client.queue_get(FakeResponse(200, json_data={"dateSubmitted": "2026-07-14T00:00:00Z"}))
     monkeypatch.setattr("builtins.input", lambda _: "yes")
 
     main._menu_view_submit(state)
