@@ -129,6 +129,16 @@ def _flip_sign(expr: str) -> str:
     return Serializer().visit(flipped)
 
 
+def _neutralization_for(expr: str, pp_allowed: frozenset[str], registry: Any) -> str:
+    """Chọn neutralization cho 1 biểu thức alt-data — DÙNG CHUNG giữa `LocalTunerRefiner.
+    _sim_direct` (sim từng candidate) và `AltDataIdeaSource` (Task 6: tiền-sim CẢ BATCH qua
+    `simulate_many` TRƯỚC khi `_sim_direct` chạy) để 2 nơi tính RA ĐÚNG CÙNG MỘT settings cho
+    cùng 1 expr — tách hàm này để không có 2 bản logic có thể trôi lệch nhau theo thời gian."""
+    if pp_allowed:
+        return pp_neutralization_for_expr(expr, pp_allowed, registry)
+    return neutralization_for_expr(expr, registry)
+
+
 def _submit_score(sharpe: float | None, fitness: float | None) -> float:
     """Điểm-nộp (cùng công thức combine_stage._submit_score, Task 2 Fix 4):
     min(sharpe/SUBMIT_SHARPE_REF, fitness/SUBMIT_FITNESS_REF) — đo một kết quả sim tiến GẦN
@@ -188,6 +198,7 @@ class LocalTunerRefiner:
         neut_risk_factors: "list[str] | None" = None,
         calibration_tracker: object | None = None,
         alt_sweep_budget: int = 2,
+        presim_cache: "dict[str, Any] | None" = None,
     ) -> None:
         self.simulator = simulator
         self.repo = repo
@@ -218,6 +229,11 @@ class LocalTunerRefiner:
         # decay khác) cho MỘT hypothesis — mặc định 2, tức tối đa 1 + alt_sweep_budget sim thật
         # cho một expr alt-data. 0 = tắt sweep (giữ hành vi cũ: đúng 1 sim/ý tưởng).
         self.alt_sweep_budget = alt_sweep_budget
+        # Task 6: cache kết quả sim CORE đã chạy TRƯỚC (multi-sim gộp batch, xem
+        # AltDataIdeaSource) — khoá bằng expr thô. `_sim_direct` đọc (pop) cache TRƯỚC khi tự
+        # gọi `simulator.simulate()`, tránh sim lại lần 2 cho core đã sim trong batch multi-sim.
+        # None/rỗng (mặc định) -> hành vi CŨ y nguyên (luôn tự sim, tương thích ngược).
+        self.presim_cache = presim_cache
 
     def set_calibration_tracker(self, tracker: object) -> None:
         """Gắn CalibrationTracker SAU khi khởi tạo — dùng khi `build_closed_loop` dựng tracker
@@ -264,17 +280,19 @@ class LocalTunerRefiner:
         chưa pass -> thử decay khác quanh best-so-far. Dừng khi hết ngân sách hoặc
         `status == 'passed'`. Outcome cuối = sim có điểm-nộp cao nhất trong TOÀN BỘ lần đã sim."""
         expr = candidate.expr
-        if self.pp_allowed_neutralizations:
-            neut = pp_neutralization_for_expr(
-                expr, self.pp_allowed_neutralizations, self.registry
-            )
-        else:
-            neut = neutralization_for_expr(expr, self.registry)
+        neut = _neutralization_for(expr, self.pp_allowed_neutralizations, self.registry)
         sim_cfg = self.sim_config.with_overrides(neutralization=neut)
-        try:
-            result = self.simulator.simulate(expr, settings=sim_cfg.to_settings())
-        except (AuthExpiredError, QuotaExceededError) as exc:
-            raise QuotaExhausted(str(exc)) from exc
+        # Task 6: core đã được sim TRƯỚC theo batch (AltDataIdeaSource.next_batch gọi
+        # simulate_many 1 lần cho cả nhóm) -> dùng lại kết quả, KHÔNG sim lại lần 2. `pop` để
+        # cache không phình lên qua nhiều batch (mỗi core chỉ tiêu thụ đúng 1 lần).
+        cached = self.presim_cache.pop(expr, None) if self.presim_cache else None
+        if cached is not None:
+            result = cached
+        else:
+            try:
+                result = self.simulator.simulate(expr, settings=sim_cfg.to_settings())
+            except (AuthExpiredError, QuotaExceededError) as exc:
+                raise QuotaExhausted(str(exc)) from exc
         if result.presim_reason is not None:
             # Chưa chạm Brain (PreFilter loại) -> outcome trung thực, KHÔNG sweep (biểu thức
             # gốc đã sai cấu trúc thì flip dấu/đổi decay cũng vô nghĩa) và KHÔNG _finalize (nó
@@ -679,23 +697,78 @@ class AltDataIdeaSource:
 
     `known_fields` (field-validity guard): khi truyền (khác None), MỌI core có field không
     nằm trong tập này bị lọc bỏ ở constructor (một lần, không lặp lại mỗi next_batch) — core đó
-    KHÔNG BAO GIỜ được yield ra, tức KHÔNG BAO GIỜ chạm Brain sim."""
+    KHÔNG BAO GIỜ được yield ra, tức KHÔNG BAO GIỜ chạm Brain sim.
+
+    `simulator`/`sim_config`/`pp_allowed_neutralizations`/`presim_cache` (Task 6, tất cả tùy
+    chọn, mặc định None -> TẮT tính năng, hành vi cũ y nguyên): khi đủ 4 tham số này, batch core
+    ĐẦU TIÊN được sim CẢ NHÓM 1 lần qua `simulator.simulate_many` (thay vì mỗi core đợi
+    `LocalTunerRefiner._sim_direct` tự sim tuần tự sau này) — kết quả ghi vào `presim_cache`
+    (dict dùng CHUNG với refiner, khoá bằng expr thô) để `_sim_direct` đọc lại thay vì sim lần 2.
+    `avoided_hashes`/`dedup_key_fn`: lọc core ĐÃ Brain-sim & lưu tried_hashes phiên trước TRƯỚC
+    khi đưa vào batch multi-sim (giống CuratedIdeaSource) — quan trọng để KHÔNG gửi core trùng
+    (đã sim phiên trước) vào payload multi-sim, vừa lãng phí 1 slot mảng (tối đa 10, xem
+    `Simulator.MULTI_SIM_MAX`) vừa tốn quota vô ích (ClosedLoop.run() dù sao cũng sẽ tự bỏ core
+    trùng qua `seen`, nhưng lúc đó quota multi-sim đã tốn rồi)."""
 
     def __init__(
         self, *, fallback, cores: tuple[str, ...] = ALT_DATA_CORES,
         known_fields: "frozenset[str] | set[str] | None" = None, registry: Any = None,
+        avoided_hashes: "set[str] | None" = None,
+        dedup_key_fn: Callable[[str], str] | None = None,
+        simulator: Any = None, sim_config: Any = None,
+        pp_allowed_neutralizations: frozenset[str] = frozenset(),
+        presim_cache: "dict[str, Any] | None" = None,
     ) -> None:
         self._fallback = fallback
-        reg = registry if registry is not None else default_registry()
-        self._cores = _filter_known_fields(tuple(cores), known_fields, reg)
+        self._registry = registry if registry is not None else default_registry()
+        self._cores = _filter_known_fields(tuple(cores), known_fields, self._registry)
         self._served = False
         # Task 4: cùng cơ chế lọc + ủy quyền như CuratedIdeaSource.
         self._saturated: set[str] = set()
+        self._avoided_hashes = avoided_hashes
+        self._dedup_key_fn = dedup_key_fn
+        self._simulator = simulator
+        self._sim_config = sim_config
+        self._pp_allowed_neutralizations = pp_allowed_neutralizations
+        self._presim_cache = presim_cache
 
     def set_saturated_families(self, fams: "set[str] | frozenset[str]") -> None:
         self._saturated = set(fams)
         if hasattr(self._fallback, "set_saturated_families"):
             self._fallback.set_saturated_families(fams)
+
+    def _presim_batch(self, cores: list[str]) -> None:
+        """Task 6: sim CẢ NHÓM `cores` 1 lần qua `simulate_many` (thay vì N lần tuần tự sau
+        này trong `_sim_direct`), ghi kết quả vào `self._presim_cache` (khoá = expr thô — cùng
+        khoá `_sim_direct` dùng để tra lại). CHỈ chạy khi đủ cấu hình (simulator/sim_config/
+        cache) VÀ ≥2 core (khớp giới hạn API: mảng multi-sim cần ≥2 phần tử — 1 core thì tự
+        `_sim_direct` sim đường đơn như cũ, khỏi tốn thêm 1 lần round-trip vô ích).
+
+        LỖI BẤT KỲ (multi-sim hỏng, mất mạng, quota cạn...) -> log warning, KHÔNG cache gì —
+        `_sim_direct` sẽ tự sim tuần tự từng core như hành vi CŨ (an toàn, không chết phiên;
+        quota cạn thật vẫn được `_sim_direct` phát hiện + báo QuotaExhausted đúng như trước,
+        chỉ trễ hơn 1 nhịp vì phải chạm Brain lại ở đường đơn)."""
+        if (
+            self._simulator is None or self._sim_config is None
+            or self._presim_cache is None or len(cores) < 2
+        ):
+            return
+        jobs = [
+            (expr, self._sim_config.with_overrides(
+                neutralization=_neutralization_for(expr, self._pp_allowed_neutralizations, self._registry)
+            ).to_settings())
+            for expr in cores
+        ]
+        try:
+            results = self._simulator.simulate_many(jobs)
+        except Exception as exc:  # noqa: BLE001 - fallback cố ý bắt rộng, xem docstring.
+            logger.warning(
+                "AltDataIdeaSource: multi-sim batch lỗi ({}) — fallback sim tuần tự từng core.",
+                exc,
+            )
+            return
+        for expr, result in zip(cores, results):
+            self._presim_cache[expr] = result
 
     def next_batch(self):
         if not self._served:
@@ -705,7 +778,16 @@ class AltDataIdeaSource:
             empty = np.zeros(0, dtype=np.float64)
             dates = np.zeros(0, dtype="datetime64[ns]")
             cores = [e for e in self._cores if classify_family(e) not in self._saturated]
+            if self._avoided_hashes is not None and self._dedup_key_fn is not None:
+                kept: list[str] = []
+                for e in cores:
+                    if self._dedup_key_fn(e) in self._avoided_hashes:
+                        logger.info("core alt-data đã sim & bão hoà, bỏ phục vụ lại: {!r}", e)
+                        continue
+                    kept.append(e)
+                cores = kept
             if cores:
+                self._presim_batch(cores)
                 return [
                     ShortlistCandidate(
                         expr=e, metrics=None, pnl=empty, dates=dates, origin="alt_data",
@@ -1022,6 +1104,18 @@ def build_closed_loop(
         idea_source = CuratedIdeaSource(
             fallback=idea_source, avoided_hashes=avoided_hashes, dedup_key_fn=_dedup_key,
         )
+    # Refiner resolve TRƯỚC AltDataIdeaSource (Task 6): cần simulator/sim_config/pp_allowed_
+    # neutralizations của refiner để AltDataIdeaSource tự tính ĐÚNG settings cho batch multi-sim
+    # (dùng chung `_neutralization_for`, xem docstring AltDataIdeaSource).
+    if refiner is None:
+        refiner = RefinementLoopRefiner(loop)
+    # Task 6: cache dùng CHUNG giữa AltDataIdeaSource (ghi, sau khi simulate_many) và refiner
+    # (đọc trong _sim_direct) — chỉ gắn khi refiner có thuộc tính `presim_cache` (LocalTunerRefiner;
+    # RefinementLoopRefiner/refiner giả trong test không có -> giữ nguyên hành vi cũ, KHÔNG batch).
+    _presim_cache: "dict[str, Any] | None" = None
+    if hasattr(refiner, "presim_cache"):
+        _presim_cache = {}
+        refiner.presim_cache = _presim_cache  # type: ignore[attr-defined]
     # Alt-data đặt NGOÀI CÙNG -> phục vụ ở batch đầu (trước cả curated PV) để phiên ngắn/
     # --max-ideas nhỏ vẫn chạm alt-data (đòn bẩy độ mới), không bị PV core nuốt hết quota.
     # Alt-data + fundamental: field ngoài panel local -> refiner sim thẳng Brain. GỘP cores vào
@@ -1040,6 +1134,11 @@ def build_closed_loop(
         idea_source = AltDataIdeaSource(
             fallback=idea_source, cores=direct_cores,
             known_fields=known_fields, registry=registry,
+            avoided_hashes=avoided_hashes, dedup_key_fn=_dedup_key,
+            simulator=getattr(refiner, "simulator", None),
+            sim_config=getattr(refiner, "sim_config", None),
+            pp_allowed_neutralizations=getattr(refiner, "pp_allowed_neutralizations", frozenset()),
+            presim_cache=_presim_cache,
         )
     # Combiner bọc NGOÀI CÙNG: nối tiếp mỗi batch (sau curated/alt-data) bằng alpha ghép từ
     # chính tín hiệu con batch đó + kho DB -> tự động chạy sau mỗi run (spec 2026-07-09).
@@ -1047,8 +1146,6 @@ def build_closed_loop(
         idea_source = CombinerIdeaSource(
             fallback=idea_source, data=data, repo=repo, config=config, registry=registry,
         )
-    if refiner is None:
-        refiner = RefinementLoopRefiner(loop)
     tracker = CalibrationTracker(repo, every=calibrate_every, rho_bar=rho_bar)  # type: ignore[arg-type]
     # Task 5: nối tracker vào refiner (nếu refiner biết đọc ρ, vd LocalTunerRefiner) — CÙNG một
     # object mà ClosedLoop cập nhật last_rho mỗi maybe_calibrate() nên refiner luôn thấy ρ mới nhất.

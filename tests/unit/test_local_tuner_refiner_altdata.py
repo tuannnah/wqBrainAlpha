@@ -132,6 +132,30 @@ def test_altdata_presim_reject_khong_gia_vo_da_sim():
     assert out.passed is False
 
 
+def test_altdata_dung_presim_cache_khong_sim_lai():
+    """Task 6: core ĐÃ có kết quả trong presim_cache (do AltDataIdeaSource sim batch trước qua
+    simulate_many) -> _sim_direct dùng lại, KHÔNG gọi simulator.simulate() lần 2 cho sim core."""
+    cached_result = SimulationResult(
+        expression=_ALT_EXPR, alpha_id="wq-cached", status="passed",
+        sharpe=1.4, fitness=1.05, turnover=0.3, drawdown=0.1, raw={},
+    )
+    r = _refiner(_alt_result)  # nếu bị gọi, simulate() trả kết quả KHÁC (alpha_id wq-1)
+    r.presim_cache = {_ALT_EXPR: cached_result}
+    out = r.refine_and_sim(_cand(_ALT_EXPR))
+    assert r.simulator.calls == 0            # KHÔNG sim lại — dùng cache
+    assert out.wq_alpha_id == "wq-cached"     # đúng kết quả đã cache, không phải _alt_result
+    assert _ALT_EXPR not in r.presim_cache    # cache đã pop, không phình theo thời gian
+
+
+def test_altdata_presim_cache_rong_van_tu_sim_binh_thuong():
+    """presim_cache=None (mặc định) hoặc rỗng -> hành vi CŨ y nguyên: _sim_direct tự sim."""
+    r = _refiner(_alt_result)
+    assert r.presim_cache is None
+    out = r.refine_and_sim(_cand(_ALT_EXPR))
+    assert r.simulator.calls == 1
+    assert out.sharpe == 1.4
+
+
 def test_pv_expr_van_di_duong_tune(monkeypatch):
     """Expr price/volume (local_usable=True) vẫn đi đường tune cũ — KHÔNG lạc sang sim-thẳng.
     Chứng minh nhánh alt-data chỉ kích hoạt khi field ngoài panel."""

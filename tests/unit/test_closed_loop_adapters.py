@@ -745,3 +745,76 @@ def test_sim_direct_quota_het_giua_luc_sweep_nem_quota_exhausted() -> None:
 
     with pytest.raises(QuotaExhausted):
         refiner.refine_and_sim(_sweep_cand(_SWEEP_EXPR))
+
+
+# --- Task 6: build_closed_loop nối simulator/sim_config của LocalTunerRefiner xuống
+# AltDataIdeaSource -> batch core alt-data đầu tiên sim CẢ NHÓM 1 lần qua simulate_many, rồi
+# refine_and_sim đọc lại cache thay vì sim lần 2. ------------------------------------------------
+
+
+def test_build_closed_loop_noi_simulate_many_xuong_alt_data_source(small_panel, repo) -> None:  # noqa: ANN001
+    """refiner=LocalTunerRefiner có simulator hỗ trợ simulate_many -> build_closed_loop tự gắn
+    presim_cache dùng chung; next_batch() đầu tiên gọi simulate_many ĐÚNG 1 lần cho toàn bộ
+    core alt-data (thay vì mỗi core đợi refine_and_sim tự sim tuần tự)."""
+    from src.app.closed_loop_adapters import LocalTunerRefiner, build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.generation.alt_data_seeds import ALT_DATA_CORES
+    from src.lang.registry import default_registry
+    from src.simulation.config import SimConfig
+    from src.simulation.simulator import SimulationResult
+
+    class _MultiSim:
+        def __init__(self) -> None:
+            self.multi_calls: list[list] = []
+            self.single_calls = 0
+
+        def simulate(self, expr, settings=None):
+            self.single_calls += 1
+            return SimulationResult(expression=expr, alpha_id="wq-single", status="passed", sharpe=1.0)
+
+        def simulate_many(self, jobs):
+            self.multi_calls.append(list(jobs))
+            return [
+                SimulationResult(expression=e, alpha_id=f"wq-{i}", status="passed", sharpe=1.2)
+                for i, (e, _s) in enumerate(jobs)
+            ]
+
+    class _AlphaRepo:
+        """Fake vai trò AlphaRepository (save_alpha/save_simulation) — khác `repo` fixture
+        (MiniBrainRepository) build_closed_loop dùng cho GPIdeaSource/ClosedLoop, đúng như
+        wiring thật (main.py: loop.repo là AlphaRepository, repo truyền ClosedLoop khác)."""
+
+        def save_alpha(self, *a, **k):
+            return "a1"
+
+        def save_simulation(self, *a, **k):
+            return None
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+    sim = _MultiSim()
+    refiner = LocalTunerRefiner(
+        simulator=sim, repo=_AlphaRepo(), data=small_panel,
+        local_config=cfg, sim_config=SimConfig.default(),
+    )
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2,
+                             curated_seeds=False, include_fundamental=False,
+                             include_hypothesis=False, include_combiner=False,
+                             refiner=refiner)
+
+    batch = loop.idea_source.next_batch()
+    assert len(sim.multi_calls) == 1
+    assert len(sim.multi_calls[0]) == len(ALT_DATA_CORES)
+    assert sim.single_calls == 0  # chưa refine_and_sim gì — chỉ next_batch() đã sim xong batch
+
+    # refine_and_sim CORE đầu tiên phải đọc lại cache, KHÔNG sim đơn lần 2.
+    outcome = refiner.refine_and_sim(batch[0])
+    assert sim.single_calls == 0
+    assert outcome.wq_alpha_id == "wq-0"
