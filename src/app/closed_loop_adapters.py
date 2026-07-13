@@ -1097,7 +1097,7 @@ def build_closed_loop(
     nguồn nhiễu (2 phiên gần nhất đốt ~10 sim ra toàn Sharpe ≤0.31, calibration ρ=0.308 không
     đủ tin để lọc trước). Mặc định 3; ưu tiên quota còn lại cho curated/alt_data/combiner
     (không bị cap này). None = không cap (tương thích ngược)."""
-    from src.pipeline.closed_loop import CalibrationTracker, ClosedLoop
+    from src.pipeline.closed_loop import CalibrationTracker, ClosedLoop, compute_avoided_hashes
 
     # Dedup key = canonical hash đã fold scale dương (Pha 1.2). Định nghĩa TRƯỚC khi dựng
     # CuratedIdeaSource (Task 6) để wrapper này pha loãng đúng core ĐÃ Brain-sim & lưu
@@ -1110,12 +1110,14 @@ def build_closed_loop(
         except Exception:
             return expr
 
-    # Task 6 (RC7 lean fix): nạp avoided-hashes MỘT LẦN tại build time — guard getattr+callable
-    # giống ClosedLoop.run (repo fake/cũ thiếu method vẫn chạy được, tương thích ngược).
-    _avoided_hashes_original = getattr(repo, "avoided_hashes_original", None)
-    avoided_hashes: "set[str] | None" = (
-        set(_avoided_hashes_original()) if callable(_avoided_hashes_original) else None
-    )
+    # Task 6 (RC7 lean fix) + Finding #2 (review): nạp avoided-hashes MỘT LẦN tại build time —
+    # DÙNG CHUNG `compute_avoided_hashes` với `ClosedLoop.run` (UNION avoided_hashes ∪
+    # avoided_hashes_original ∪ dedup(avoided_exprs)) để lọc core tại NGUỒN (Curated/
+    # AltDataIdeaSource) KHỚP đúng tập `seen` mà run() dùng để chặn refine trùng — trước đây
+    # chỉ nạp avoided_hashes_original(), bỏ lọt core đã Brain-sim-fail phiên trước (chỉ có
+    # trong avoided_hashes()/avoided_exprs()) khiến nó lọt qua lọc nguồn, đốt quota thật rồi
+    # mới bị `seen` ở run() chặn — không còn dấu vết audit.
+    avoided_hashes: "set[str] | None" = compute_avoided_hashes(repo, _dedup_key)
 
     idea_source: object = GPIdeaSource(
         data, repo, config, registry, pop_size=pop_size, n_generations=n_generations,

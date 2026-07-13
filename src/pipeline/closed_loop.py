@@ -33,6 +33,30 @@ def _fmt(x: float | None) -> str:
     return f"{x:.2f}" if isinstance(x, (int, float)) else "—"
 
 
+def compute_avoided_hashes(repo, dedup_key_fn) -> set[str]:
+    """UNION 3 tập avoid-list bền: `avoided_hashes()` (BrainSimLinkModel status='failed',
+    hash SAU tune) ∪ `avoided_hashes_original()` (TriedHashModel, hash GỐC pre-tune) ∪
+    dedup(`avoided_exprs()`) (chuỗi thô, qua `dedup_key_fn` để cùng không gian key). Đây CHÍNH
+    LÀ tập `seen` mà `ClosedLoop.run` dựng ở đầu phiên — tách thành hàm dùng chung để
+    `build_closed_loop` lọc core tại NGUỒN (Curated/AltDataIdeaSource) đúng KHỚP với tập run()
+    dùng để chặn refine trùng (Finding #2 review: trước đây build_closed_loop chỉ nạp
+    avoided_hashes_original(), bỏ lọt 2 tập kia -> core đã Brain-sim-fail phiên trước (chỉ có
+    trong avoided_hashes() hoặc avoided_exprs()) lọt qua lọc nguồn, đốt quota thật rồi mới bị
+    `seen` ở run() chặn — không còn dấu vết vì đã sim thật). Guard getattr+callable: repo fake/
+    cũ thiếu method vẫn chạy được (tương thích ngược)."""
+    seen: set[str] = set()
+    avoided_hashes_fn = getattr(repo, "avoided_hashes", None)
+    if callable(avoided_hashes_fn):
+        seen |= set(avoided_hashes_fn())
+    avoided_hashes_original_fn = getattr(repo, "avoided_hashes_original", None)
+    if callable(avoided_hashes_original_fn):
+        seen |= set(avoided_hashes_original_fn())
+    avoided_exprs_fn = getattr(repo, "avoided_exprs", None)
+    if callable(avoided_exprs_fn):
+        seen |= {dedup_key_fn(e) for e in avoided_exprs_fn()}
+    return seen
+
+
 class QuotaExhausted(Exception):
     """Refiner ném khi Brain hết quota SIM — ClosedLoop dừng vòng gọn, persist mọi thứ."""
 
@@ -204,21 +228,12 @@ class ClosedLoop:
         # origin "gp" — cap ngân sách riêng cho GP, không đụng curated/alt_data/combiner.
         gp_sims_used = 0
         # seen chứa DEDUP KEY (canonical fold Pha 1.2), không phải chuỗi thô. Nạp avoid-list
-        # bền: ưu tiên hash cross-session (avoided_hashes) nếu repo có; fallback chuỗi thô
-        # (đưa qua dedup_key_fn để cùng không gian key).
-        seen: set[str] = set()
-        avoided_hashes = getattr(self.repo, "avoided_hashes", None)
-        if callable(avoided_hashes):
-            seen |= set(avoided_hashes())
-        # Hash GỐC (pre-tune) đã thử ở phiên trước (Task 6 fix) — không gian hash NÀY khớp
-        # đúng với `key` tính ở dưới (dedup_key_fn trên cand.expr TRƯỚC tune), khác
-        # avoided_hashes() ở trên vốn lấy canonical_hash SAU tune từ BrainSimLinkModel nên
-        # không bao giờ khớp candidate mới sinh ra ở phiên sau. Guard getattr+callable: repo
-        # fake/cũ thiếu method này vẫn chạy được (tương thích ngược).
-        avoided_hashes_original = getattr(self.repo, "avoided_hashes_original", None)
-        if callable(avoided_hashes_original):
-            seen |= set(avoided_hashes_original())
-        seen |= {self.dedup_key_fn(e) for e in self.repo.avoided_exprs()}
+        # bền = UNION 3 tập (avoided_hashes ∪ avoided_hashes_original ∪ dedup(avoided_exprs))
+        # qua `compute_avoided_hashes` — hàm DÙNG CHUNG với `build_closed_loop` (Finding #2
+        # review) để lọc core tại NGUỒN (Curated/AltDataIdeaSource) KHỚP đúng tập seen ở đây,
+        # tránh khe hở hash-space (core đã sim-fail phiên trước lọt qua lọc nguồn rồi mới bị
+        # chặn ở đây — SAU KHI đã đốt quota thật).
+        seen: set[str] = compute_avoided_hashes(self.repo, self.dedup_key_fn)
         # Thu thập expr đạt Power Pool nhưng KHÔNG đạt Regular — để tóm tắt cuối phiên (không
         # đổi ClosedLoopReport public: chỉ log, tránh rủi ro cho consumer đang đọc report).
         power_pool_only: list[str] = []

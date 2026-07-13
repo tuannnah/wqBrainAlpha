@@ -446,6 +446,53 @@ def test_build_closed_loop_alt_data_bat_mac_dinh(small_panel, repo) -> None:  # 
         assert core in exprs
 
 
+def test_build_closed_loop_loc_core_da_that_bai_qua_avoided_hashes(small_panel, repo) -> None:  # noqa: ANN001
+    """Finding #2 (Important) — khe hash-space: `build_closed_loop` trước đây chỉ nạp
+    `avoided_hashes_original()` (TriedHashModel, hash GỐC pre-tune) để lọc core tại NGUỒN
+    (AltDataIdeaSource/CuratedIdeaSource), trong khi `ClosedLoop.run` chặn refine trùng bằng
+    UNION CẢ BA tập: avoided_hashes_original() ∪ avoided_hashes() (BrainSimLinkModel
+    status='failed', post-tune) ∪ dedup(avoided_exprs()). Core đã Brain-sim-fail ở phiên
+    TRƯỚC (chỉ có mặt trong avoided_hashes(), KHÔNG có trong avoided_hashes_original() vì
+    record_avoided_hash chưa từng gọi cho nó) phải bị lọc NGAY TẠI NGUỒN — không được lọt vào
+    batch alt-data rồi đốt quota thật thêm lần nữa (dù cuối cùng vẫn bị `seen` ở run() chặn,
+    chuyện đó xảy ra SAU KHI đã sim thật, không còn dấu vết trong batch)."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.generation.alt_data_seeds import ALT_DATA_CORES
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.lang.registry import default_registry
+    from src.lang.parser import parse
+    from src.lang.visitors import CanonicalHasher
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    # Core alt-data ĐẦU TIÊN đã Brain-sim status='failed' ở phiên trước — chỉ ghi vào
+    # BrainSimLinkModel (avoided_hashes()), KHÔNG ghi TriedHashModel (avoided_hashes_original()
+    # rỗng) — đúng khe hở review chỉ ra.
+    core_da_fail = ALT_DATA_CORES[0]
+    canonical_hash = CanonicalHasher(default_registry()).visit(parse(core_da_fail))
+    repo.record_brain_sim(
+        canonical_hash, core_da_fail, wq_alpha_id="wq-old", region="USA", universe="TOP3000",
+        sharpe=0.1, fitness=0.1, turnover=0.5, self_corr=None, status="failed",
+    )
+    assert canonical_hash in repo.avoided_hashes()
+    assert canonical_hash not in repo.avoided_hashes_original()
+
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2,
+                             curated_seeds=False)
+    exprs = [c.expr for c in loop.idea_source.next_batch()]
+    assert core_da_fail not in exprs
+    # Core ALT_DATA khác (chưa từng sim) vẫn được phục vụ bình thường.
+    for core in ALT_DATA_CORES[1:]:
+        assert core in exprs
+
+
 # --- Field-validity guard (RC1/RC2 fix idea-generator): core field bịa/chưa cache bị lọc
 # TRƯỚC khi chạm Brain sim, thay vì đốt quota rồi WQ từ chối (cardinal rule #1). ------------
 
