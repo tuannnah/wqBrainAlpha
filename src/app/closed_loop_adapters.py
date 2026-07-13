@@ -490,7 +490,9 @@ class CuratedIdeaSource:
                 cores = kept
             if cores:
                 return [
-                    ShortlistCandidate(expr=e, metrics=None, pnl=empty, dates=dates)
+                    ShortlistCandidate(
+                        expr=e, metrics=None, pnl=empty, dates=dates, origin="curated",
+                    )
                     for e in cores
                 ]
             # Toàn bộ core curated thuộc họ đã đóng (hoặc đã bị lọc bởi avoided_hashes) -> rơi
@@ -567,7 +569,9 @@ class AltDataIdeaSource:
             cores = [e for e in self._cores if classify_family(e) not in self._saturated]
             if cores:
                 return [
-                    ShortlistCandidate(expr=e, metrics=None, pnl=empty, dates=dates)
+                    ShortlistCandidate(
+                        expr=e, metrics=None, pnl=empty, dates=dates, origin="alt_data",
+                    )
                     for e in cores
                 ]
             return self._fallback.next_batch()
@@ -830,6 +834,7 @@ def build_closed_loop(
     include_fundamental: bool = True, max_per_family: int | None = 8,
     idea_generator: object | None = None, include_hypothesis: bool = True,
     known_fields: "frozenset[str] | set[str] | None" = None,
+    max_gp_sims: int | None = 3,
 ) -> "ClosedLoop":
     """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
     bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
@@ -840,7 +845,12 @@ def build_closed_loop(
     `known_fields`: catalog field cache thật của account (vd `set(_cached_symbols(...)[0])`
     ở main.py) — field-validity guard (RC1/RC2): core alt-data/fundamental/hypothesis nào tham
     chiếu field KHÔNG nằm trong tập này bị lọc bỏ, KHÔNG BAO GIỜ gửi lên Brain sim (chỉ log).
-    None (mặc định) -> KHÔNG lọc gì (tương thích ngược khi chưa/không load được catalog)."""
+    None (mặc định) -> KHÔNG lọc gì (tương thích ngược khi chưa/không load được catalog).
+
+    `max_gp_sims`: trần sim Brain THẬT/phiên riêng cho candidate origin "gp" (Task 3) — GP là
+    nguồn nhiễu (2 phiên gần nhất đốt ~10 sim ra toàn Sharpe ≤0.31, calibration ρ=0.308 không
+    đủ tin để lọc trước). Mặc định 3; ưu tiên quota còn lại cho curated/alt_data/combiner
+    (không bị cap này). None = không cap (tương thích ngược)."""
     from src.pipeline.closed_loop import CalibrationTracker, ClosedLoop
 
     # Dedup key = canonical hash đã fold scale dương (Pha 1.2). Định nghĩa TRƯỚC khi dựng
@@ -932,5 +942,5 @@ def build_closed_loop(
         calibration_tracker=tracker, alpha_logger=alpha_logger,
         session_summary=session_summary, dedup_key_fn=_dedup_key,
         family_fn=classify_family, max_per_family=max_per_family,
-        on_family_closed=on_family_closed,
+        on_family_closed=on_family_closed, max_gp_sims=max_gp_sims,
     )

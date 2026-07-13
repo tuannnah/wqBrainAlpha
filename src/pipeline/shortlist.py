@@ -25,6 +25,11 @@ class ShortlistCandidate:
     metrics: AlphaMetrics
     pnl: npt.NDArray[np.float64]
     dates: Dates
+    # Nguồn sinh candidate ("curated" | "alt_data" | "combiner" | "gp") — Task 3: ClosedLoop
+    # cap ngân sách sim Brain riêng cho GP (nguồn nhiễu chất lượng thấp, calibration ρ=0.308)
+    # để ưu tiên quota cho seed đã kiểm chứng/alpha ghép. Default "gp" để KHÔNG vỡ constructor
+    # cũ (mọi call site trước Task 3 đều dựng candidate từ GPEngine).
+    origin: str = "gp"
 
 
 # Tương quan PnL đôi một dùng chung với combiner/pool_corr (một chỗ duy nhất).

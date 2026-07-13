@@ -131,6 +131,7 @@ def combine_stage(
                 metrics=scored.metrics,  # type: ignore[arg-type]
                 pnl=scored.pnl,  # type: ignore[arg-type]
                 dates=scored.dates,  # type: ignore[arg-type]
+                origin="combiner",
             )
         )
     return out

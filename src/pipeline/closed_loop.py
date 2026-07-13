@@ -156,6 +156,7 @@ class ClosedLoop:
         family_fn=None,
         max_per_family: int | None = None,
         on_family_closed=None,
+        max_gp_sims: int | None = 3,
     ) -> None:
         self.idea_source = idea_source
         self.refiner = refiner
@@ -181,6 +182,14 @@ class ClosedLoop:
         # Callback khi một họ bị đóng (Pha 2.3): nhận set họ bão hoà -> composition root nối
         # tới idea_generator.set_saturated_families để LLM tránh tái sinh. None -> bỏ qua.
         self.on_family_closed = on_family_closed
+        # Cap ngân sách sim Brain riêng cho candidate origin "gp" (Task 3): 2 phiên chạy thật
+        # gần nhất GP đốt ~10 sim (≈50% quota) ra toàn Sharpe ≤0.31 — calibration ρ=0.308 nên
+        # floor local không lọc nổi rác GP TRƯỚC khi chạm Brain. Cap cứng rẻ hơn cải thiện
+        # calibration: candidate origin "gp" vượt trần KHÔNG refine+sim (0 sim thật), ưu tiên
+        # quota còn lại cho seed đã kiểm chứng (curated/alt_data) và alpha ghép (combiner) —
+        # các nguồn này KHÔNG bị cap (YAGNI: chỉ GP là nguồn nhiễu đã có bằng chứng thật).
+        # None = không cap (tương thích ngược cho ai đang set max_gp_sims=None tường minh).
+        self.max_gp_sims = max_gp_sims
 
     def run(self) -> ClosedLoopReport:
         """Lặp: next_batch → mỗi ý tưởng refine_and_sim → record_brain_sim → đếm. Dừng khi
@@ -190,6 +199,9 @@ class ClosedLoop:
         sims_used = 0
         n_passed = 0
         n_abandoned = 0
+        # Task 3: đếm SỐ SIM Brain thật (cộng dồn outcome.sims_used) đã dùng bởi candidate
+        # origin "gp" — cap ngân sách riêng cho GP, không đụng curated/alt_data/combiner.
+        gp_sims_used = 0
         # seen chứa DEDUP KEY (canonical fold Pha 1.2), không phải chuỗi thô. Nạp avoid-list
         # bền: ưu tiên hash cross-session (avoided_hashes) nếu repo có; fallback chuỗi thô
         # (đưa qua dedup_key_fn để cùng không gian key).
@@ -267,12 +279,40 @@ class ClosedLoop:
                     if self.session_summary is not None:
                         self.session_summary.record_dup_blocked()
                     continue
-                logger.info("🔎 Ý tưởng #{}: refine+sim {}", ideas_tried + 1, _short(cand.expr))
-                try:
-                    outcome = self.refiner.refine_and_sim(cand)
-                except QuotaExhausted:
-                    logger.info("Hết quota Brain — dừng vòng kín ({} sim đã dùng).", sims_used)
-                    return _report("quota")
+                origin = getattr(cand, "origin", "gp")
+                # Task 3: candidate origin "gp" đã chạm trần ngân sách sim GP/phiên -> KHÔNG
+                # refine+sim (0 sim thật) — outcome trung thực để funnel CSV/session_summary
+                # ghi rõ ứng viên bị chặn vì ngân sách, không phải bị `continue` âm thầm như
+                # dedup/family-closed. Candidate origin khác (curated/alt_data/combiner) không
+                # bị cap này -> luôn đi tiếp đường refine+sim bình thường.
+                if (
+                    origin == "gp"
+                    and self.max_gp_sims is not None
+                    and gp_sims_used >= self.max_gp_sims
+                ):
+                    logger.info(
+                        "🚧 Ứng viên GP #{} chạm trần ngân sách sim ({} sim) — bỏ qua, ưu "
+                        "tiên quota cho seed/combiner: {}",
+                        ideas_tried + 1, self.max_gp_sims, _short(cand.expr),
+                    )
+                    outcome = IdeaOutcome(
+                        expr=cand.expr, canonical_hash=key, passed=False, wq_alpha_id=None,
+                        sharpe=None, fitness=None, turnover=None, self_corr=None,
+                        sims_used=0, stop_reason="gp_budget", source=origin,
+                        stage_reached="gp_budget", fail_check="GP_BUDGET",
+                        family=fam or "", dedup_key=key, is_brain_sim=False,
+                    )
+                else:
+                    logger.info(
+                        "🔎 Ý tưởng #{}: refine+sim {}", ideas_tried + 1, _short(cand.expr),
+                    )
+                    try:
+                        outcome = self.refiner.refine_and_sim(cand)
+                    except QuotaExhausted:
+                        logger.info(
+                            "Hết quota Brain — dừng vòng kín ({} sim đã dùng).", sims_used,
+                        )
+                        return _report("quota")
                 # Điền gen_ms (chi phí sinh batch phân bổ) nếu refiner chưa set — refiner đo
                 # backtest_ms/sim_ms, còn gen_ms thuộc tầng ClosedLoop (Fix gap Pha 0).
                 if getattr(outcome, "gen_ms", None) is None:
@@ -304,6 +344,12 @@ class ClosedLoop:
                 if self.session_summary is not None:
                     self.session_summary.record(outcome)
                 sims_used += outcome.sims_used
+                # Đếm theo SỐ SIM thật (outcome.sims_used), KHÔNG phải số candidate (review
+                # fix): với --refiner llm, 1 candidate gp có thể đốt nhiều sim (patience loop)
+                # — đếm theo candidate thì cap 3 vẫn có thể cho lọt 15 sim thật. Outcome bị
+                # gate local/gp_budget có sims_used=0 nên tự nhiên không cộng gì.
+                if origin == "gp":
+                    gp_sims_used += outcome.sims_used
                 if outcome.passed:
                     n_passed += 1
                 else:

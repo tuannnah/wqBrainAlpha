@@ -20,11 +20,11 @@ from src.storage.db import init_db
 from src.storage.repository import MiniBrainRepository
 
 
-def _cand(expr: str) -> ShortlistCandidate:
+def _cand(expr: str, origin: str = "gp") -> ShortlistCandidate:
     m = AlphaMetrics(sharpe=1.0, annual_return=0.1, turnover=0.3, max_drawdown=0.05,
                      fitness=1.0, per_year_sharpe={2021: 1.0}, weight_concentration=0.05)
     dates = (np.datetime64("2021-01-01") + np.arange(5)).astype("datetime64[D]")
-    return ShortlistCandidate(expr=expr, metrics=m, pnl=np.ones(5), dates=dates)
+    return ShortlistCandidate(expr=expr, metrics=m, pnl=np.ones(5), dates=dates, origin=origin)
 
 
 @pytest.fixture
@@ -338,7 +338,9 @@ def test_family_closed_goi_callback(repo) -> None:  # noqa: ANN001
 
 
 def test_family_budget_khong_dong_khi_co_pass(repo) -> None:  # noqa: ANN001
-    """Họ có ít nhất 1 pass thì KHÔNG đóng dù vượt max_per_family (họ còn tiềm năng)."""
+    """Họ có ít nhất 1 pass thì KHÔNG đóng dù vượt max_per_family (họ còn tiềm năng).
+    max_gp_sims=None để cô lập hành vi family budget khỏi cap ngân sách GP (Task 3):
+    candidate ở đây origin mặc định "gp" và pv_a(2)+pv_b(1)=3 sim đã chạm trần mặc định 3."""
     src = _FakeIdeaSource([[_cand("pv_a"), _cand("pv_b"), _cand("pv_c")]])
     refiner = _FakeRefiner({"pv_a": _passed("pv_a")})  # pv_a pass
 
@@ -346,7 +348,7 @@ def test_family_budget_khong_dong_khi_co_pass(repo) -> None:  # noqa: ANN001
         return "pv"
 
     loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
-                      family_fn=family_fn, max_per_family=2)
+                      family_fn=family_fn, max_per_family=2, max_gp_sims=None)
     loop.run()
     assert refiner.calls == ["pv_a", "pv_b", "pv_c"]  # không đóng vì đã có pass
 
@@ -515,3 +517,58 @@ def test_closed_loop_feed_session_summary(repo) -> None:  # noqa: ANN001
     assert d["total"] == 2          # close + open (close lần 2 bị chặn, không refine)
     assert d["dup_blocked"] == 1    # close lần 2 tính dup
     assert d["passed"] == 1
+
+
+def test_gp_budget_chan_ung_vien_gp_thu_hai_uu_tien_curated(repo) -> None:  # noqa: ANN001
+    """Task 3: `max_gp_sims=1` -> ứng viên GP THỨ 2 KHÔNG được refine+sim (đã chạm trần ngân
+    sách sim GP/phiên); outcome trung thực ghi stage_reached='gp_budget', fail_check=
+    'GP_BUDGET', sims_used=0, is_brain_sim=False — vẫn qua session_summary + alpha_logger như
+    mọi outcome khác (không phải bị `continue` âm thầm). Ứng viên origin 'curated' KHÔNG bị
+    cap này (ngân sách chỉ áp cho GP) -> vẫn refine+sim bình thường, đúng tinh thần "ưu tiên
+    quota cho seed/combiner"."""
+    gp1 = _cand("gp1", origin="gp")
+    gp2 = _cand("gp2", origin="gp")
+    curated1 = _cand("curated1", origin="curated")
+    src = _FakeIdeaSource([[gp1, gp2, curated1]])
+    refiner = _FakeRefiner({"gp1": _passed("gp1"), "curated1": _passed("curated1")})
+    logged: list[IdeaOutcome] = []
+
+    class _Logger:
+        def log(self, index, outcome):  # noqa: ANN001
+            logged.append(outcome)
+
+    loop = ClosedLoop(
+        idea_source=src, refiner=refiner, repo=repo, max_gp_sims=1, alpha_logger=_Logger(),
+    )
+    report = loop.run()
+
+    # gp2 KHÔNG bao giờ chạm refiner (bị chặn TRƯỚC refine+sim) — gp1 đã dùng hết trần 1 sim GP.
+    assert refiner.calls == ["gp1", "curated1"]
+    assert report.ideas_tried == 3  # cả 3 vẫn được đếm (gp2 có outcome tổng hợp, không bị bỏ)
+    by_expr = {o.expr: o for o in logged}
+    gp2_outcome = by_expr["gp2"]
+    assert gp2_outcome.stage_reached == "gp_budget"
+    assert gp2_outcome.fail_check == "GP_BUDGET"
+    assert gp2_outcome.sims_used == 0
+    assert gp2_outcome.is_brain_sim is False
+    assert gp2_outcome.passed is False
+    # curated1 không bị cap GP -> vẫn refine+sim bình thường (sims_used như refiner thật trả về).
+    assert by_expr["curated1"].sims_used == _passed("curated1").sims_used
+    assert report.sims_used == _passed("gp1").sims_used + _passed("curated1").sims_used
+
+
+def test_gp_budget_dem_theo_so_sim_khong_phai_so_candidate(repo) -> None:  # noqa: ANN001
+    """Task 3 (review fix): ngân sách GP phải đếm theo SỐ SIM Brain thật (outcome.sims_used),
+    KHÔNG phải số candidate. Với --refiner llm, 1 candidate gp có thể đốt nhiều sim (patience
+    loop) — nếu đếm theo candidate, cap 3 có thể cho lọt 15 sim thật. Kịch bản phân định:
+    max_gp_sims=3, hai candidate gp đầu mỗi cái sims_used=2 -> tổng 4 >= 3 -> candidate gp
+    thứ 3 PHẢI bị chặn (đếm theo candidate thì counter mới = 2 < 3 và sẽ cho lọt — sai)."""
+    gp1, gp2, gp3 = _cand("gp1"), _cand("gp2"), _cand("gp3")  # origin mặc định "gp"
+    src = _FakeIdeaSource([[gp1, gp2, gp3]])
+    # _passed(...) có sims_used=2 (2 sim Brain thật mỗi candidate, giả lập patience loop).
+    refiner = _FakeRefiner({"gp1": _passed("gp1"), "gp2": _passed("gp2")})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo, max_gp_sims=3)
+    report = loop.run()
+    assert refiner.calls == ["gp1", "gp2"]  # gp3 bị chặn: 2+2=4 sim >= trần 3
+    assert report.sims_used == 4
+    assert report.ideas_tried == 3          # gp3 vẫn có outcome gp_budget (được đếm)
