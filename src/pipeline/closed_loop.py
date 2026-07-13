@@ -82,6 +82,13 @@ class IdeaOutcome:
     # gate local chặn (0 sim). Nguồn ý tưởng (alt_data/gp_local_tuner...) để soi độ lặp công thức.
     sim_settings: dict | None = None
     source: str | None = None
+    # Finding #4 (review): `source` ở trên là NHÃN ĐƯỜNG XỬ LÝ (vd mọi thứ qua LocalTunerRefiner
+    # đều ra "gp_local_tuner" bất kể candidate đến từ đâu) — KHÔNG đo được tiêu chí nghiệm thu
+    # "≥60% sim thuộc seed/hypothesis/combiner". `origin` là NHÃN NGUỒN Ý TƯỞNG GỐC của candidate
+    # (curated/gp/alt_data/combiner — xem ShortlistCandidate.origin), do `ClosedLoop.run` stamp
+    # vào outcome (composition root; refiner không biết origin). Default None để tương thích
+    # ngược với outcome dựng trước khi field này tồn tại.
+    origin: str | None = None
     # --- Instrumentation Pha 0 (IMPROVEMENT_SPEC §3): trả lời "chết ở đâu, vì sao, tốn bao lâu".
     # stage_reached: chặng cuối cùng ứng viên đi tới (idea|syntax|depth|dedup|local_floor|
     #   sub_universe|simmed|corr_checked|passed). fail_check: mã check thất bại (LOW_SHARPE/
@@ -364,6 +371,13 @@ class ClosedLoop:
                 # backtest_ms/sim_ms, còn gen_ms thuộc tầng ClosedLoop (Fix gap Pha 0).
                 if getattr(outcome, "gen_ms", None) is None:
                     outcome = replace(outcome, gen_ms=gen_ms_each)
+                # Finding #4 (review): stamp `origin` của candidate (curated/gp/alt_data/
+                # combiner) vào outcome — refiner không biết origin (chỉ ClosedLoop có, đọc từ
+                # candidate) nên mọi outcome qua đường tune LUÔN có source="gp_local_tuner" bất
+                # kể nguồn ý tưởng thật, làm mất khả năng đo tiêu chí nghiệm thu "≥60% sim
+                # thuộc seed/hypothesis/combiner". Cùng pattern guard với gen_ms ở trên.
+                if getattr(outcome, "origin", None) is None:
+                    outcome = replace(outcome, origin=origin)
                 self.repo.record_brain_sim(
                     canonical_hash=outcome.canonical_hash, expr_string=outcome.expr,
                     wq_alpha_id=outcome.wq_alpha_id, region=self.region,

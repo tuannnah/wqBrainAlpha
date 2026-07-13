@@ -34,6 +34,9 @@ class _FakeOutcome:
     # Task 3 (spec C2): pre-sim reject trung thực
     presim_reason: str | None = None
     is_brain_sim: bool = True
+    # Finding #4 (review): nhãn NGUỒN Ý TƯỞNG GỐC (curated/gp/alt_data/combiner), tách khỏi
+    # `source` (nhãn ĐƯỜNG XỬ LÝ, vd mọi thứ qua LocalTunerRefiner đều "gp_local_tuner").
+    origin: str | None = None
 
 
 def _read(path):
@@ -167,3 +170,23 @@ def test_sim_that_ghi_is_brain_sim_true(tmp_path):
     ))
     d = dict(zip(*_read(p)))
     assert d["is_brain_sim"] == "True"
+
+
+def test_schema_co_cot_origin():
+    """Finding #4 (Important, review): CSV phải có cột `origin` (nhãn NGUỒN Ý TƯỞNG GỐC —
+    curated/gp/alt_data/combiner) tách khỏi `source` (nhãn ĐƯỜNG XỬ LÝ, luôn "gp_local_tuner"
+    cho mọi thứ qua LocalTunerRefiner) — không có cột này thì không đo được tiêu chí nghiệm
+    thu "≥60% sim thuộc seed/hypothesis/combiner"."""
+    assert "origin" in COLUMNS
+
+
+def test_log_ghi_dung_cot_origin(tmp_path):
+    p = tmp_path / "a.csv"
+    lg = RunAlphaLogger(p)
+    lg.log(1, _FakeOutcome(
+        expr="rank(close)", passed=True, sharpe=1.5, source="gp_local_tuner",
+        origin="curated",
+    ))
+    d = dict(zip(*_read(p)))
+    assert d["origin"] == "curated"
+    assert d["source"] == "gp_local_tuner"  # 2 cột độc lập, không lẫn nhau

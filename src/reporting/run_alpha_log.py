@@ -6,7 +6,13 @@ Ctrl+C/hết quota vẫn giữ dữ liệu.
 
 Khác bản cũ: brain_sharpe/brain_fitness ghi BẤT KỂ passed (sim đã chạy thì luôn có số) — để
 phân biệt "sim rồi trượt" với "chưa sim"; log cũ nuốt sharpe khi failed nên không phân tích
-tự động được (spec §1)."""
+tự động được (spec §1).
+
+Cột `origin` (Finding #4, final review): nhãn NGUỒN Ý TƯỞNG GỐC của candidate (curated/gp/
+alt_data/combiner — `ShortlistCandidate.origin`, `ClosedLoop.run` stamp vào outcome), TÁCH
+KHỎI `source` (nhãn ĐƯỜNG XỬ LÝ, vd mọi thứ qua LocalTunerRefiner đều ra "gp_local_tuner" bất
+kể origin thật). Thiếu cột này thì không đo được tiêu chí nghiệm thu "≥60% sim thuộc
+seed/hypothesis/combiner" vì source một mình không phân biệt nổi nguồn."""
 
 from __future__ import annotations
 
@@ -15,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 COLUMNS = [
-    "#", "status", "stage_reached", "fail_check", "family", "source",
+    "#", "status", "stage_reached", "fail_check", "family", "source", "origin",
     "expression", "expr_depth", "dedup_key",
     "region", "universe", "delay", "neutralization", "decay", "truncation",
     "local_sharpe", "brain_sharpe", "brain_fitness", "turnover", "self_corr",
@@ -63,7 +69,8 @@ class RunAlphaLogger:
         g = lambda name: getattr(outcome, name, None)  # noqa: E731 - đọc trường Pha 0 an toàn
         self._w.writerow([
             index, status, _s(g("stage_reached")), _s(g("fail_check")), _s(g("family")),
-            _s(outcome.source), _s(outcome.expr), _s(g("expr_depth")), _s(g("dedup_key")),
+            _s(outcome.source), _s(g("origin")),
+            _s(outcome.expr), _s(g("expr_depth")), _s(g("dedup_key")),
             _s(s.get("region")), _s(s.get("universe")), _s(s.get("delay")),
             _s(s.get("neutralization")), _s(s.get("decay")), _s(s.get("truncation")),
             _s(g("local_sharpe")), _s(outcome.sharpe), _s(outcome.fitness),

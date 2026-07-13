@@ -392,6 +392,58 @@ def test_closed_loop_goi_alpha_logger_moi_y_tuong():
     assert logged == [(1, "rank(close)")]
 
 
+def test_closed_loop_stamp_origin_cua_candidate_vao_outcome(repo) -> None:  # noqa: ANN001
+    """Finding #4 (Important): mọi outcome qua đường tune (LocalTunerRefiner) đều ra
+    source="gp_local_tuner" BẤT KỂ candidate.origin (curated/gp/alt_data/combiner) -> không
+    đo được tiêu chí nghiệm thu "≥60% sim thuộc seed/hypothesis/combiner" vì origin GỐC của
+    candidate bị mất. `refine_and_sim` giả (như thật) KHÔNG set `origin` trên outcome trả về
+    (mặc định None) -> ClosedLoop.run phải tự stamp origin của candidate vào outcome qua
+    `replace()` (cùng pattern với gen_ms) TRƯỚC khi log/persist."""
+    logged: list[IdeaOutcome] = []
+
+    class _Logger:
+        def log(self, index, outcome) -> None:
+            logged.append(outcome)
+
+    # Outcome giả mô phỏng ĐÚNG hành vi refiner thật (LocalTunerRefiner._finalize luôn gán
+    # source="gp_local_tuner" cho đường tune, bất kể candidate.origin) — KHÔNG set `origin`.
+    outcome_tu_refiner = IdeaOutcome(
+        expr="curated_core", canonical_hash="h_curated_core", passed=True,
+        wq_alpha_id="WQ_curated_core", sharpe=1.5, fitness=1.2, turnover=0.2,
+        self_corr=0.3, sims_used=2, stop_reason="local_tuned", source="gp_local_tuner",
+    )
+    src = _FakeIdeaSource([[_cand("curated_core", origin="curated")]])
+    refiner = _FakeRefiner({"curated_core": outcome_tu_refiner})
+
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo, alpha_logger=_Logger())
+    loop.run()
+
+    assert len(logged) == 1
+    assert logged[0].origin == "curated"
+    assert logged[0].source == "gp_local_tuner"  # source refiner set NGUYÊN VẸN, không bị ghi đè
+
+
+def test_closed_loop_stamp_origin_ca_nhanh_gp_budget(repo) -> None:  # noqa: ANN001
+    """Nhánh gp_budget (candidate origin='gp' chạm trần max_gp_sims) tự dựng IdeaOutcome tại
+    chỗ, không qua refiner — origin cũng phải được stamp đúng "gp" (không rỗng)."""
+    logged: list[IdeaOutcome] = []
+
+    class _Logger:
+        def log(self, index, outcome) -> None:
+            logged.append(outcome)
+
+    src = _FakeIdeaSource([[_cand("gp1", origin="gp")]])
+    refiner = _FakeRefiner({})
+
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo, max_gp_sims=0,
+                      alpha_logger=_Logger())
+    loop.run()
+
+    assert len(logged) == 1
+    assert logged[0].origin == "gp"
+    assert logged[0].stop_reason == "gp_budget"
+
+
 def test_family_budget_dong_ho_khi_can_ma_khong_pass(repo) -> None:  # noqa: ANN001
     """Pha 2.2: family budget — họ sinh >= max_per_family ứng viên mà 0 pass -> ĐÓNG họ,
     candidate cùng họ sau đó bị bỏ (chuyển ngân sách sang họ khác)."""
