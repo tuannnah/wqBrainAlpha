@@ -94,49 +94,77 @@ và in **lý do rớt ở từng tầng**:
 
 ---
 
-### Task 2 — Fix Combiner: instrument lý do rớt + loại tự-so-với-chính-mình + tiêu chí vượt trội theo điểm-nộp
+### Task 2 — Fix Combiner theo chẩn đoán đo được (ĐÃ SỬA sau Task 1)
+
+> Task 1 (`logs/diag_combiner_20260712.md`) đo được nguyên nhân THẬT, khác giả thuyết ban đầu:
+> (1) **Nguồn tín hiệu con sai** — `good_signals_for_combine` xếp theo fitness LOCAL
+> (ρ=0.308 → nhiễu): top-50 toàn GP junk (`group_neutralize(volume, sector)`,
+> `multiply(-1, rank(close))`…), các core Brain-proven (close-vwap Sharpe Brain 1.04–1.07,
+> self-corr Brain 0.40–0.46) KHÔNG có mặt trong danh sách component.
+> (2) **Gate pool quá khắt** — combo bị chấm self-corr 0.70 với pool 1321 eval LOCAL bão hòa;
+> trong khi self-corr THẬT của Brain cho vùng này đo được chỉ 0.40–0.46 → proxy local giết oan.
+> (3) **3/5 combo chết depth** — component quá sâu, `build_combined_expression` không lọt trần.
+> (4) Tự-so đúng-nghĩa (thành viên trùng nhất là chính sub-expr) đo được 0/2 ca — vẫn xử lý
+> nhưng là phụ.
 
 **Files:**
-- Modify: `src/pipeline/combine_stage.py`, `src/app/closed_loop_adapters.py:641-756`,
-  `src/storage/repository.py:339-369`, `src/generation/combiner.py` (SubSignal)
-- Test: `tests/unit/test_combine_stage.py`, `tests/unit/test_closed_loop_adapters.py` (case mới)
+- Modify: `src/pipeline/combine_stage.py`, `src/app/closed_loop_adapters.py:641-756`
+  (CombinerIdeaSource), `src/storage/repository.py` (method mới cạnh
+  `good_signals_for_combine`), `src/generation/combiner.py` (SubSignal),
+  `config/thresholds.py`
+- Test: `tests/unit/test_combine_stage.py`, `tests/unit/test_closed_loop_adapters.py`,
+  test repository hiện có (case mới)
 
 **Interfaces:**
-- Consumes: báo cáo Task 1 (`logs/diag_combiner_*.md`) — đọc TRƯỚC, fix theo tầng đã chứng minh.
-- Produces: `combine_stage(...)` trả thêm thống kê rớt: hàm nhận tham số mới
-  `drop_stats: dict[str, int] | None = None` (mutate in-place: khóa
-  `"depth" | "gate" | "not_better" | "greedy_empty"`); `SubSignal` thêm field
-  `eval_id: int | None = None`; `good_signals_for_combine` trả thêm `evaluation_id`
-  (tuple 5 phần tử `(expr, dates, pnl, fitness, eval_id)`); `CombinerIdeaSource.last_stats`
-  có thêm khóa `drop_*`.
+- Consumes: `BrainSimLinkModel` (`src/storage/models.py` — có `expr_string`, `sharpe`,
+  `status`, `self_corr`); `_score_one_full(expr, cfg, data, pool)` (`src/pipeline/runner.py:47`);
+  `local_usable` (đã dùng trong `CombinerIdeaSource._signals`).
+- Produces:
+  - `repo.brain_proven_signals(min_sharpe: float) -> list[str]` — expr_string DISTINCT từ
+    `BrainSimLinkModel` có `sharpe >= min_sharpe`, **KHÔNG lọc status** ('failed' vì
+    LOW_SHARPE 1.04 vẫn là component quý), sort sharpe giảm dần.
+  - `config/thresholds.py`: `COMBINER_MIN_BRAIN_SHARPE = 0.8`,
+    `COMBINER_MAX_COMPONENT_DEPTH = 4`  # MAX_DEPTH(7) − 3 tầng wrapper (rank + 2 tầng add)
+  - `combine_stage(..., drop_stats: dict[str, int] | None = None)` (mutate in-place, khóa
+    `"depth" | "gate" | "not_better" | "greedy_empty"`) và
+    `score_fn_factory: Callable[[list[SubSignal]], Callable[[str], _Scored]] | None = None`
+    (ưu tiên factory khi có; giữ `score_fn` cũ cho test hiện hữu).
+  - `SubSignal` giữ nguyên (không cần eval_id — pool gate mới không dùng eval local).
 
-Ba fix (áp cả 3 — độc lập nhau, mỗi fix 1 vòng TDD; nếu Task 1 chứng minh fix nào vô nghĩa
-với dữ liệu thật thì ghi chú trong commit và vẫn giữ instrument):
+Bốn fix, mỗi fix 1 vòng TDD + 1 commit:
 
-- [ ] **Step 1 (instrument):** Test: gọi `combine_stage` với score_fn giả luôn fail gate →
-  `drop_stats["gate"] == số combo thô`. Implement: đếm tại 3 điểm `continue` + trường hợp
-  `select_decorrelated_combos` trả rỗng. `CombinerIdeaSource.next_batch` truyền dict và log
-  `logger.info("Combiner drop: depth={} gate={} not_better={} ...")` + gộp vào `last_stats`.
-- [ ] **Step 2 (tự-so):** Test: pool chứa đúng PnL của 2 sub-signal (eval_id 1, 2); combo từ
-  chúng phải được chấm với pool ĐÃ LOẠI 2 eval_id đó (giả lập `_score_one_full` bắt được pool
-  nhận vào). Implement: `good_signals_for_combine` trả `eval_id`; `CombinerIdeaSource._score_fn`
-  đổi thành factory `_score_fn_for(combo)` — dựng `pool = {k: v for k, v in full_pool.items()
-  if k not in {s.eval_id for s in combo if s.eval_id}}`; `combine_stage` nhận
-  `score_fn_factory: Callable[[list[SubSignal]], Callable[[str], _Scored]] | None = None`
-  (ưu tiên factory khi có, giữ `score_fn` cũ cho tương thích test hiện hữu).
-- [ ] **Step 3 (vượt trội):** Test: combo Sharpe cao/fitness ngang component tốt nhất vẫn được
-  nhận khi điểm-nộp `min(sharpe/1.25, fitness/1.0)` vượt component (hằng 1.25/1.0 lấy từ
-  `config/thresholds.py` — nếu chưa có hằng điểm-nộp thì thêm `SUBMIT_SHARPE_REF = 1.25`,
-  `SUBMIT_FITNESS_REF = 1.0` vào đó, KHÔNG hardcode tại chỗ). Thay so sánh
-  `fitness <= best_component` bằng so sánh điểm-nộp.
-- [ ] **Step 4:** `./venv/Scripts/python.exe -m pytest tests/unit/test_combine_stage.py tests/unit/test_closed_loop_adapters.py -q` xanh, rồi chạy toàn bộ `-q` xác nhận không vỡ gì.
-- [ ] **Step 5:** Chạy lại `tools/diag_combiner.py` (Task 1) → kỳ vọng >0 combo trên DB thật
-  (nếu vẫn 0, drop_stats phải nói rõ vì sao — ghi vào báo cáo).
-- [ ] **Step 6:** Commit từng fix riêng (3 commit: instrument / tự-so / điểm-nộp).
+- [ ] **Fix 1 (nguồn Brain-proven):** Test repository: seed 2 BrainSimLinkModel (sharpe 1.04
+  status='failed', sharpe 0.3) → `brain_proven_signals(0.8)` trả đúng 1 expr. Test
+  CombinerIdeaSource: `_signals` gọi `repo.brain_proven_signals` , backtest local từng expr
+  local-usable qua `_score_one_full` lấy PnL, **score = sharpe Brain** (không phải fitness
+  local); expr không local-usable bị bỏ (không chấm nổi tương quan). Giữ tín hiệu "run" từ
+  batch như cũ; `good_signals_for_combine` (fitness local) KHÔNG dùng làm nguồn "db" nữa —
+  xóa call khỏi `_signals` (giữ method trong repo nếu nơi khác dùng; nếu không nơi nào dùng,
+  xóa cả method + test của nó).
+- [ ] **Fix 2 (gate pool trung thực + tự-so):** Khi chấm combo, pool = PnL local của CHÍNH
+  các tín hiệu Brain-proven NGOÀI combo (dict tự đánh số), KHÔNG phải `repo.load_pool()` 1321
+  eval local. Lý do (ghi comment): self-corr thật của Brain đo trên pool alpha Brain của
+  account; 1321 eval local là proxy sai (đã giết oan combo 0.70/0.86 trong khi Brain đo
+  0.40–0.46). Implement qua `score_fn_factory` (loại thành phần combo khỏi pool = fix tự-so
+  luôn thể). Test: combo từ 2 signal A,B với pool {A,B,C} → score_fn nhận pool chỉ chứa C.
+- [ ] **Fix 3 (depth-aware):** Loại tín hiệu depth > `COMBINER_MAX_COMPONENT_DEPTH` TRƯỚC
+  greedy (đo bằng `DepthVisitor` như `combiner._depth_of`). Test: signal depth 6 không bao giờ
+  vào combo; signal depth ≤4 vào bình thường. (Diag: 3/5 combo chết depth vì component sâu.)
+- [ ] **Fix 4 (instrument + điểm-nộp):** `drop_stats` đếm tại 3 điểm `continue` +
+  `greedy_empty`; `CombinerIdeaSource.next_batch` log
+  `"Combiner drop: depth={} gate={} not_better={} greedy_empty={}"` + gộp vào `last_stats`.
+  Tiêu chí vượt trội: thay `fitness <= best_component` bằng điểm-nộp
+  `min(sharpe/SUBMIT_SHARPE_REF, fitness/SUBMIT_FITNESS_REF)` — thêm
+  `SUBMIT_SHARPE_REF = 1.25`, `SUBMIT_FITNESS_REF = 1.0` vào `config/thresholds.py`.
+  Test cho cả hai.
+- [ ] **Bước cuối:** chạy `./venv/Scripts/python.exe -m pytest -q` toàn bộ xanh; chạy lại
+  `tools/diag_combiner.py` — cập nhật script này cho khớp đường mới (nguồn Brain-proven +
+  gate pool mới) rồi ghi kết quả mới vào cuối `logs/diag_combiner_<YYYYMMDD>.md`; kỳ vọng
+  >0 combo. Nếu vẫn 0 → drop_stats phải chỉ rõ tầng nào, ghi vào báo cáo.
 
-**DoD:** `diag_combiner` ra ≥1 combo trên DB thật HOẶC drop_stats chứng minh mọi tín hiệu DB
-tương quan ≥0.3 đôi một (khi đó ghi rõ: cần tín hiệu orthogonal mới từ Task 6/7 trước). Không
-còn 0-combo im lặng.
+**DoD:** Combiner dựng combo từ component Brain-proven (Sharpe Brain ≥0.8, depth ≤4), gate
+không còn dùng pool 1321 eval local; `diag_combiner` ra ≥1 combo trên DB thật HOẶC drop_stats
++ báo cáo chỉ rõ vì sao (ví dụ <2 component Brain-proven local-usable). Không còn 0-combo im lặng.
 
 ---
 
