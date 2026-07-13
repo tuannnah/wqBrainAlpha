@@ -455,11 +455,16 @@
   phiên — canh log "thứ tự children LỆCH" + quyền MULTI_SIMULATION (multi-sim lần đầu chạy
   thật); (3) trước khi nộp 7 alpha sẵn sàng: LUÔN `submit` dry-run (re-check self-corr) rồi
   mới `--no-dry-run`.
-- **[2026-07-14] ĐÃ NỘP ALPHA THẬT ĐẦU TIÊN:** `KP9nwpEg` (`multiply(-2, ts_mean(subtract(close,
-  vwap), 10))`, Sharpe 1.41, self-corr lúc nộp 0.4265) — `status=submitted`, bản ghi trong bảng
-  `submissions`. User chọn nộp 1/4 alpha dry-run đề xuất (3 cái còn lại giữ: j20lK7K9 1.15 /
-  N1rMJodE 1.22 / 88QANnOz 1.14 — có thể nộp sau, chú ý self-corr với KP9nwpEg vừa nộp vì cùng
-  họ close-vwap). Các bước live đã xong cùng phiên: merge `feature/alpha-submittable` +
+- **[2026-07-14] LẦN NỘP THẬT ĐẦU TIÊN — BỊ TỪ CHỐI + LỘ 2 SỰ THẬT QUAN TRỌNG:** nộp
+  `KP9nwpEg` (Sharpe 1.41, self-corr 0.4265) theo lựa chọn user → POST /submit trả 200 nhưng
+  poll `GET /alphas/{id}/submit` sau đó trả **403: LOW_SHARPE 1.41<1.58 FAIL, LOW_FITNESS
+  0.99<1.0 FAIL** → stage vẫn IS/UNSUBMITTED. (1) **Ngưỡng NỘP khắt hơn ngưỡng SIM**:
+  `failed_checks=[]` lúc sim KHÔNG đủ — lúc nộp Brain enforce Sharpe≥1.58 + Fitness≥1.0 →
+  khối "SẴN SÀNG NỘP" (7 alpha) đang lạc quan sai, cần thêm 2 ngưỡng này. (2) **BUG
+  SubmissionManager.submit**: coi POST 200/201 là submitted, KHÔNG poll kết quả bất đồng bộ →
+  ghi DB sai (đã sửa tay bản ghi thành rejected). 3 alpha dry-run còn lại (j20lK7K9 1.15 /
+  N1rMJodE 1.22 / 88QANnOz 1.14) đều < 1.58 → không nộp nữa cho tới khi có alpha vượt ngưỡng
+  thật. Các bước live đã xong cùng phiên: merge `feature/alpha-submittable` +
   `fix-short-interest-seeds` vào main (fast-forward, test xanh sau merge); verify LIVE 136
   dataset (`logs/verified_fields_20260714.json`) — days_to_cover/shares_short KHÔNG có, seed
   short-interest thay bằng shortinterest3 (loan_utilization_ratio/mean_loan_rate) +
