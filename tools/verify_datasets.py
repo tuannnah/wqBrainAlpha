@@ -43,8 +43,10 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import httpx  # noqa: E402
+
 from config.settings import settings  # noqa: E402
-from src.data.client import WQBrainClient  # noqa: E402
+from src.data.client import AuthError, WQBrainClient  # noqa: E402
 
 REGION = "USA"
 UNIVERSE = "TOP3000"
@@ -129,6 +131,18 @@ def _print_login_guidance() -> None:
     print("Không xác thực được với WorldQuant BRAIN (session hết hạn hoặc chưa đăng nhập).")
     print("Hãy đăng nhập trước: chạy `run.bat` -> chọn mục 1 (Đăng nhập), rồi chạy lại:")
     print("    ./venv/Scripts/python.exe tools/verify_datasets.py")
+
+
+def _tu_choi_xac_thuc_tuong_tac(_prompt: str = "") -> str:
+    """Thay thế `confirmation_input` (mặc định `input`) của WQBrainClient trong script này.
+
+    Khi session hết hạn GIỮA CHỪNG, `WQBrainClient._request()` gặp 401 sẽ tự reset cờ rồi gọi
+    `authenticate()` lại; nếu account cần quét QR, nhánh đó chờ `input()` — script chạy nền/
+    stdin đóng sẽ TREO (hoặc EOFError tuỳ môi trường). Ném EOFError chủ động để main() bắt và
+    thoát lịch sự với hướng dẫn đăng nhập, thay vì chờ tương tác không bao giờ đến."""
+    raise EOFError(
+        "Session hết hạn giữa chừng — script này không hỗ trợ xác thực QR tương tác."
+    )
 
 
 # --------------------------------------------------------------- phần I/O (gọi API thật)
@@ -221,17 +235,47 @@ def main(client=None) -> int:
     WQBrainClient thật (nạp session từ `.wq_session` nếu có, KHÔNG tự đăng nhập tương tác)."""
     client = client if client is not None else _build_client()
 
+    # Chống TREO: chặn nhánh QR tương tác của client TRƯỚC mọi lời gọi API — nếu 401 giữa
+    # chừng khiến client tự authenticate() lại và cần QR, EOFError nổi lên và được bắt ở dưới
+    # (thoát lịch sự) thay vì chờ input() vô hạn. Xem docstring _tu_choi_xac_thuc_tuong_tac.
+    if hasattr(client, "confirmation_input"):
+        client.confirmation_input = _tu_choi_xac_thuc_tuong_tac
+
     if not client.is_session_valid():
         _print_login_guidance()
         return 1
-    # Đã xác nhận session hợp lệ ở trên -> đánh dấu authenticated để client thật không tự gọi
-    # lại authenticate() (có thể bật luồng QR tương tác) nếu tình cờ dính 401 giữa chừng.
+    # Cờ này CHỈ giúp client thật bỏ qua 1 call POST /authentication dư ngay lúc khởi động
+    # (session vừa xác nhận hợp lệ ở trên). Nó KHÔNG phòng được 401 giữa chừng — khi đó
+    # WQBrainClient._request() tự reset cờ rồi authenticate() lại (nhánh QR đã bị chặn bởi
+    # confirmation_input phía trên, nên tệ nhất là AuthError/EOFError chứ không treo).
     if hasattr(client, "_authenticated"):
         client._authenticated = True
 
     try:
         return _run(client)
-    except Exception as exc:  # noqa: BLE001 — mọi lỗi mạng/API giữa chừng: in gọn, không traceback
+    except AuthError as exc:
+        # Client thử re-auth bằng email/mật khẩu (.env) giữa chừng và thất bại.
+        print(f"\nLỗi xác thực với WQ Brain: {exc}")
+        _print_login_guidance()
+        return 1
+    except (EOFError, KeyboardInterrupt):
+        # EOFError: nhánh QR bị chặn (xem _tu_choi_xac_thuc_tuong_tac) hoặc stdin đã đóng.
+        print("\nSession hết hạn giữa chừng và script không thể xác thực QR tương tác.")
+        _print_login_guidance()
+        return 1
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status in (401, 403):
+            print(f"\nWQ Brain trả HTTP {status} — session hết hạn hoặc tài khoản thiếu quyền.")
+            _print_login_guidance()
+        else:
+            # 5xx/4xx khác không phải lỗi session -> đừng bắt user đăng nhập lại vô ích.
+            print(f"\nLỗi API WQ Brain (HTTP {status}) — hãy thử lại sau: {exc}")
+        return 1
+    except httpx.RequestError as exc:
+        print(f"\nLỗi mạng khi gọi WQ Brain — kiểm tra kết nối rồi thử lại sau: {exc}")
+        return 1
+    except Exception as exc:  # noqa: BLE001 — lỗi bất ngờ khác: in gọn, không traceback
         print(f"\nLỗi khi gọi API WQ Brain: {exc}")
         _print_login_guidance()
         return 1
