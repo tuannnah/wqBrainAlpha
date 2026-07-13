@@ -455,9 +455,20 @@
   phiên — canh log "thứ tự children LỆCH" + quyền MULTI_SIMULATION (multi-sim lần đầu chạy
   thật); (3) trước khi nộp 7 alpha sẵn sàng: LUÔN `submit` dry-run (re-check self-corr) rồi
   mới `--no-dry-run`.
-- **Next step:** User quyết định merge nhánh `feature/alpha-submittable` vào `main`; sau đó
-  nghiệm thu live theo 3 mục trên.
-- **Tests:** 1434 passed, 1 fail psycopg pre-existing.
+- **[2026-07-14] ĐÃ NỘP ALPHA THẬT ĐẦU TIÊN:** `KP9nwpEg` (`multiply(-2, ts_mean(subtract(close,
+  vwap), 10))`, Sharpe 1.41, self-corr lúc nộp 0.4265) — `status=submitted`, bản ghi trong bảng
+  `submissions`. User chọn nộp 1/4 alpha dry-run đề xuất (3 cái còn lại giữ: j20lK7K9 1.15 /
+  N1rMJodE 1.22 / 88QANnOz 1.14 — có thể nộp sau, chú ý self-corr với KP9nwpEg vừa nộp vì cùng
+  họ close-vwap). Các bước live đã xong cùng phiên: merge `feature/alpha-submittable` +
+  `fix-short-interest-seeds` vào main (fast-forward, test xanh sau merge); verify LIVE 136
+  dataset (`logs/verified_fields_20260714.json`) — days_to_cover/shares_short KHÔNG có, seed
+  short-interest thay bằng shortinterest3 (loan_utilization_ratio/mean_loan_rate) +
+  short_interest_pred (short_interest_surprise_ratio); `fetch-fields --reload` cache 85.612
+  fields (3 field seed mới đã vào cache, không blacklist).
+- **Next step:** Chạy menu-5 một phiên nghiệm thu 5 tiêu chí plan (combiner Brain-proven /
+  GP cap / multi-sim lần đầu — canh log "thứ tự children LỆCH" + quyền MULTI_SIMULATION /
+  sweep alt-data / seed short-interest mới). `main` chưa push (đi trước origin 32 commit).
+- **Tests:** 1445 passed, 1 fail psycopg pre-existing.
 
 ### [2026-07-10] Session 08 (tiếp) — Kiểm định độc lập + fix 3 gap
 - **Phase:** Sub-agent (general-purpose) đối chiếu code vs IMPROVEMENT_SPEC từng acceptance ->
