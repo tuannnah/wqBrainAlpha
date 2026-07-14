@@ -1,0 +1,236 @@
+{
+ "ngay": "2026-07-14",
+ "n_cores": 40,
+ "n_fields": 57,
+ "thieu": [],
+ "co": {
+  "aggregate_executed_trade_share_count": {
+   "type": "MATRIX",
+   "dataset": "us_short_sale"
+  },
+  "aggregate_sentiment_score_2": {
+   "type": "VECTOR",
+   "dataset": "filing_sentiment"
+  },
+  "answer_chunk_count": {
+   "type": "MATRIX",
+   "dataset": "earningscall_sentiment"
+  },
+  "auction_order_imbalance_pct_adv": {
+   "type": "VECTOR",
+   "dataset": "order_book_imbalance"
+  },
+  "broker_dealer_vol_imbalance": {
+   "type": "MATRIX",
+   "dataset": "order_flow_imb"
+  },
+  "count_negative_cashflow_summary": {
+   "type": "MATRIX",
+   "dataset": "earningscall_sentiment"
+  },
+  "count_negative_leverage_question": {
+   "type": "MATRIX",
+   "dataset": "earningscall_sentiment"
+  },
+  "count_negative_profitability_answer": {
+   "type": "MATRIX",
+   "dataset": "earningscall_sentiment"
+  },
+  "count_negative_valuation_summary": {
+   "type": "MATRIX",
+   "dataset": "earningscall_sentiment"
+  },
+  "count_positive_cashflow_summary": {
+   "type": "MATRIX",
+   "dataset": "earningscall_sentiment"
+  },
+  "count_positive_profitability_answer": {
+   "type": "MATRIX",
+   "dataset": "earningscall_sentiment"
+  },
+  "count_positive_profitability_presentation": {
+   "type": "MATRIX",
+   "dataset": "earningscall_sentiment"
+  },
+  "customer_vol_imbalance": {
+   "type": "MATRIX",
+   "dataset": "order_flow_imb"
+  },
+  "directional_indicator_score": {
+   "type": "MATRIX",
+   "dataset": "insider_trx_matrix"
+  },
+  "downward_lognorm_expected_change_7": {
+   "type": "MATRIX",
+   "dataset": "expected_move"
+  },
+  "downward_lognorm_move_percent_3": {
+   "type": "MATRIX",
+   "dataset": "expected_move"
+  },
+  "executed_short_trade_share_count": {
+   "type": "MATRIX",
+   "dataset": "us_short_sale"
+  },
+  "firm_vol_imbalance": {
+   "type": "MATRIX",
+   "dataset": "order_flow_imb"
+  },
+  "herfindahl_index_holdings": {
+   "type": "VECTOR",
+   "dataset": "fund_holdings_panel"
+  },
+  "holder_account_total": {
+   "type": "VECTOR",
+   "dataset": "fund_holdings_panel"
+  },
+  "holding_value_distribution_score": {
+   "type": "VECTOR",
+   "dataset": "fund_holdings_panel"
+  },
+  "insd3_10q_tone_score": {
+   "type": "VECTOR",
+   "dataset": "insiders3"
+  },
+  "insd3_8k_negative_score": {
+   "type": "VECTOR",
+   "dataset": "insiders3"
+  },
+  "insd3_8k_positive_score": {
+   "type": "VECTOR",
+   "dataset": "insiders3"
+  },
+  "inst18_fundownershipv2_pct_held": {
+   "type": "MATRIX",
+   "dataset": "institutions18"
+  },
+  "inst18_instownership_cur_holding": {
+   "type": "MATRIX",
+   "dataset": "institutions18"
+  },
+  "inst18_instownership_num_held": {
+   "type": "MATRIX",
+   "dataset": "institutions18"
+  },
+  "inst18_instownership_pre_holding": {
+   "type": "MATRIX",
+   "dataset": "institutions18"
+  },
+  "negative_sentiment_term_count_2": {
+   "type": "VECTOR",
+   "dataset": "filing_sentiment"
+  },
+  "positive_sentiment_term_count_2": {
+   "type": "VECTOR",
+   "dataset": "filing_sentiment"
+  },
+  "prior_short_interest_surprise_ratio": {
+   "type": "MATRIX",
+   "dataset": "short_interest_pred"
+  },
+  "pro_customer_vol_imbalance_otm": {
+   "type": "MATRIX",
+   "dataset": "order_flow_imb"
+  },
+  "question_chunk_count": {
+   "type": "MATRIX",
+   "dataset": "earningscall_sentiment"
+  },
+  "relative_interest_score_4": {
+   "type": "VECTOR",
+   "dataset": "search_interest"
+  },
+  "reported_short_sale_share_quantity": {
+   "type": "MATRIX",
+   "dataset": "us_short_sale"
+  },
+  "reported_total_trade_share_quantity": {
+   "type": "MATRIX",
+   "dataset": "us_short_sale"
+  },
+  "search_interest_28d_corporate_name": {
+   "type": "MATRIX",
+   "dataset": "stock_search_trends"
+  },
+  "search_interest_7d_corporate_name": {
+   "type": "MATRIX",
+   "dataset": "stock_search_trends"
+  },
+  "search_interest_84d_corporate_name": {
+   "type": "MATRIX",
+   "dataset": "stock_search_trends"
+  },
+  "search_interest_today_corporate_name": {
+   "type": "MATRIX",
+   "dataset": "stock_search_trends"
+  },
+  "short_interest_predicted_change": {
+   "type": "MATRIX",
+   "dataset": "short_interest_pred"
+  },
+  "short_interest_surprise_amount": {
+   "type": "MATRIX",
+   "dataset": "short_interest_pred"
+  },
+  "short_interest_surprise_ratio": {
+   "type": "MATRIX",
+   "dataset": "short_interest_pred"
+  },
+  "straddle_move_percent_7": {
+   "type": "MATRIX",
+   "dataset": "expected_move"
+  },
+  "summary_chunk_count": {
+   "type": "MATRIX",
+   "dataset": "earningscall_sentiment"
+  },
+  "top_weighted_account_number": {
+   "type": "VECTOR",
+   "dataset": "fund_holdings_panel"
+  },
+  "total_buy_transaction_count": {
+   "type": "MATRIX",
+   "dataset": "insider_trx_matrix"
+  },
+  "total_sell_transaction_count": {
+   "type": "MATRIX",
+   "dataset": "insider_trx_matrix"
+  },
+  "total_top_buy_transaction_count": {
+   "type": "MATRIX",
+   "dataset": "insider_trx_matrix"
+  },
+  "total_top_sell_transaction_count": {
+   "type": "MATRIX",
+   "dataset": "insider_trx_matrix"
+  },
+  "total_word_quantity_2": {
+   "type": "VECTOR",
+   "dataset": "filing_sentiment"
+  },
+  "upward_lognorm_expected_change_7": {
+   "type": "MATRIX",
+   "dataset": "expected_move"
+  },
+  "upward_lognorm_move_percent_3": {
+   "type": "MATRIX",
+   "dataset": "expected_move"
+  },
+  "usd_quaternary_signal_value": {
+   "type": "MATRIX",
+   "dataset": "insider_trx_matrix"
+  },
+  "usd_secondary_signal_value": {
+   "type": "MATRIX",
+   "dataset": "insider_trx_matrix"
+  },
+  "usd_top_quaternary_signal_value": {
+   "type": "MATRIX",
+   "dataset": "insider_trx_matrix"
+  },
+  "usd_top_secondary_signal_value": {
+   "type": "MATRIX",
+   "dataset": "insider_trx_matrix"
+  }
+ }
+}
