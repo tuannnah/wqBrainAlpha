@@ -494,3 +494,23 @@
 - **Next step:** USER chạy menu-5 nghiệm thu acceptance định lượng (cần Brain session).
 - **Tests:** 1221 passed. Thêm test_closed_loop::test_gen_ms, test_closed_loop_adapters::
   wire_on_family_closed, test_generator::hypothesis_first. Commit `546e9d9`.
+
+### [2026-07-14] Session 10 — Cập nhật Power Pool Theme mới (12–26/07) + tìm ra 2 đường đọc theme qua API
+- **Phase:** Vận hành. Yêu cầu: "check lại power pool theme". Lịch trong
+  `src/scoring/power_pool_theme.py` hết hạn 12/07 → từ 13/07 menu/Auto SIM rơi về Regular.
+- **Done (`cdbab7d`):** Thêm theme "USA/D1 Power Pool July`26 2" (12 Jul–26 Jul'26) vào
+  CALENDAR, nguyên văn announcement 2026-07-12: USA/D1/TOP1000, loại PV1 (trừ support
+  fields), **KHÔNG ràng buộc neutralization** (khác 2 tuần trước), thay bằng điều kiện
+  "High Turnover returns ratio test" (chưa mô hình hoá → `unparsed_constraints`). TDD:
+  3 test mới (tuần 14/07, MARKET neut qua, chốt first-match ngày chồng lấn 12/07).
+- **Phát hiện quan trọng (đã ghi docstring module):** bài support article vẫn không fetch
+  tự động được (WebFetch 403, Zendesk API 401, read_forum_post timeout), NHƯNG có 2 đường
+  API Brain đọc được bằng session consultant `.wq_session`:
+  1) `GET /users/self/messages` — announcement "Launching a new ... theme" chứa nguyên văn
+     duration+filter (nguồn của entry mới); 2) `GET /alphas/{id}/check` — record
+  `MATCHES_THEMES` liệt kê id/tên/multiplier theme đang active. Check 12/07 còn thấy
+  "GLB High Turnover Theme" multiplier **2.0** đang active (GLB — ngoài scope USA hiện tại,
+  ghi nhận để cân nhắc sau).
+- **Next step:** Cân nhắc tự động hoá đọc theme từ /users/self/messages thay lịch thủ công;
+  xem điều kiện High Turnover returns ratio test có cần gate local không.
+- **Tests:** 1457 passed, 1 fail psycopg pre-existing.
