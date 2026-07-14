@@ -1,7 +1,14 @@
 # MiniBrain — Progress log
 
 ## Current state
-- **Phase [2026-07-12, Session 09]:** Đã chạy thật 2 phiên menu-5 (07-11: 22 ý tưởng/14 sim/0
+- **Phase [2026-07-14, Session 11]:** Menu-5 nay chạy TỚI HẾT QUOTA/Ctrl+C (`no_more_ideas` →
+  reseed GP, không kết thúc phiên nữa — `_run_reseed_until_quota`, commit `6453271`). Kho seed
+  **FRONTIER** đã merge main (`ff211cc..078b1bf`): 40 core / 57 field verify live / 12 dataset
+  ít người dùng, đi đường sim-thẳng AltDataIdeaSource (cờ `include_frontier=True` mặc định bật),
+  họ `frontier_<category>` riêng trong family budget. **Next: USER chạy menu 5 nghiệm thu live**
+  — core frontier phục vụ batch đầu, sim từ ≥5 dataset mới, so Sharpe>0.5 frontier vs GP
+  (baseline 14/07: GP max 0.54). Lưu ý xem alpha trên web: ngày tạo theo giờ US Eastern (UTC−4).
+- **Phase (trước) [2026-07-12, Session 09]:** Đã chạy thật 2 phiên menu-5 (07-11: 22 ý tưởng/14 sim/0
   pass; 07-12: 13 ý tưởng/9 sim/0 pass) SAU khi áp toàn bộ fix review 07-11 → chẩn đoán mới +
   **kế hoạch task cho subagent**: `docs/superpowers/plans/2026-07-12-alpha-submittable-tasks.md`
   (8 task: T1/T2 fix Combiner 0-combo — đòn √N; T3 cap sim GP; T4 chặn degenerate; T5 mini-sweep
@@ -514,3 +521,11 @@
 - **Next step:** Cân nhắc tự động hoá đọc theme từ /users/self/messages thay lịch thủ công;
   xem điều kiện High Turnover returns ratio test có cần gate local không.
 - **Tests:** 1457 passed, 1 fail psycopg pre-existing.
+
+### [2026-07-14] Session 11 — Fix vòng lặp menu-5 + kho seed FRONTIER 40 core (12 dataset mới) merge main
+- **Phase:** Vận hành menu-5 + mở rộng nguồn ý tưởng (sau chẩn đoán "nguồn seed cạn").
+- **Done:** (1) Chẩn đoán "không thấy sim trên WQ": sim CÓ chạy (4 alpha `RR8lYwLe`/`GrLK8meO`/`0mENKL0q`/`gJMgRGbM`), nền tảng hiển thị ngày theo giờ US Eastern (UTC−4) nên run sáng 14/07 hiện là 13/07 — nhìn tab Alphas, không phải màn Simulate. (2) Fix `no_more_ideas` kết thúc phiên: `_run_reseed_until_quota` (main.py) — batch rỗng → reseed GP chạy tiếp, chỉ dừng khi hết quota/Ctrl+C (commit `6453271`, TDD 3 test). (3) Kho seed FRONTIER: quét 299 dataset khả dụng, chọn 12 ít người dùng (insider_trx_matrix, insiders3, earningscall_sentiment, filing_sentiment, stock_search_trends, search_interest, order_flow_imb, order_book_imbalance, expected_move, institutions18, fund_holdings_panel, short_interest_pred, us_short_sale), 40 core hypothesis-4-phần trên 57 field verify LIVE — `src/generation/frontier_seeds.py` + mapping neutralization (group-neut + Power Pool) + wire `_gather_direct_cores`/cờ `include_frontier=True` + `tools/verify_frontier_fields.py` (57/57 field có trong catalog). SDD 4 task + final review (fable) + 1 fix Important: `classify_family` nhận diện category frontier → họ `frontier_<cat>` (tránh family-budget đóng oan 18 core chung họ "fundamental"). Merge fast-forward main `ff211cc..078b1bf`, xoá nhánh.
+- **Decisions:** (a) vec_avg/vec_sum đăng ký placeholder (`gp_usable=False`) trong frontier_seeds — registry local chưa có, parse strict cần; xem lại khi có nhà riêng. (b) short_period giữ họ "short_interest" cũ (test contract, 3 core cũ đã avoid-listed). (c) JSON bằng chứng đổi tên `verified_frontier_fields_*.json` tránh đè output verify_datasets.
+- **Blockers / open risks:** ρ local↔Brain vẫn ~0.31; pre-existing: field chứa "rating" substring (vd `operating_income`) misclassify họ "analyst"; `frontier_call_filing` 9 core > max_per_family 8 (orphan tối đa 1 sim, chấp nhận).
+- **Next step:** USER chạy menu 5 nghiệm thu live: core frontier phục vụ batch đầu (không bị field-guard chặn hàng loạt), sim thật từ ≥5 dataset mới, so tỷ lệ Sharpe>0.5 frontier vs GP (baseline 14/07: GP max 0.54); kiểm catalog operator có vec_avg/vec_sum.
+- **Tests:** 1478 passed (+18 so baseline 1460; 1 fail psycopg có sẵn được deselect).
