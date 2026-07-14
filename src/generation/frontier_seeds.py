@@ -1,9 +1,11 @@
-"""Kho seed FRONTIER — core alt-data từ 12 dataset ít người đào (users < ~350).
+"""Kho seed FRONTIER — core alt-data từ 13 dataset ít người đào (users < ~350).
 
 Bối cảnh (spec 2026-07-14-frontier-seeds-design.md): 19 core tuyển chọn cũ đã bão hoà,
 GP chỉ quanh quẩn price/volume yfinance → nguồn ý tưởng cạn. Account có quyền 299 dataset;
-module này khai thác 12 dataset gần như chưa ai đào (self-corr kỳ vọng thấp — đúng chỗ dễ
-qua gate nộp) với field ĐÃ VERIFY LIVE qua API /data-fields ngày 2026-07-14.
+module này khai thác 13 dataset gần như chưa ai đào (self-corr kỳ vọng thấp — đúng chỗ dễ
+qua gate nộp) với field ĐÃ VERIFY LIVE qua API /data-fields ngày 2026-07-14. (stock_search_trends
+và search_interest là HAI dataset id riêng biệt — cùng nhóm attention nên gộp chung 1 comment
+section bên dưới, không phải 12 dataset như bản nháp đầu.)
 
 Nguyên tắc (skill WQ Brain):
 - Hypothesis 4 phần ghi ở comment từng nhóm (quan sát → cơ chế → hiệu ứng → công thức).
@@ -192,7 +194,7 @@ FRONTIER_CORES: tuple[str, ...] = (
 )
 
 # Field → category (chọn neutralization + test bất biến). MỌI field đã verify live
-# 2026-07-14 qua /data-fields USA/TOP3000/D1 (xem logs/verified_fields_20260714.json).
+# 2026-07-14 qua /data-fields USA/TOP3000/D1 (xem logs/verified_frontier_fields_20260714.json).
 _CAT = {
     "insider": (
         "total_buy_transaction_count", "total_sell_transaction_count",

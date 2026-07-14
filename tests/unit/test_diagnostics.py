@@ -84,6 +84,59 @@ def test_family_unknown():
     assert classify_family("rank(some_unknown_field)") == "other"
 
 
+# --- F1 (review final feature/frontier-seeds): classify_family phải biết category frontier
+# (FRONTIER_CATEGORY_BY_FIELD trong src/generation/frontier_seeds.py) — trước đây 18/40 core
+# frontier có ts_backfill rơi chung vào "fundamental" (rule substring "ts_backfill"), khiến
+# family-budget (max_per_family=8, đóng họ khi 0 pass) đóng oan sau 8 core đầu, bỏ phí quota
+# presim đã đốt cho các core frontier còn lại đội lốt "fundamental".
+
+
+def test_family_frontier_insider_co_ts_backfill_khong_roi_vao_fundamental():
+    assert classify_family(
+        "ts_backfill(directional_indicator_score, 66)"
+    ) == "frontier_insider"
+
+
+def test_family_frontier_call_filing():
+    assert classify_family(
+        "divide(subtract(ts_backfill(count_positive_profitability_answer, 66), "
+        "ts_backfill(count_negative_profitability_answer, 66)), "
+        "add(1, ts_backfill(answer_chunk_count, 66)))"
+    ) == "frontier_call_filing"
+
+
+def test_family_frontier_fund_panel_khong_ts_backfill():
+    """Category fund_panel là panel daily (cov~1.0) — KHÔNG dùng ts_backfill nên trước đây
+    rơi vào "other"; vẫn phải nhận family frontier riêng để không lẫn với core "other" khác."""
+    assert classify_family(
+        "ts_delta(vec_avg(holder_account_total), 22)"
+    ) == "frontier_fund_panel"
+
+
+def test_family_frontier_khong_doi_ket_qua_fundamental_cu():
+    """Expr fundamental CŨ (không field frontier) không được đổi family. Dùng revenue/assets
+    thay vì operating_income: "operating_income" chứa substring "rating" -> khớp oan rule
+    "analyst" (lỗi có sẵn từ trước, KHÔNG liên quan F1 — ngoài phạm vi finding này)."""
+    assert classify_family(
+        "divide(ts_backfill(revenue, 66), ts_backfill(assets, 66))"
+    ) == "fundamental"
+
+
+def test_family_frontier_khong_doi_ket_qua_pv_momentum_cu():
+    """Expr price/volume cũ (không field frontier) không được đổi family."""
+    assert classify_family("multiply(-1, ts_mean(subtract(close, vwap), 10))") == "pv_reversal"
+    assert classify_family("ts_delta(close, 60)") == "momentum"
+
+
+def test_family_frontier_short_period_van_giu_short_interest_cu():
+    """Category short_period tái dùng đúng field short_interest_pred mà rule "short_interest"
+    (dòng trên) đã test từ trước — KHÔNG đổi tên thành "frontier_short_period", giữ nguyên
+    family cũ vì cùng một nghĩa nghiệp vụ (short-interest surprise/predicted change)."""
+    assert classify_family(
+        "multiply(-1, ts_backfill(short_interest_predicted_change, 22))"
+    ) == "short_interest"
+
+
 # --- Task 3 (spec C2): phân loại lý do pre-sim reject (PreFilter.check) -> mã ổn định ---
 
 

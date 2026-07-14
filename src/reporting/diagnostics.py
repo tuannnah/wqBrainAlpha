@@ -12,6 +12,11 @@
 
 from __future__ import annotations
 
+# Field frontier (spec 2026-07-14-frontier-seeds-design.md) — import module-level: an toàn vì
+# frontier_seeds KHÔNG import ngược diagnostics (không vòng import). Dùng để classify_family
+# nhận diện category frontier trước khi rơi vào các rule catch-all bên dưới (xem finding F1).
+from src.generation.frontier_seeds import FRONTIER_CATEGORY_BY_FIELD
+
 # Thứ tự = độ nghiêm trọng: reason đầu khớp được chọn (sharpe trước fitness trước turnover).
 _FAIL_CHECK_RULES: tuple[tuple[str, str], ...] = (
     ("sharpe", "LOW_SHARPE"),
@@ -80,6 +85,20 @@ def classify_family(expr: str) -> str:
     # trong luật để alpha lịch sử (nếu có) vẫn phân loại đúng họ.
     if has("days_to_cover", "shares_short", "short_interest", "loan_utilization", "loan_rate"):
         return "short_interest"
+    # F1 (review final feature/frontier-seeds): 40 core FRONTIER (frontier_seeds.py, field verify
+    # live 2026-07-14) — 18/40 core có ts_backfill sẽ rơi chung vào "fundamental" ở rule substring
+    # "ts_backfill" bên dưới nếu không chặn TRƯỚC ở đây; family-budget (max_per_family=8, đóng họ
+    # khi 0 pass — closed_loop.py:426-431) sẽ đóng oan sau 8 core đầu, bỏ phí quota presim đã đốt
+    # cho các core frontier còn lại đội lốt "fundamental". Tra field trực tiếp trong
+    # FRONTIER_CATEGORY_BY_FIELD (khớp SUBSTRING tên field trong expr, cùng phong cách `has()`
+    # phía trên — hàm này vốn không parse AST) — mỗi category trả họ riêng, tiền tố "frontier_"
+    # để không va tên họ cũ (vd "short_interest"). ĐẶT SAU rule short_interest ngay trên: category
+    # "short_period" tái dùng field short_interest_pred TRÙNG field rule short_interest đã test từ
+    # trước — giữ nguyên family cũ cho các field đó (cùng ý nghĩa nghiệp vụ), KHÔNG đổi tên thành
+    # "frontier_short_period".
+    for field, cat in FRONTIER_CATEGORY_BY_FIELD.items():
+        if field in e:
+            return f"frontier_{cat}"
     if has("operating_income") and has("sales_growth"):
         # Conditioning quality x growth (2 field fundamental cùng lúc) -> khác hẳn 1 core
         # single-ratio của FUNDAMENTAL_CORES (chỉ 1 trong 2 field này, không cả hai).
