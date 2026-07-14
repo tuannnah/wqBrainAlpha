@@ -629,6 +629,23 @@ def _resolve_base_seed(base_seed: int | None) -> int:
     return random.randrange(1, 2**31 - 1)
 
 
+def _run_reseed_until_quota(build_loop, first_seed: int, *, reseed_fn=_resolve_base_seed):
+    """Chạy vòng kín LẶP LẠI cho chế độ không trần max_ideas (menu 5 / --max-ideas 0):
+    `no_more_ideas` chỉ là cạn ý tưởng TẠM THỜI (batch GP rỗng sau dedup/family-closed) —
+    reseed GP rồi dựng lại vòng và chạy tiếp thay vì kết thúc phiên. Chỉ trả về khi
+    stop_reason khác (vd "quota"); QuotaExhausted/KeyboardInterrupt lan ra caller xử lý."""
+    seed = first_seed
+    while True:
+        report = build_loop(seed).run()
+        if report.stop_reason != "no_more_ideas":
+            return report
+        seed = reseed_fn(None)
+        console.print(
+            f"[yellow]Cạn ý tưởng tạm thời — reseed GP (seed={seed}) và chạy tiếp "
+            "(hết quota hoặc Ctrl+C mới dừng)…[/yellow]"
+        )
+
+
 def _local_neutralization(neutralization: str, available_groups) -> str:
     """Hạ cấp neutralization cho LOCAL gate về nhóm mà panel cục bộ CÓ. Brain có đủ
     country/sector/industry/subindustry, nhưng panel local (vd market_yf) thường chỉ có
@@ -782,21 +799,31 @@ def _run_closed_loop_session(
     _summary = SessionSummary()
     console.print(f"[cyan]📄 Log công thức alpha phiên này: {_log_path}[/cyan]")
 
-    cl = build_closed_loop(
-        data=data, repo=repo, config=cfg, registry=default_registry(), loop=loop,
-        region=region, universe=universe, pop_size=pop_size, n_generations=n_generations,
-        top_k=top_k, max_corr=max_corr, max_ideas=max_ideas, base_seed=seed,
-        refiner=refiner, include_alt_data=include_alt_data, alpha_logger=_alpha_logger,
-        include_combiner=include_combiner, session_summary=_summary,
-        known_fields=_known_fields, max_gp_sims=max_gp_sims,
-    )
+    def _build_cl(_seed: int):
+        # Dựng lại được NHIỀU LẦN với seed khác nhau: chế độ không trần max_ideas reseed
+        # sau mỗi lần no_more_ideas (cạn ý tưởng tạm thời) thay vì kết thúc phiên.
+        # _alpha_logger/_summary dùng chung qua các vòng -> log/tóm tắt gộp cả phiên.
+        return build_closed_loop(
+            data=data, repo=repo, config=cfg, registry=default_registry(), loop=loop,
+            region=region, universe=universe, pop_size=pop_size, n_generations=n_generations,
+            top_k=top_k, max_corr=max_corr, max_ideas=max_ideas, base_seed=_seed,
+            refiner=refiner, include_alt_data=include_alt_data, alpha_logger=_alpha_logger,
+            include_combiner=include_combiner, session_summary=_summary,
+            known_fields=_known_fields, max_gp_sims=max_gp_sims,
+        )
+
     console.print(f"[cyan]Bắt đầu vòng kín (base_seed={seed}, Ctrl+C để dừng)…[/cyan]")
     # `finally` bao trùm mọi đường ra (chạy xong bình thường/QuotaExhausted/Ctrl+C) để
     # RunAlphaLogger LUÔN được đóng tường minh, tránh rò rỉ file handle khi vòng kín dừng
     # giữa chừng.
     try:
         try:
-            report = cl.run()
+            if max_ideas is None:
+                # Menu 5 / --max-ideas 0: chạy tới hết quota Brain hoặc Ctrl+C — cạn ý
+                # tưởng tạm thời thì reseed GP và tiếp tục, không kết thúc phiên.
+                report = _run_reseed_until_quota(_build_cl, seed)
+            else:
+                report = _build_cl(seed).run()
         except QuotaExhausted:
             console.print(
                 "[yellow]Hết quota Brain — vòng kín dừng tự động. Kết quả đã lưu DB.[/yellow]"
