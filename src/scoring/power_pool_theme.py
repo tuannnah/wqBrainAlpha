@@ -1,9 +1,14 @@
 """Lịch Power Pool Theme — dữ liệu THỦ CÔNG lấy từ bài 'Current month Power Pool Themes'
 (https://support.worldquantbrain.com/hc/en-us/articles/38927747787031), WQ Brain cập nhật
-HÀNG THÁNG/HÀNG TUẦN. Đây KHÔNG phải dữ liệu tự fetch được (chưa tìm ra endpoint/trang đọc
-được tự động qua tool hiện có — đã thử WebFetch (403) và read_forum_post qua wqb-mcp (timeout))
-— CẦN CẬP NHẬT THỦ CÔNG mỗi khi có tháng/theme mới, bằng cách thêm `PowerPoolThemeWeek` mới vào
-CALENDAR bên dưới (copy nguyên văn từ bài viết, KHÔNG suy diễn field còn thiếu).
+HÀNG THÁNG/HÀNG TUẦN. Bài viết KHÔNG fetch tự động được (WebFetch 403, Zendesk API 401,
+read_forum_post qua wqb-mcp timeout — xác nhận lại 2026-07-14), NHƯNG có 2 đường đọc được
+qua API Brain bằng session consultant (.wq_session):
+  1. GET /users/self/messages — announcement "Launching a new ... theme" chứa NGUYÊN VĂN
+     duration + filter (nguồn của entry 12/7-26/7 bên dưới, đọc 2026-07-14);
+  2. GET /alphas/{id}/check — record MATCHES_THEMES liệt kê id/tên/multiplier các theme
+     đang active (không có ngày/filter chi tiết).
+Vẫn CẦN CẬP NHẬT THỦ CÔNG mỗi khi có tháng/theme mới, bằng cách thêm `PowerPoolThemeWeek` mới
+vào CALENDAR bên dưới (copy nguyên văn từ announcement/bài viết, KHÔNG suy diễn field thiếu).
 
 Nguồn xác nhận 2026-07-02 (tài khoản tuananhpo13@gmail.com, GOLD Genius, CONSULTANT_APPROVED):
 2 theme đầu tháng 6 ("USA D1 Fast Datasets", "GLB D1 Datasets") chỉ có TÊN, không có filter chi
@@ -108,6 +113,21 @@ JUNE_JULY_2026_CALENDAR: list[PowerPoolThemeWeek] = [
         unparsed_constraints="neutralization in (slow, fast, slow and fast, ram, statistical, crowding)",
         allowed_neutralizations=parse_allowed_neutralizations(
             "neutralization in (slow, fast, slow and fast, ram, statistical, crowding)"
+        ),
+    ),
+    # Nguyên văn announcement 2026-07-12 "Launching a new 'USA/D1 Power Pool July`26 2' theme":
+    # 12 Jul'26 - 26 Jul'26 (2 tuần), multiplier 1X. Ngày 12/7 CHỒNG LẤN theme trước —
+    # theme_for_date lấy first-match nên 12/7 vẫn thuộc entry 6/7-12/7 ở trên. Theme này KHÔNG
+    # ràng buộc neutralization (khác 2 tuần trước); thay vào đó alpha phải pass "High Turnover:
+    # High Turnover returns ratio test" — chưa mô hình hoá được, giữ trong unparsed_constraints.
+    PowerPoolThemeWeek(
+        date(2026, 7, 12), date(2026, 7, 26),
+        name="USA/D1 Power Pool July`26 2",
+        region="USA", delay=1, universe="TOP1000",
+        datasets_excluded=("pv1",),
+        unparsed_constraints=(
+            "pass High Turnover: High Turnover returns ratio test; "
+            "'PV1' dataset is not allowed (except support fields)"
         ),
     ),
 ]

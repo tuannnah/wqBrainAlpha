@@ -160,6 +160,42 @@ def test_check_theme_compliance_lech_neut_va_universe():
     assert len(reasons) >= 2  # universe + neutralization (+ pv1)
 
 
+def test_theme_tuan_hien_tai_2026_07_14_july26_2():
+    """Theme 'USA/D1 Power Pool July`26 2' — nguyên văn announcement 2026-07-12 (đọc qua
+    GET /users/self/messages bằng session consultant): 12 Jul–26 Jul'26, USA/D1/TOP1000,
+    PV1 bị loại (trừ support fields), KHÔNG ràng buộc neutralization; thay vào đó phải pass
+    'High Turnover returns ratio test' (chưa parse được -> nằm trong unparsed_constraints)."""
+    week = theme_for_date(date(2026, 7, 14))
+    assert week is not None
+    assert week.name == "USA/D1 Power Pool July`26 2"
+    assert week.end_date == date(2026, 7, 26)
+    assert week.region == "USA"
+    assert week.delay == 1
+    assert week.universe == "TOP1000"
+    assert week.datasets_excluded == ("pv1",)
+    assert week.allowed_neutralizations == frozenset()  # theme này KHÔNG giới hạn neut
+    assert "High Turnover" in (week.unparsed_constraints or "")
+
+
+def test_theme_july26_2_khong_chan_neut_market():
+    """Khác theme trước: July`26 2 không có 'neutralization in (...)' -> MARKET cũng qua."""
+    week = theme_for_date(date(2026, 7, 20))
+    ok, reasons = matches_theme(
+        week, region="USA", delay=1, universe="TOP1000",
+        datasets_used={"option8"}, neutralization="MARKET",
+    )
+    assert ok is True
+    assert reasons == []
+
+
+def test_theme_ngay_12_07_van_thuoc_theme_cu():
+    """12/7 là ngày CHỒNG LẤN (theme cũ 29/6–12/7, theme mới 12/7–26/7): first-match trong
+    CALENDAR giữ theme cũ cho 12/7 — chốt hành vi để khỏi lệch khi ai đó đổi thứ tự list."""
+    week = theme_for_date(date(2026, 7, 12))
+    assert week is not None
+    assert week.allowed_neutralizations  # theme cũ CÓ ràng buộc neut -> nhận diện được
+
+
 def test_check_theme_compliance_khong_co_theme_khong_chan():
     ok, reasons = check_theme_compliance(
         region="USA", delay=1, universe="TOP3000", neutralization="SUBINDUSTRY",
