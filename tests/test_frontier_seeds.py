@@ -60,3 +60,44 @@ def test_field_thua_phai_ts_backfill() -> None:
 
 def test_moi_field_co_category() -> None:
     assert FRONTIER_FIELDS == set(FRONTIER_CATEGORY_BY_FIELD)
+
+
+def test_frontier_neutralization_theo_category() -> None:
+    from src.generation.frontier_seeds import frontier_neutralization
+
+    # microstructure → MARKET; option_flow → SECTOR; ownership → INDUSTRY;
+    # insider/call_filing/attention/short → SUBINDUSTRY; không field frontier → None.
+    assert frontier_neutralization("vec_avg(auction_order_imbalance_pct_adv)") == "MARKET"
+    assert frontier_neutralization("ts_mean(firm_vol_imbalance, 5)") == "SECTOR"
+    assert frontier_neutralization(
+        "ts_delta(ts_backfill(inst18_instownership_num_held, 66), 66)"
+    ) == "INDUSTRY"
+    assert frontier_neutralization(
+        "ts_backfill(directional_indicator_score, 66)"
+    ) == "SUBINDUSTRY"
+    assert frontier_neutralization("rank(ts_delta(close, 5))") is None
+
+
+def test_neutralization_for_expr_uu_tien_frontier() -> None:
+    from src.generation.alt_data_seeds import neutralization_for_expr
+
+    # Field frontier quyết định trước các heuristic prefix cũ.
+    assert neutralization_for_expr("ts_mean(firm_vol_imbalance, 5)") == "SECTOR"
+    # Hành vi cũ giữ nguyên khi không có field frontier.
+    assert neutralization_for_expr(
+        "multiply(-1, ts_mean(snt_social_value, 5))"
+    ) == "SUBINDUSTRY"
+
+
+def test_pp_choice_frontier() -> None:
+    from src.generation.frontier_seeds import frontier_pp_choice
+
+    # attention/call_filing → CROWDING; ownership/insider → SLOW; còn lại → STATISTICAL.
+    assert frontier_pp_choice(
+        "subtract(search_interest_today_corporate_name, search_interest_28d_corporate_name)"
+    ) == "CROWDING"
+    assert frontier_pp_choice(
+        "ts_backfill(directional_indicator_score, 66)"
+    ) == "SLOW"
+    assert frontier_pp_choice("ts_mean(firm_vol_imbalance, 5)") == "STATISTICAL"
+    assert frontier_pp_choice("rank(ts_delta(close, 5))") is None

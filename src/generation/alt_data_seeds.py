@@ -81,6 +81,14 @@ def neutralization_for_expr(expr: str, registry=None) -> str:
     Ưu tiên: option → SECTOR; news/social/sentiment → SUBINDUSTRY; analyst/fundamental →
     INDUSTRY; mặc định SUBINDUSTRY (WQ default, an toàn). Dùng ở nhánh sim-thẳng của refiner
     để Brain neutralize đúng nhóm cho từng nguồn dữ liệu (không hardcode một giá trị)."""
+    # Field frontier (kho seed 2026-07-14) quyết định trước heuristic prefix cũ —
+    # tránh va chạm tên (vd field earnings-call bắt đầu bằng "count_" không match prefix nào).
+    from src.generation.frontier_seeds import frontier_neutralization
+
+    _fn = frontier_neutralization(expr, registry)
+    if _fn is not None:
+        return _fn
+
     reg = registry or default_registry()
     fields = FieldCollector(reg).visit(parse(expr))
     if any(_is_option(f) for f in fields):
@@ -108,6 +116,15 @@ def pp_neutralization_for_expr(expr: str, allowed: frozenset[str], registry=None
     `allowed` của theme. option→STATISTICAL, social/sentiment→CROWDING, analyst/fundamental→SLOW,
     price-derived/mặc định→STATISTICAL. Lựa chọn không thuộc `allowed` ->
     phần tử đầu (sorted, ổn định) của `allowed`. `allowed` rỗng -> STATISTICAL (an toàn chung)."""
+    from src.generation.frontier_seeds import frontier_pp_choice
+
+    _fp = frontier_pp_choice(expr, registry)
+    if _fp is not None:
+        choice = _fp
+        if not allowed:
+            return "STATISTICAL"
+        return choice if choice in allowed else sorted(allowed)[0]
+
     reg = registry or default_registry()
     fields = FieldCollector(reg).visit(parse(expr))
     if any(_is_option(f) for f in fields):

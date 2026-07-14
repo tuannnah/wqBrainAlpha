@@ -256,3 +256,53 @@ FRONTIER_VECTOR_FIELDS: frozenset[str] = frozenset({
     "holding_value_distribution_score", "herfindahl_index_holdings",
     "holder_account_total", "top_weighted_account_number",
 })
+
+# Category → neutralization group-neut (đường non-theme, docs WQ neutralization.md).
+_NEUT_BY_CATEGORY = {
+    "microstructure": "MARKET",
+    "option_flow": "SECTOR",
+    "ownership": "INDUSTRY",
+    "fund_panel": "INDUSTRY",
+    "insider": "SUBINDUSTRY",
+    "call_filing": "SUBINDUSTRY",
+    "attention": "SUBINDUSTRY",
+    "short_period": "SUBINDUSTRY",
+    "short_daily": "SUBINDUSTRY",
+}
+# Category → risk-neutralization cho Power Pool Theme (chỉ cho risk-neut).
+_PP_BY_CATEGORY = {
+    "attention": "CROWDING",
+    "call_filing": "CROWDING",
+    "ownership": "SLOW",
+    "fund_panel": "SLOW",
+    "insider": "SLOW",
+}
+
+
+def _frontier_categories(expr: str, registry=None) -> "list[str]":
+    """Category frontier xuất hiện trong expr, theo THỨ TỰ ưu tiên ổn định của
+    _NEUT_BY_CATEGORY (microstructure trước — đặc thù nhất). Rỗng = không phải frontier."""
+    from src.lang.parser import parse
+    from src.lang.registry import default_registry
+    from src.lang.visitors import FieldCollector
+
+    reg = registry or default_registry()
+    fields = FieldCollector(reg).visit(parse(expr))
+    cats = {FRONTIER_CATEGORY_BY_FIELD[f] for f in fields if f in FRONTIER_CATEGORY_BY_FIELD}
+    return [c for c in _NEUT_BY_CATEGORY if c in cats]
+
+
+def frontier_neutralization(expr: str, registry=None) -> "str | None":
+    """Neutralization group-neut cho expr dùng field frontier; None nếu không phải frontier
+    (caller — alt_data_seeds.neutralization_for_expr — giữ heuristic prefix cũ)."""
+    cats = _frontier_categories(expr, registry)
+    return _NEUT_BY_CATEGORY[cats[0]] if cats else None
+
+
+def frontier_pp_choice(expr: str, registry=None) -> "str | None":
+    """Risk-neutralization Power Pool cho expr frontier; STATISTICAL nếu category không có
+    map riêng; None nếu không phải frontier."""
+    cats = _frontier_categories(expr, registry)
+    if not cats:
+        return None
+    return _PP_BY_CATEGORY.get(cats[0], "STATISTICAL")
