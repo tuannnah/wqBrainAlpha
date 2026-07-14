@@ -246,7 +246,8 @@ def test_build_closed_loop_include_alt_data(small_panel, repo) -> None:  # noqa:
                              registry=default_registry(), loop=_NoopLoop(),
                              pop_size=6, n_generations=0, top_k=3, max_ideas=2,
                              curated_seeds=False, include_alt_data=True,
-                             include_fundamental=False, include_hypothesis=False)
+                             include_fundamental=False, include_hypothesis=False,
+                             include_frontier=False)
     batch = loop.idea_source.next_batch()
     assert [c.expr for c in batch] == list(ALT_DATA_CORES)
 
@@ -919,7 +920,7 @@ def test_build_closed_loop_noi_simulate_many_xuong_alt_data_source(small_panel, 
                              pop_size=6, n_generations=0, top_k=3, max_ideas=2,
                              curated_seeds=False, include_fundamental=False,
                              include_hypothesis=False, include_combiner=False,
-                             refiner=refiner)
+                             include_frontier=False, refiner=refiner)
 
     batch = loop.idea_source.next_batch()
     assert len(sim.multi_calls) == 1

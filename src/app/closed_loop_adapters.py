@@ -29,6 +29,7 @@ from src.generation.alt_data_seeds import (
     neutralization_for_expr,
     pp_neutralization_for_expr,
 )
+from src.generation.frontier_seeds import FRONTIER_CORES
 from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
 from src.generation.hypothesis_seeds import HYPOTHESIS_CORES
 from src.generation.combiner import SubSignal
@@ -1081,6 +1082,25 @@ class CombinerIdeaSource:
         return batch + combos
 
 
+def _gather_direct_cores(
+    include_alt_data: bool, include_fundamental: bool,
+    include_hypothesis: bool, include_frontier: bool,
+) -> tuple[str, ...]:
+    """Gom core đường sim-thẳng theo cờ — tách hàm để test wire không cần dựng cả loop.
+    Frontier đặt SAU kho cũ: kho cũ đã bão hoà (saturation skip bỏ qua nhanh), frontier
+    là nguồn mới chiếm phần lớn batch đầu."""
+    cores: tuple[str, ...] = ()
+    if include_alt_data:
+        cores += ALT_DATA_CORES
+    if include_fundamental:
+        cores += FUNDAMENTAL_CORES
+    if include_hypothesis:
+        cores += HYPOTHESIS_CORES
+    if include_frontier:
+        cores += FRONTIER_CORES
+    return cores
+
+
 def build_closed_loop(
     *, data: object, repo: object, config: object, registry: object, loop: object,
     region: str = "USA", universe: str = "TOP3000",
@@ -1093,7 +1113,7 @@ def build_closed_loop(
     include_fundamental: bool = True, max_per_family: int | None = 8,
     idea_generator: object | None = None, include_hypothesis: bool = True,
     known_fields: "frozenset[str] | set[str] | None" = None,
-    max_gp_sims: int | None = 3,
+    max_gp_sims: int | None = 3, include_frontier: bool = True,
 ) -> "ClosedLoop":
     """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
     bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
@@ -1162,15 +1182,9 @@ def build_closed_loop(
     # Alt-data + fundamental: field ngoài panel local -> refiner sim thẳng Brain. GỘP cores vào
     # MỘT batch đầu (không bọc lồng nhiều tầng) để phiên ngắn (--max-ideas nhỏ) chạm cả hai họ
     # mới cùng lúc (IMPROVEMENT_SPEC §2.1: thoát cụm PV/VWAP bão hòa bằng nhiều họ orthogonal).
-    direct_cores: tuple[str, ...] = ()
-    if include_alt_data:
-        direct_cores += ALT_DATA_CORES
-    if include_fundamental:
-        direct_cores += FUNDAMENTAL_CORES
-    if include_hypothesis:
-        # Họ MỚI (analyst_revision/short_interest/earnings_drift/value_quality) — field
-        # field-validity guard (known_fields) tự lọc field chưa cache thay vì đốt quota Brain.
-        direct_cores += HYPOTHESIS_CORES
+    direct_cores: tuple[str, ...] = _gather_direct_cores(
+        include_alt_data, include_fundamental, include_hypothesis, include_frontier,
+    )
     if direct_cores:
         idea_source = AltDataIdeaSource(
             fallback=idea_source, cores=direct_cores,
