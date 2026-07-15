@@ -1584,6 +1584,11 @@ def submit(
         True, "--diversify/--no-diversify",
         help="Loại alpha trùng cấu trúc (AST) với alpha đã chọn trong tập nộp (T7.1)",
     ),
+    power_pool: bool = typer.Option(
+        False, "--power-pool",
+        help="Đường nộp PURE Power Pool: alpha Sharpe>=1.0 không đạt Regular nhưng đạt "
+        "cấu trúc PP + khớp theme tuần hiện tại (lịch src/scoring/power_pool_theme.py)",
+    ),
 ) -> None:
     """Chọn và nộp alpha đạt ngưỡng (mặc định dry-run)."""
     _setup_logging()
@@ -1598,6 +1603,27 @@ def submit(
     manager = SubmissionManager(
         client, session_factory, CorrelationChecker(client), diversify=diversify
     )
+
+    if power_pool:
+        outcomes = manager.submit_power_pool(dry_run=dry_run)
+        title = "Pure Power Pool — dry-run" if dry_run else "Pure Power Pool — đã xử lý"
+        pp_table = Table(title=f"{title} ({len(outcomes)} ứng viên)")
+        pp_table.add_column("WQ Alpha")
+        pp_table.add_column("Sharpe", justify="right")
+        pp_table.add_column("Theme")
+        pp_table.add_column("Kết quả / lý do bỏ qua", overflow="fold")
+        for cand, result in outcomes:
+            pp_table.add_row(
+                cand.wq_alpha_id,
+                f"{cand.sharpe:.2f}" if cand.sharpe is not None else "—",
+                "khớp" if cand.theme_ok else "lệch",
+                (result.status + (f" ({result.detail})" if result.detail else ""))
+                if result is not None
+                else (cand.skip_reason or "sẵn sàng (dry-run — nộp bằng --no-dry-run)"),
+            )
+        console.print(pp_table)
+        return
+
     selected = manager.run_daily(dry_run=dry_run)
 
     title = "Sẽ nộp (dry-run)" if dry_run else "Đã nộp"

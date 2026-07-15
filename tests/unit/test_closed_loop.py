@@ -259,10 +259,11 @@ def test_power_pool_eligible_log_khong_ngu_y_nop_duoc(repo) -> None:  # noqa: AN
     # Per-alpha line: nêu CẤU TRÚC, không phải "đã nộp được".
     assert "CẤU TRÚC Power Pool" in joined
     assert "KHÔNG phải đã nộp được" in joined
-    # Tóm tắt cuối phiên: nêu thiếu ngưỡng Regular + chưa có đường nộp tự động + hành động tiếp theo.
+    # Tóm tắt cuối phiên: nêu thiếu ngưỡng Regular + trỏ đúng lệnh nộp pure Power Pool
+    # (đường nộp đã có từ 2026-07-15: main.py submit --power-pool).
     assert "KHÔNG đạt ngưỡng Regular" in joined
-    assert "CHƯA có đường nộp Power Pool tự động" in joined
-    assert "tự xem lại" in joined and "WQ Brain" in joined
+    assert "submit --power-pool" in joined
+    assert "Power Pool Theme" in joined
 
 
 def test_report_in_khoi_san_sang_nop_khi_repo_co_alpha_dat_chuan() -> None:

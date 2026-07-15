@@ -75,6 +75,31 @@ class PropertiesResult:
     detail: str = ""
 
 
+# Pure Power Pool (docs power-pool-alphas.md): alpha KHÔNG đạt Regular vẫn nộp được nếu khớp
+# theme. "Không đạt Regular" nghĩa là CHỈ fail các check hiệu năng Regular-only dưới đây —
+# fail check khác (HIGH_TURNOVER, LOW_SUB_UNIVERSE_SHARPE, CONCENTRATED_WEIGHT...) thì Power
+# Pool cũng đòi PASS ("Turnover tests PASS, Sub-universe test PASS"), loại thẳng.
+_PP_REGULAR_ONLY_FAILS = frozenset(
+    {"LOW_SHARPE", "LOW_FITNESS", "IS_LADDER_SHARPE", "LOW_2Y_SHARPE"}
+)
+# Self-corr trong pool Power Pool phải <= 0.5 (chặt hơn 0.7 của Regular).
+_PP_SELF_CORR_MAX = 0.5
+
+
+@dataclass
+class PowerPoolCandidate:
+    """Ứng viên pure Power Pool + kết quả chấm theme/mô tả (skip_reason rỗng = nộp được)."""
+
+    wq_alpha_id: str
+    expression: str
+    sharpe: float | None
+    fitness: float | None
+    theme_ok: bool
+    theme_reasons: list[str]
+    description: str | None
+    skip_reason: str = ""
+
+
 class SubmissionManager:
     DAILY_QUOTA = 10
     # Bug 1 (fix-submit-async, bằng chứng thật 2026-07-14 KP9nwpEg): `POST /alphas/{id}/submit`
@@ -163,6 +188,165 @@ class SubmissionManager:
                 Candidate(sim.wq_alpha_id, alpha.expression, sim.sharpe, sim.fitness, sim.score)
             )
         return candidates
+
+    # -------------------------------------------------------- pure Power Pool
+    def select_power_pool_candidates(
+        self, on_date=None, calendar=None
+    ) -> list[PowerPoolCandidate]:
+        """Chọn ứng viên PURE Power Pool (docs power-pool-alphas.md + bằng chứng thật
+        2026-07-15 KP92dQAx): Sharpe>=1.0, KHÔNG đạt ngưỡng Regular (đường đó là
+        `select_candidates`), chỉ fail check Regular-only (`_PP_REGULAR_ONLY_FAILS`),
+        đạt cấu trúc PP (<=8 operator, <=3 field), rồi chấm theme compliance bằng
+        settings THẬT đã sim (raw_result) + map field->dataset trong DB. `calendar`
+        inject được cho test; None -> lịch thủ công trong power_pool_theme."""
+        from datetime import date as _date
+
+        from src.lang.parser import parse_expression
+        from src.lang.registry import default_registry
+        from src.lang.visitors import FieldCollector
+        from src.llm.hypothesis import Hypothesis
+        from src.scoring.power_pool import (
+            _GROUPING_FIELDS,
+            build_power_pool_description,
+            check_power_pool_eligibility,
+            is_valid_power_pool_description,
+        )
+        from src.scoring.power_pool_theme import check_theme_compliance
+        from src.storage.models import DataFieldModel
+
+        session = self.session_factory()
+        try:
+            submitted = {
+                row[0]
+                for row in session.query(SubmissionModel.alpha_id)
+                .filter(SubmissionModel.status == "submitted")
+                .all()
+            }
+            rows = (
+                session.query(SimulationModel, AlphaModel)
+                .join(AlphaModel, SimulationModel.alpha_id == AlphaModel.id)
+                .filter(SimulationModel.wq_alpha_id.isnot(None))
+                .order_by(SimulationModel.sharpe.desc())
+                .all()
+            )
+            candidates: list[PowerPoolCandidate] = []
+            seen: set[str] = set()
+            for sim, alpha in rows:
+                wq_id = sim.wq_alpha_id
+                if wq_id in submitted or wq_id in seen:
+                    continue
+                if sim.sharpe is None or sim.sharpe < 1.0:
+                    continue
+                if (
+                    sim.sharpe >= SUBMIT_MIN_SHARPE
+                    and sim.fitness is not None
+                    and sim.fitness >= SUBMIT_MIN_FITNESS
+                ):
+                    continue  # đạt Regular -> nộp đường run_daily, không phải pure PP
+                try:
+                    fails = set(json.loads(sim.failed_checks) or []) if sim.failed_checks else set()
+                except (ValueError, TypeError):
+                    continue  # failed_checks hỏng -> không dám đoán, bỏ ứng viên
+                if fails - _PP_REGULAR_ONLY_FAILS:
+                    continue  # fail check mà Power Pool cũng đòi PASS (turnover/sub-universe...)
+                try:
+                    verdict = check_power_pool_eligibility(alpha.expression, sim.sharpe)
+                except Exception:  # noqa: BLE001 - biểu thức lạ không được làm sập selection
+                    continue
+                if not verdict.eligible:
+                    continue
+                seen.add(wq_id)
+
+                settings: dict = {}
+                if sim.raw_result:
+                    try:
+                        settings = (json.loads(sim.raw_result) or {}).get("settings") or {}
+                    except (ValueError, TypeError):
+                        settings = {}
+                region = settings.get("region") or sim.region or "USA"
+                universe = settings.get("universe") or sim.universe or ""
+                delay = settings.get("delay", 1)
+                neut = settings.get("neutralization") or "NONE"
+                try:
+                    fields = (
+                        FieldCollector(default_registry()).visit(parse_expression(alpha.expression))
+                        - _GROUPING_FIELDS
+                    )
+                except Exception:  # noqa: BLE001
+                    fields = set()
+                datasets: set[str] = set()
+                if fields:
+                    datasets = {
+                        ds
+                        for (ds,) in session.query(DataFieldModel.dataset_id)
+                        .filter(DataFieldModel.id.in_(fields))
+                        .distinct()
+                        .all()
+                        if ds
+                    }
+                theme_ok, reasons = check_theme_compliance(
+                    region=region, delay=delay, universe=universe, neutralization=neut,
+                    datasets_used=datasets, on_date=on_date or _date.today(), calendar=calendar,
+                )
+
+                description = None
+                if alpha.hypothesis:
+                    try:
+                        hyp = Hypothesis.from_dict(json.loads(alpha.hypothesis))
+                        desc = build_power_pool_description(hyp)
+                        if is_valid_power_pool_description(desc):
+                            description = desc
+                    except (ValueError, TypeError):
+                        description = None
+
+                skip = ""
+                if not theme_ok:
+                    skip = "lệch theme: " + "; ".join(reasons)
+                elif not description:
+                    skip = (
+                        "thiếu mô tả Idea/Rationale >=100 ký tự (docs bắt buộc) — "
+                        "alpha không có hypothesis 4 phần"
+                    )
+                candidates.append(
+                    PowerPoolCandidate(
+                        wq_id, alpha.expression, sim.sharpe, sim.fitness,
+                        theme_ok, reasons, description, skip,
+                    )
+                )
+            return candidates
+        finally:
+            session.close()
+
+    def submit_power_pool(
+        self, dry_run: bool = True, on_date=None, calendar=None, pp_quota: int = 1,
+    ) -> list[tuple[PowerPoolCandidate, "SubmissionResult | None"]]:
+        """Nộp pure Power Pool: set description (bắt buộc theo docs) rồi dùng lại `submit()`
+        (poll + retry job hết hạn + xác nhận dateSubmitted). Quota mặc định 1 pure PP/lần
+        (docs: 1 pure PP/ngày sau 3 tháng; trước đó theo hạn 4 alpha/ngày chung — để 1 cho
+        an toàn, chỉnh qua `pp_quota`). Chỉ đếm quota khi nộp THÀNH CÔNG (rejected không
+        tiêu slot). self-corr pool phải <= 0.5 (chặt hơn Regular 0.7)."""
+        cands = self.select_power_pool_candidates(on_date=on_date, calendar=calendar)
+        outcomes: list[tuple[PowerPoolCandidate, SubmissionResult | None]] = []
+        n_submitted = 0
+        for cand in cands:
+            if dry_run or cand.skip_reason or n_submitted >= pp_quota:
+                outcomes.append((cand, None))
+                continue
+            corr = self.correlation.max_self_correlation(cand.wq_alpha_id)
+            if corr > _PP_SELF_CORR_MAX:
+                cand.skip_reason = (
+                    f"self-corr {corr:.3f} > {_PP_SELF_CORR_MAX} (ngưỡng Power Pool)"
+                )
+                outcomes.append((cand, None))
+                continue
+            self.set_properties(cand.wq_alpha_id, regular_desc=cand.description)
+            # submit() khi thành công tự gắn tag PowerPoolSelected qua
+            # _tag_if_power_pool_eligible (cùng nguồn hypothesis) — không gắn lại ở đây.
+            result = self.submit(cand.wq_alpha_id)
+            if result.status == "submitted":
+                n_submitted += 1
+            outcomes.append((cand, result))
+        return outcomes
 
     # ------------------------------------------------------------------ submit
     def submit(self, wq_alpha_id: str) -> SubmissionResult:

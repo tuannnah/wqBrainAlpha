@@ -260,10 +260,12 @@ class ClosedLoop:
                 logger.info(
                     "⭐ Tóm tắt Power Pool: {} ứng viên đạt CẤU TRÚC Power Pool (Sharpe≥1.0, "
                     "≤8 operator, ≤3 field, self_corr≤0.5) nhưng KHÔNG đạt ngưỡng Regular "
-                    "(Sharpe cần ~1.58+). Đây KHÔNG phải xác nhận nộp được — tool này hiện "
-                    "CHƯA có đường nộp Power Pool tự động. Hành động tiếp theo: tự xem lại "
-                    "từng alpha bên dưới trên WQ Brain và tự quyết định có nộp qua nhánh Power "
-                    "Pool hay không (đạt cấu trúc ≠ được chấp nhận): {}",
+                    "(Sharpe cần ~1.58+). Đây KHÔNG phải xác nhận nộp được — cần khớp thêm "
+                    "Power Pool Theme tuần hiện tại + mô tả ≥100 ký tự. Kiểm tra và nộp qua "
+                    "đường pure Power Pool:\n"
+                    "   ./venv/Scripts/python.exe main.py submit --power-pool  (dry-run)\n"
+                    "   ./venv/Scripts/python.exe main.py submit --power-pool --no-dry-run\n"
+                    "Ứng viên: {}",
                     len(power_pool_only),
                     ", ".join(_short(e, 40) for e in power_pool_only),
                 )
