@@ -529,3 +529,51 @@
 - **Blockers / open risks:** ρ local↔Brain vẫn ~0.31; pre-existing: field chứa "rating" substring (vd `operating_income`) misclassify họ "analyst"; `frontier_call_filing` 9 core > max_per_family 8 (orphan tối đa 1 sim, chấp nhận).
 - **Next step:** USER chạy menu 5 nghiệm thu live: core frontier phục vụ batch đầu (không bị field-guard chặn hàng loạt), sim thật từ ≥5 dataset mới, so tỷ lệ Sharpe>0.5 frontier vs GP (baseline 14/07: GP max 0.54); kiểm catalog operator có vec_avg/vec_sum.
 - **Tests:** 1478 passed (+18 so baseline 1460; 1 fail psycopg có sẵn được deselect).
+
+### [2026-07-15] Session 12 — Điều tra "menu-5 chạy dài không ra alpha nộp" + chiến dịch nộp trực tiếp
+- **Phase:** Vận hành/debug. Goal: có alpha submit + sửa tool để nộp hằng ngày.
+- **Chẩn đoán (funnel phiên 15/07):** 58 refine → 0 đạt; 41 LOW_SHARPE (best Brain-sharpe chỉ 0.89,
+  đa số 0.3–0.8), 16 GP_BUDGET, 1 LOW_FITNESS; median sim 348s; kết phiên "cạn ý tưởng".
+  Sweep alt-data chỉ toggle decay 4↔8 + flip dấu — không có nhánh giảm-turnover khi fitness thấp.
+- **Phát hiện vàng (qua GET /alphas/{id}/check bằng .wq_session):**
+  1) `KP92dQAx` (short-sale ratio delta, sim 15/07 sáng): Sharpe 1.71, chỉ FAIL LOW_FITNESS 0.61
+     + LOW_2Y_SHARPE 1.1; NHƯNG đạt cấu trúc Power Pool, khớp theme "USA/D1 Power Pool July`26 2"
+     (MATCHES_THEMES liệt kê rõ), pyramid SHORTINTEREST ×1.1, HT returns ratio PASS 0.95.
+     → Đã PATCH description Idea/Rationale (958 ký tự) + POST /submit (201) → đang poll kết quả.
+  2) `LL1OJZkm` (VWAP reversal + gross_profit_margin_score, 06/07): Sharpe 1.76, CHỈ FAIL
+     LOW_FITNESS 0.8 (IS-Ladder PASS sát nút) — và đang chạy **decay 0** → còn nguyên dư địa.
+     → Đã phóng 3 sim decay {3,5,8} (TOP3000/SUBINDUSTRY giữ nguyên) chờ kết quả.
+- **Root cause tool (3 RC):** RC1 chưa có đường nộp pure Power Pool (bar Sharpe≥1.0 dễ hơn nhiều
+  1.58+fit1.0); RC2 sweep/tuner không đánh vào fitness qua decay-ladder (LocalTuner decay max 6,
+  mốc Sharpe 1.25 thay vì 1.58 consultant); RC3 idea-exhaustion (seed bão hoà, GP degenerate).
+- **Next step:** đọc kết quả 2 task nền → nộp bản đạt; sau đó code fix theo RC (TDD).
+
+### [2026-07-15] Session 12 (tiếp) — 3 commit fix tool + chiến dịch nộp KP92dQAx
+- **Thực nghiệm Regular (đều THẤT BẠI — ghi lại để khỏi lặp):** (1) LL1OJZkm decay 3/5/8:
+  fitness kẹt plateau 0.85 (Sharpe rơi 1.76→1.4 đúng nhịp ret/TO tăng); (2) MARKET neut cho họ
+  VWAP+fund: Sharpe sập còn 1.07 (SUBINDUSTRY chính là nguồn Sharpe); (3) hồi sinh Groj7RjP
+  (1.95/TO 0.78) bằng smoothing: Sharpe sập còn 1.13. Kết luận toán học: Regular cần
+  ret/TO ≥ (1/1.58)² ≈ 0.40 — chỉ tín hiệu chậm margin cao đạt; họ PV nhanh vô vọng.
+- **Phát hiện giao thức submit (bằng chứng 3 lần đo):** job POST /alphas/{id}/submit phía
+  Brain HẾT HẠN đúng 30' (GET 200-rỗng suốt 30' rồi 404-RỖNG — không phải phán quyết).
+  → commit `8847b00`: SUBMIT_POLL_TIMEOUT 600→2100, 404-rỗng = job_expired → POST vòng mới
+  (mặc định 4 vòng), xác nhận dateSubmitted trước mỗi vòng.
+- **Đường nộp PURE Power Pool (commit `6eae376` + `e232b3f`):** select theo cấu trúc PP +
+  chỉ-fail-Regular-only + theme compliance (settings thật raw_result + map field→dataset DB);
+  CLI `main.py submit --power-pool [--no-dry-run]`; fallback description từ
+  submissions.regular_desc. Nghiệm thu live: 22 ứng viên, đúng mình KP92dQAx khớp theme
+  "USA/D1 Power Pool July`26 2" (đã sync description 954 ký tự từ Brain vào DB).
+- **Đang chạy nền:** submit_retry.py — nộp KP92dQAx tối đa 6 vòng POST+poll 31'.
+- **Next step:** đọc kết quả retry; nếu rejected với check FAIL cụ thể → phân tích tiếp;
+  nếu submitted → dùng `submit --power-pool` hằng ngày sau mỗi lượt menu-5.
+- **Tests:** 1487 passed (+9 mới; 1 fail psycopg pre-existing).
+
+### [2026-07-15] Session 12 (kết) — ✅ KP92dQAx ĐÃ NỘP THÀNH CÔNG (pure Power Pool đầu tiên)
+- **Kết quả:** `dateSubmitted 2026-07-15T12:38:32-04:00, stage OS`, tag PowerPoolSelected đã gắn,
+  row submitted đã ghi DB local. Nộp thành công ở VÒNG RETRY 3 (job hoàn tất xong record biến
+  mất → 404; bắt được nhờ xác nhận dateSubmitted trước khi POST vòng mới — đúng thiết kế fix).
+- **Xác nhận giao thức:** pure Power Pool NỘP ĐƯỢC qua POST /alphas/{id}/submit dù FAIL
+  LOW_FITNESS + LOW_2Y_SHARPE (Regular), miễn khớp theme + description ≥100 ký tự.
+  Job submit hết hạn 30'/vòng là thật — giờ cao điểm US cần 3+ vòng.
+- **Quy trình hằng ngày từ nay:** menu-5 chạy → `main.py submit --dry-run` (Regular) +
+  `main.py submit --power-pool` (pure PP, quota 1/ngày) → `--no-dry-run` bản khớp.
