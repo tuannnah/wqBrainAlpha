@@ -80,7 +80,14 @@ class SubmissionManager:
     # Bug 1 (fix-submit-async, bằng chứng thật 2026-07-14 KP9nwpEg): `POST /alphas/{id}/submit`
     # trả 200/201 NGAY nhưng đó KHÔNG phải kết quả — WQ tính bất đồng bộ, phải poll GET cùng
     # path (`GET /alphas/{id}/submit`) tới khi có kết quả thật. Tổng thời gian chờ tối đa.
-    SUBMIT_POLL_TIMEOUT = 600.0
+    # Bug 3 (bằng chứng thật 2026-07-15 KP92dQAx, 3 lần đo): job submit phía Brain HẾT HẠN
+    # đúng 30 phút (GET 200-rỗng suốt 30' rồi 404-rỗng, không is.checks nào) -> timeout poll
+    # phía client phải DÀI HƠN cửa sổ job 30' để luôn bắt được tín hiệu 404 thay vì bỏ cuộc
+    # giữa chừng ở 600s như trước (khi đó không phân biệt được 'đang tính' với 'job chết').
+    SUBMIT_POLL_TIMEOUT = 2100.0
+    # Bug 3: gặp 404-rỗng (job hết hạn) thì POST vòng mới — Brain cache phần check đã tính
+    # nên vòng sau tiến xa hơn (forum 2025-03 khuyên "submit bằng code + retry nhiều lần").
+    SUBMIT_RETRY_CYCLES = 4
     # Mặc định khi response poll thiếu header Retry-After.
     SUBMIT_POLL_DEFAULT_RETRY = 3.0
     # Cap 1 lần chờ giữa 2 lần poll — chống Retry-After bất thường làm treo quá lâu.
@@ -96,6 +103,7 @@ class SubmissionManager:
         max_struct_similarity: float = 0.9,
         sleep_func=time.sleep,
         time_func=time.monotonic,
+        submit_retry_cycles: int | None = None,
     ):
         self.client = client
         self.session_factory = session_factory
@@ -108,6 +116,9 @@ class SubmissionManager:
         # bất đồng bộ không cần chờ thật.
         self._sleep = sleep_func
         self._time = time_func
+        self.submit_retry_cycles = (
+            submit_retry_cycles if submit_retry_cycles is not None else self.SUBMIT_RETRY_CYCLES
+        )
 
     # --------------------------------------------------------------- selection
     def select_candidates(self) -> list[Candidate]:
@@ -163,22 +174,45 @@ class SubmissionManager:
             self._record(result)
             return result
 
-        try:
-            resp = self.client.post(f"/alphas/{wq_alpha_id}/submit")
-        except Exception as exc:  # noqa: BLE001 - không để pipeline crash
-            result = SubmissionResult(wq_alpha_id, "error", str(exc), corr)
-            self._record(result)
-            return result
+        # Bug 3: job submit phía Brain hết hạn sau ~30' (404-rỗng) -> POST vòng mới, tối đa
+        # `submit_retry_cycles` vòng (Brain cache phần đã tính nên vòng sau tiến xa hơn).
+        status, detail = "pending", ""
+        for cycle in range(1, self.submit_retry_cycles + 1):
+            try:
+                resp = self.client.post(f"/alphas/{wq_alpha_id}/submit")
+            except Exception as exc:  # noqa: BLE001 - không để pipeline crash
+                result = SubmissionResult(wq_alpha_id, "error", str(exc), corr)
+                self._record(result)
+                return result
 
-        if resp.status_code not in (200, 201):
-            result = SubmissionResult(wq_alpha_id, "error", f"HTTP {resp.status_code}", corr)
-            self._record(result)
-            return result
+            if resp.status_code not in (200, 201):
+                result = SubmissionResult(wq_alpha_id, "error", f"HTTP {resp.status_code}", corr)
+                self._record(result)
+                return result
 
-        # Bug 1: POST 200/201 KHÔNG có nghĩa đã nộp — WQ tính bất đồng bộ, phải poll GET
-        # /alphas/{id}/submit tới khi có kết quả thật (403 = từ chối, xác nhận GET
-        # /alphas/{id} = thành công thật).
-        status, detail = self._poll_submit_result(wq_alpha_id)
+            # Bug 1: POST 200/201 KHÔNG có nghĩa đã nộp — WQ tính bất đồng bộ, phải poll GET
+            # /alphas/{id}/submit tới khi có kết quả thật (403 = từ chối, xác nhận GET
+            # /alphas/{id} = thành công thật).
+            status, detail = self._poll_submit_result(wq_alpha_id)
+            if status != "job_expired":
+                break
+            # 404-rỗng: job hết hạn — NHƯNG có thể nộp đã xong ngay trước khi record biến mất,
+            # xác nhận qua GET /alphas/{id} trước khi đốt vòng POST mới.
+            confirmed, _ = self._confirm_submitted(wq_alpha_id)
+            if confirmed:
+                status, detail = "submitted", "ok (xác nhận sau khi job record biến mất)"
+                break
+            logger.info(
+                "Job submit Brain hết hạn (404 rỗng) vòng {}/{} cho {} — POST lại.",
+                cycle, self.submit_retry_cycles, wq_alpha_id,
+            )
+        else:
+            status, detail = (
+                "pending",
+                f"job submit Brain hết hạn {self.submit_retry_cycles} vòng liên tiếp "
+                "(mỗi vòng ~30') — kết quả chưa biết, thử lại sau",
+            )
+
         result = SubmissionResult(wq_alpha_id, status, detail, corr)
         self._record(result)
         if result.status == "submitted":
@@ -208,6 +242,12 @@ class SubmissionManager:
                 retry_after = _parse_retry_after(resp.headers.get("Retry-After"))
                 self._sleep(min(retry_after or self.SUBMIT_POLL_DEFAULT_RETRY, self.SUBMIT_POLL_MAX_RETRY))
                 continue
+
+            # Bug 3 (bằng chứng thật 2026-07-15 KP92dQAx): 404 BODY RỖNG sau chuỗi 200-rỗng
+            # = job submit phía Brain hết hạn (~30'), KHÔNG phải phán quyết — caller (submit)
+            # sẽ xác nhận dateSubmitted rồi POST vòng mới. 404 CÓ body thì vẫn là error thật.
+            if resp.status_code == 404 and not body:
+                return "job_expired", "GET /submit 404 rỗng — job Brain hết hạn"
 
             if resp.status_code == 403:
                 payload = resp.json() if body else {}

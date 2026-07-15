@@ -281,6 +281,75 @@ def test_submit_poll_qua_han_thi_pending():
         session.close()
 
 
+# --------------------------------------------- Bug 3: job submit Brain hết hạn sau ~30'
+# Bằng chứng thật 2026-07-15 (alpha KP92dQAx, 3 lần đo): POST /submit trả 201, GET /submit
+# trả 200-RỖNG suốt đúng 30 phút (22:07:33 -> 22:37:33) rồi chuyển 404-RỖNG — job phía Brain
+# HẾT HẠN, KHÔNG phải phán quyết từ chối (không có is.checks nào; forum 2025-03 cũng khuyên
+# "submit bằng code + retry nhiều lần" vì check/submit chậm). Manager phải POST lại vòng mới
+# thay vì trả 'error HTTP 404'.
+
+
+def test_submit_404_rong_la_job_het_han_thi_post_lai_toi_khi_co_phan_quyet():
+    """404-rỗng ở vòng 1 -> xác nhận chưa dateSubmitted -> POST vòng 2; vòng 2 có phán quyết
+    thật (checks không FAIL + dateSubmitted) -> submitted. Phải có đúng 2 POST /submit."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    _seed(sf)
+
+    client = FakeClient()
+    client.queue_post(FakeResponse(201))  # vòng 1
+    client.queue_get(FakeResponse(404, text=""))  # poll: job hết hạn
+    client.queue_get(FakeResponse(200, json_data={"dateSubmitted": None, "stage": "IS"}))
+    client.queue_post(FakeResponse(201))  # vòng 2
+    _queue_submit_success(client)
+    mgr = SubmissionManager(client, sf, FakeCorr(value=0.1), sleep_func=lambda _s: None)
+    result = mgr.submit("WQ1")
+
+    assert result.status == "submitted"
+    n_post = sum(1 for m, p, _k in client.calls if m == "POST" and p.endswith("/submit"))
+    assert n_post == 2
+
+
+def test_submit_404_rong_nhung_dateSubmitted_da_co_thi_submitted_khong_post_lai():
+    """404-rỗng nhưng GET /alphas/{id} thấy dateSubmitted -> nộp ĐÃ thành công (job record
+    biến mất sau khi hoàn tất) -> submitted, KHÔNG POST thêm vòng mới."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    _seed(sf)
+
+    client = FakeClient()
+    client.queue_post(FakeResponse(201))
+    client.queue_get(FakeResponse(404, text=""))
+    client.queue_get(FakeResponse(200, json_data={"dateSubmitted": "2026-07-15T00:00:00Z", "stage": "OS"}))
+    mgr = SubmissionManager(client, sf, FakeCorr(value=0.1), sleep_func=lambda _s: None)
+    result = mgr.submit("WQ1")
+
+    assert result.status == "submitted"
+    n_post = sum(1 for m, p, _k in client.calls if m == "POST" and p.endswith("/submit"))
+    assert n_post == 1
+
+
+def test_submit_404_rong_het_luot_retry_thi_pending():
+    """Job hết hạn liên tiếp quá số vòng retry -> 'pending' (kết quả CHƯA BIẾT, không phải
+    error) + detail nói rõ job Brain hết hạn để người vận hành thử lại sau."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    _seed(sf)
+
+    client = FakeClient()
+    for _ in range(2):
+        client.queue_post(FakeResponse(201))
+        client.queue_get(FakeResponse(404, text=""))
+        client.queue_get(FakeResponse(200, json_data={"dateSubmitted": None, "stage": "IS"}))
+    mgr = SubmissionManager(
+        client, sf, FakeCorr(value=0.1), sleep_func=lambda _s: None, submit_retry_cycles=2,
+    )
+    result = mgr.submit("WQ1")
+
+    assert result.status == "pending"
+    assert "hết hạn" in result.detail
+
+
 def test_run_daily_dry_run_khong_ghi_submission():
     engine = init_db(_engine())
     sf = make_session_factory(engine)
