@@ -298,6 +298,19 @@ class SubmissionManager:
                             description = desc
                     except (ValueError, TypeError):
                         description = None
+                if description is None:
+                    # Fallback: description đã set trước đó qua set_properties (bảng
+                    # submissions.regular_desc — trường hợp KP92dQAx 2026-07-15 viết tay
+                    # qua API) — không skip oan alpha thiếu hypothesis nhưng đã có mô tả.
+                    prev = (
+                        session.query(SubmissionModel.regular_desc)
+                        .filter(SubmissionModel.alpha_id == wq_id)
+                        .filter(SubmissionModel.regular_desc.isnot(None))
+                        .order_by(SubmissionModel.submitted_at.desc())
+                        .first()
+                    )
+                    if prev and prev[0] and is_valid_power_pool_description(prev[0]):
+                        description = prev[0]
 
                 skip = ""
                 if not theme_ok:

@@ -211,6 +211,30 @@ def test_submit_power_pool_nop_that_set_desc_truoc_roi_submit():
         session.close()
 
 
+def test_select_power_pool_fallback_description_tu_bang_submissions():
+    """Alpha không có hypothesis nhưng đã từng set description qua set_properties (bảng
+    submissions.regular_desc, >=100 ký tự — trường hợp KP92dQAx 2026-07-15 set tay qua API)
+    -> dùng lại bản đó, không skip oan."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    desc = "Idea: " + "x" * 120
+    session = sf()
+    try:
+        _seed_fields(session)
+        _add_sim(session, "a1", "PP1", PP_EXPR, 1.71, 0.61, ["LOW_FITNESS"], hypothesis=None)
+        session.add(SubmissionModel(
+            id="prop1", alpha_id="PP1", status="properties_set", regular_desc=desc,
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    cands = _mgr(sf).select_power_pool_candidates(on_date=ON_DATE, calendar=CALENDAR)
+    assert len(cands) == 1
+    assert cands[0].description == desc
+    assert cands[0].skip_reason == ""
+
+
 def test_submit_power_pool_thieu_hypothesis_khong_nop_va_neu_ro_ly_do():
     """Không có hypothesis -> không dựng được mô tả Idea/Rationale (bắt buộc theo docs) ->
     KHÔNG nộp, skip_reason nêu rõ; không âm thầm nộp alpha thiếu mô tả."""
