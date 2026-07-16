@@ -577,3 +577,23 @@
   Job submit hết hạn 30'/vòng là thật — giờ cao điểm US cần 3+ vòng.
 - **Quy trình hằng ngày từ nay:** menu-5 chạy → `main.py submit --dry-run` (Regular) +
   `main.py submit --power-pool` (pure PP, quota 1/ngày) → `--no-dry-run` bản khớp.
+
+### [2026-07-16] Session 13 — ✅ Nộp alpha thứ 2 (KP9Aw3lj, pure Power Pool) + NearMissVariantSource
+- **Kết quả:** `KP9Aw3lj` stage OS (`dateSubmitted 2026-07-16T05:55:44-04:00`), tag
+  PowerPoolSelected. Biểu thức: `multiply(-1, rank(add(ts_mean(firm_vol_imbalance, 5),
+  ts_mean(broker_dealer_vol_imbalance, 5))))` — fade flow option của professional (Pan-
+  Poteshman 2006), dataset order_flow_imb, TOP1000/SECTOR/decay4. Sharpe 1.03,
+  PP-corr 0.147, 2Y-Sharpe 1.82. Sinh từ chiến dịch biến thể TAY quanh near-miss 0.89
+  (6 sim: PRO2 thắng — gộp firm+BD rồi rank; các biến thể đơn lẻ khác 0.75-0.9).
+- **Chẩn đoán 2 vòng menu-5 (01:00-04:20 + 12:00-15:30):** best Sharpe 0.68; 389 core
+  bị bỏ "bão hoà" (avoid-list sau 1 sim/core) + 443 GP degenerate → vòng kín nghiền GP
+  nhiễu ~6h. → commit `6e968bd` NearMissVariantSource: sinh biến thể (rank wrapper /
+  window +1 bậc / ts_rank bounded) quanh near-miss Brain-sim [0.6,1.0) trước khi rơi về
+  GP; repo.near_miss_exprs trên BrainSimLinkModel; wire giữa AltData và curated/GP.
+- **Bẫy vận hành mới:** session .wq_session hết hạn GIỮA vòng poll submit (token sống
+  ~4-8h) → 401; script phải break để user login QR lại rồi resume (job cũ có thể vẫn
+  sống — poll trước, chỉ POST khi 404). Nộp off-peak (chiều VN = đêm US) vẫn cần 3 vòng.
+- **Next step:** theme hiện tại hết hạn 26/07 — cập nhật CALENDAR power_pool_theme.py khi
+  có announcement mới; cân nhắc dạy generate_variants gộp field cùng dataset (PRO2 thắng
+  nhờ TỔ HỢP field — chưa có trong variant expander).
+- **Tests:** 1496 passed (+10; 1 fail psycopg pre-existing).
