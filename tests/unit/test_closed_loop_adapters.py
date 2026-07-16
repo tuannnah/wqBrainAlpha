@@ -935,3 +935,36 @@ def test_build_closed_loop_noi_simulate_many_xuong_alt_data_source(small_panel, 
     outcome = refiner.refine_and_sim(batch[0])
     assert sim.single_calls == 0
     assert outcome.wq_alpha_id == "wq-0"
+
+
+def test_build_closed_loop_wire_near_miss_variant_source(small_panel, repo) -> None:  # noqa: ANN001
+    """Near-miss variant expander (log 2026-07-16: 389 core bão hoà -> vòng kín rơi về GP
+    nhiễu ~6h): build_closed_loop phải chen NearMissVariantSource vào chuỗi — khi alt-data
+    tắt, batch ĐẦU là biến thể quanh near-miss Brain-sim (Sharpe trong [0.6, 1.0))."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.lang.registry import default_registry
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    repo.record_brain_sim(
+        "h_nm", "multiply(-1, ts_mean(brain_only_field, 5))", wq_alpha_id="WQNM",
+        region="USA", universe="TOP1000", sharpe=0.89, fitness=0.3, turnover=0.4,
+        self_corr=None, status="failed",
+    )
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2,
+                             curated_seeds=False, include_alt_data=False,
+                             include_fundamental=False, include_hypothesis=False,
+                             include_frontier=False, include_combiner=False)
+    batch = loop.idea_source.next_batch()
+    exprs = [c.expr for c in batch]
+    assert "rank(multiply(-1, ts_mean(brain_only_field, 5)))" in exprs
+    assert all(c.origin == "alt_data" for c in batch)

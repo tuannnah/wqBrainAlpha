@@ -208,3 +208,32 @@ def test_top_simulated_sap_xep_theo_sharpe_bo_error():
     exprs = [t[0] for t in top]
     assert exprs == ["b", "a"]          # theo sharpe giảm, loại 'error'
     assert top[0] == ("b", 1.9, 0.8)
+
+
+def test_near_miss_exprs_chon_dung_dai_sharpe_dedup_va_sort():
+    """near_miss_exprs(min,max): chỉ sim Brain THẬT (BrainSimLinkModel, wq_alpha_id có),
+    Sharpe trong [min, max), dedup theo expr_string (giữ sharpe cao nhất), sort giảm dần,
+    tôn trọng limit — nguồn cho NearMissVariantSource (log 2026-07-16: near-miss 0.8-0.9
+    chưa từng được thử biến thể)."""
+    from src.storage.repository import MiniBrainRepository
+
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    repo = MiniBrainRepository(sf)
+
+    def rec(h, expr, sharpe, wq_id="WQx"):
+        repo.record_brain_sim(
+            h, expr, wq_alpha_id=wq_id, region="USA", universe="TOP1000",
+            sharpe=sharpe, fitness=0.3, turnover=0.4, self_corr=None, status="failed",
+        )
+
+    rec("h1", "expr_a", 0.89)
+    rec("h2", "expr_a", 0.80)  # trùng expr, sharpe thấp hơn -> giữ 0.89
+    rec("h3", "expr_b", 0.75)
+    rec("h4", "expr_cao", 1.3)   # ngoài dải
+    rec("h5", "expr_thap", 0.3)  # ngoài dải
+    rec("h6", "expr_local", 0.85, wq_id=None)  # chưa chạm Brain -> loại
+
+    rows = repo.near_miss_exprs(0.6, 1.0, limit=5)
+    assert rows == [("expr_a", 0.89), ("expr_b", 0.75)]
+    assert repo.near_miss_exprs(0.6, 1.0, limit=1) == [("expr_a", 0.89)]

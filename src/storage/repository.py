@@ -636,6 +636,35 @@ class MiniBrainRepository:
         finally:
             session.close()
 
+    def near_miss_exprs(
+        self, min_sharpe: float, max_sharpe: float, limit: int = 5
+    ) -> list[tuple[str, float]]:
+        """Biểu thức near-miss: sim Brain THẬT (BrainSimLinkModel — cùng nguồn/pattern
+        `brain_proven_signals`) với Sharpe trong [min_sharpe, max_sharpe), dedup theo
+        expr_string (giữ Sharpe cao nhất), sort giảm dần, cắt `limit`. Nguồn cho
+        NearMissVariantSource (bằng chứng log 2026-07-16: near-miss 0.8-0.9 bị avoid-list
+        sau 1 sim, chưa từng được thử biến thể window/wrapper — trong khi vòng kín đốt
+        ~6h vào GP nhiễu best Sharpe 0.68)."""
+        session = self.session_factory()
+        try:
+            rows = (
+                session.query(BrainSimLinkModel.expr_string, BrainSimLinkModel.sharpe)
+                .filter(BrainSimLinkModel.wq_alpha_id.isnot(None))
+                .filter(BrainSimLinkModel.sharpe.isnot(None))
+                .filter(BrainSimLinkModel.sharpe >= min_sharpe)
+                .filter(BrainSimLinkModel.sharpe < max_sharpe)
+                .all()
+            )
+            best: dict[str, float] = {}
+            for expr, sharpe in rows:
+                sharpe_f = float(sharpe)
+                if expr not in best or sharpe_f > best[expr]:
+                    best[expr] = sharpe_f
+            ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)
+            return ranked[:limit]
+        finally:
+            session.close()
+
     def submit_ready_alphas(self, self_corr_max: float) -> list[SubmitReadyAlpha]:
         """Task 8 + Bug 2 (fix-submit-async): alpha THẬT SỰ sẵn sàng nộp Regular —
         `SimulationModel.status == 'passed'` + `failed_checks == []` + `sharpe`/`fitness` đạt

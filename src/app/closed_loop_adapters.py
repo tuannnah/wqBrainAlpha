@@ -30,6 +30,7 @@ from src.generation.alt_data_seeds import (
     pp_neutralization_for_expr,
 )
 from src.generation.frontier_seeds import FRONTIER_CORES
+from src.generation.near_miss_variants import NearMissVariantSource
 from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
 from src.generation.hypothesis_seeds import HYPOTHESIS_CORES
 from src.generation.combiner import SubSignal
@@ -1177,6 +1178,14 @@ def build_closed_loop(
     if hasattr(refiner, "presim_cache"):
         _presim_cache = {}
         refiner.presim_cache = _presim_cache  # type: ignore[attr-defined]
+    # Near-miss variant expander (bằng chứng log 2026-07-16: 389 core alt-data bão hoà sau
+    # 1 sim/core -> vòng kín rơi về GP nhiễu best Sharpe 0.68 suốt ~6h): chen GIỮA alt-data
+    # và curated/GP — khi kho core cạn, sinh biến thể window/wrapper quanh near-miss Brain-sim
+    # (Sharpe [0.6, 1.0)) thay vì nhảy thẳng về GP. Lọc avoid-hashes cùng không gian _dedup_key.
+    idea_source = NearMissVariantSource(
+        repo=repo, fallback=idea_source,
+        dedup_key_fn=_dedup_key, avoided_hashes=avoided_hashes,
+    )
     # Alt-data đặt NGOÀI CÙNG -> phục vụ ở batch đầu (trước cả curated PV) để phiên ngắn/
     # --max-ideas nhỏ vẫn chạm alt-data (đòn bẩy độ mới), không bị PV core nuốt hết quota.
     # Alt-data + fundamental: field ngoài panel local -> refiner sim thẳng Brain. GỘP cores vào
