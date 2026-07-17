@@ -597,3 +597,14 @@
   có announcement mới; cân nhắc dạy generate_variants gộp field cùng dataset (PRO2 thắng
   nhờ TỔ HỢP field — chưa có trong variant expander).
 - **Tests:** 1496 passed (+10; 1 fail psycopg pre-existing).
+
+### [2026-07-17] Session 14 — combo field cùng-dataset trong NearMissVariantSource (`8e9ed1d`)
+- **Done:** code hoá nốt bài học KP9Aw3lj: `combine_same_dataset` ghép cặp near-miss chung
+  dataset thành `rank(add(a, b))` (guard: map dataset đủ + 1 dataset chung, union ≤3 field
+  có field MỚI, ≤8 op, depth ≤7, cap 3 combo); `MiniBrainRepository.dataset_of_fields`;
+  wire tự động trong build_closed_loop; combo đứng TRƯỚC biến thể đơn lẻ. TDD 8 test mới,
+  1504 passed. Nghiệm thu live: DB thật ra 3 combo order_flow_imb, combo #1 tái tạo đúng
+  biểu thức KP9Aw3lj — 2 combo còn lại (BD+customer, firm+customer) là ứng viên mới cho
+  lần menu-5 tới.
+- **Next step:** chạy menu-5 nghiệm thu NearMissVariantSource + combo trong vòng kín thật;
+  theme Power Pool hết hạn 26/07 — cập nhật CALENDAR khi có announcement.
