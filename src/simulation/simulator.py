@@ -212,6 +212,7 @@ class Simulator:
         time_func=time.monotonic,
         on_invalid_field=None,
         pre_sim_validator=None,
+        auto_tag: str | None = None,
     ):
         self.client = client
         self.rate_limiter = rate_limiter or RateLimiter()
@@ -221,6 +222,11 @@ class Simulator:
         self.on_invalid_field = on_invalid_field
         # callback(expr)->(ok, reason): chặn biểu thức field-bịa TRƯỚC khi tốn 1 lượt API.
         self.pre_sim_validator = pre_sim_validator
+        # Tag gắn cho MỌI alpha vừa sim xong (PATCH /alphas/{id} tags) — để người dùng lọc
+        # alpha do tool sinh trên web Brain (tab Alphas, filter tag). None = tắt (tương thích
+        # cũ). An toàn: alpha mới sim tags luôn rỗng nên PATCH đè cả list không mất gì; lỗi
+        # PATCH chỉ log warning, không được phá kết quả sim.
+        self.auto_tag = auto_tag
         self._consecutive_auth_failures = 0
 
     def _respect_rate_limit(self, resp) -> None:
@@ -613,6 +619,21 @@ class Simulator:
             delay = float(retry_after) if retry_after else self.POLL_INTERVAL
             self._sleep(delay)
 
+    def _apply_auto_tag(self, alpha_id: str) -> None:
+        """Gắn `auto_tag` cho alpha vừa sim (best-effort): PATCH lỗi/exception chỉ log
+        warning — tag là tiện ích tra cứu trên web, không được phá kết quả sim."""
+        if not self.auto_tag:
+            return
+        try:
+            resp = self.client.patch(f"/alphas/{alpha_id}", json={"tags": [self.auto_tag]})
+            if resp.status_code not in (200, 201):
+                logger.warning(
+                    "Không gắn được tag {!r} cho alpha {}: HTTP {}",
+                    self.auto_tag, alpha_id, resp.status_code,
+                )
+        except Exception as exc:  # noqa: BLE001 - tag best-effort, không phá sim
+            logger.warning("Không gắn được tag {!r} cho alpha {}: {}", self.auto_tag, alpha_id, exc)
+
     def _fetch_metrics(self, expression: str, alpha_id: str) -> SimulationResult:
         resp = self.client.get(f"/alphas/{alpha_id}")
         if resp.status_code not in (200, 201):
@@ -623,6 +644,7 @@ class Simulator:
                 raw={"error": resp.text},
             )
         payload = resp.json()
+        self._apply_auto_tag(alpha_id)
         is_block = payload.get("is") or {}
         metrics = {k: is_block.get(k) for k in _METRIC_KEYS}
 

@@ -1244,6 +1244,19 @@ def build_closed_loop(
         if idea_generator is not None and hasattr(idea_generator, "set_saturated_families"):
             idea_generator.set_saturated_families(fams)
 
+    # Yêu cầu 2026-07-18: cuối phiên ClosedLoop tự chấm PP-ready (cấu trúc + theme +
+    # description) và in khối "⭐ PP SẴN SÀNG NỘP" — bọc select_power_pool_candidates
+    # (module-level, chỉ cần session_factory, không cần client) tại composition root để
+    # pipeline không import tầng submission (B1). Repo thiếu session_factory (fake tối
+    # giản trong test) -> không wire, tương thích ngược.
+    pp_ready_fn = None
+    _sf = getattr(repo, "session_factory", None)
+    if _sf is not None:
+        from src.submission.manager import select_power_pool_candidates
+
+        def pp_ready_fn():  # type: ignore[no-redef]
+            return select_power_pool_candidates(_sf)
+
     return ClosedLoop(
         idea_source=idea_source, refiner=refiner, repo=repo,  # type: ignore[arg-type]
         region=region, universe=universe, max_ideas=max_ideas,
@@ -1251,4 +1264,5 @@ def build_closed_loop(
         session_summary=session_summary, dedup_key_fn=_dedup_key,
         family_fn=classify_family, max_per_family=max_per_family,
         on_family_closed=on_family_closed, max_gp_sims=max_gp_sims,
+        pp_ready_fn=pp_ready_fn,
     )

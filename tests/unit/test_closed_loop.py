@@ -709,3 +709,69 @@ def test_gp_budget_dem_theo_so_sim_khong_phai_so_candidate(repo) -> None:  # noq
     assert refiner.calls == ["gp1", "gp2"]  # gp3 bị chặn: 2+2=4 sim >= trần 3
     assert report.sims_used == 4
     assert report.ideas_tried == 3          # gp3 vẫn có outcome gp_budget (được đếm)
+
+
+def test_report_in_khoi_pp_san_sang_nop(repo) -> None:  # noqa: ANN001
+    """Yêu cầu 2026-07-18: cuối phiên tự chấm theme+description (pp_ready_fn inject từ
+    composition root) và in khối "⭐ PP SẴN SÀNG NỘP" — id + lệnh nộp cho bản sẵn sàng,
+    đếm bản bị bỏ qua kèm lý do đầu tiên (không bắt người dùng tự gõ submit --power-pool)."""
+    from loguru import logger
+
+    from src.submission.manager import PowerPoolCandidate
+
+    def pp_ready_fn():
+        return [
+            PowerPoolCandidate("PPOK1", "expr_ok", 1.03, 0.33, True, [], "Idea: ...", ""),
+            PowerPoolCandidate("PPSKIP", "expr_skip", 1.2, 0.4, False,
+                               ["universe TOP3000 != theme yêu cầu TOP1000"], None,
+                               "lệch theme: universe TOP3000 != theme yêu cầu TOP1000"),
+        ]
+
+    msgs: list[str] = []
+    sink_id = logger.add(lambda m: msgs.append(str(m)), level="INFO")
+    try:
+        src = _FakeIdeaSource([])
+        ClosedLoop(idea_source=src, refiner=_FakeRefiner({}), repo=repo,
+                   pp_ready_fn=pp_ready_fn).run()
+    finally:
+        logger.remove(sink_id)
+
+    joined = "\n".join(msgs)
+    assert "⭐ PP SẴN SÀNG NỘP: 1" in joined
+    assert "PPOK1" in joined
+    assert "submit --power-pool --no-dry-run" in joined
+    assert "1 ứng viên bị bỏ qua" in joined
+    assert "lệch theme" in joined
+
+
+def test_report_pp_ready_fn_loi_khong_pha_report(repo) -> None:  # noqa: ANN001
+    """pp_ready_fn ném lỗi (vd DB khoá) -> report vẫn hoàn tất, chỉ log warning."""
+    from loguru import logger
+
+    def pp_boom():
+        raise RuntimeError("db khoá")
+
+    msgs: list[str] = []
+    sink_id = logger.add(lambda m: msgs.append(str(m)), level="INFO")
+    try:
+        src = _FakeIdeaSource([])
+        report = ClosedLoop(idea_source=src, refiner=_FakeRefiner({}), repo=repo,
+                            pp_ready_fn=pp_boom).run()
+    finally:
+        logger.remove(sink_id)
+    assert report.stop_reason == "no_more_ideas"
+    assert "Không chấm được PP-ready" in "\n".join(msgs)
+
+
+def test_report_khong_co_pp_ready_fn_khong_in_khoi_pp(repo) -> None:  # noqa: ANN001
+    """Tương thích ngược: không inject pp_ready_fn -> không in khối PP SẴN SÀNG NỘP."""
+    from loguru import logger
+
+    msgs: list[str] = []
+    sink_id = logger.add(lambda m: msgs.append(str(m)), level="INFO")
+    try:
+        src = _FakeIdeaSource([])
+        ClosedLoop(idea_source=src, refiner=_FakeRefiner({}), repo=repo).run()
+    finally:
+        logger.remove(sink_id)
+    assert "PP SẴN SÀNG NỘP" not in "\n".join(msgs)

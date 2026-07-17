@@ -722,3 +722,51 @@ def test_simulate_cap_sleep_khi_reset_la_epoch_tuyet_doi():
 
     assert sleeps == [Simulator.MAX_RATE_LIMIT_SLEEP]   # bị cap, không chờ 1.7 tỉ giây
     assert result.status == "passed"
+
+
+# ----------------------- auto_tag: gắn tag alpha ngay sau sim (yêu cầu 2026-07-18) --------
+# Người dùng cần lọc alpha do tool sinh trên web WQ Brain (tab Alphas, filter theo tag).
+
+
+def _queue_sim_ok(client, alpha_id="alpha-9"):
+    client.queue_post(FakeResponse(201, headers={"Location": "/simulations/sim-1"}))
+    client.queue_get(FakeResponse(200, json_data={"status": "COMPLETE", "alpha": alpha_id}))
+    client.queue_get(FakeResponse(200, json_data={"is": {"sharpe": 1.0, "checks": []}}))
+
+
+def test_auto_tag_patch_tags_sau_khi_sim_xong():
+    client = FakeClient()
+    _queue_sim_ok(client)
+    client.queue_patch(FakeResponse(200))
+    sim = Simulator(client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None,
+                    time_func=lambda: 0.0, auto_tag="wqtool")
+    result = sim.simulate("rank(close)")
+
+    assert result.alpha_id == "alpha-9"
+    patches = [c for c in client.calls if c[0] == "PATCH"]
+    assert len(patches) == 1
+    assert patches[0][1] == "/alphas/alpha-9"
+    assert patches[0][2]["json"] == {"tags": ["wqtool"]}
+
+
+def test_auto_tag_none_khong_patch():
+    client = FakeClient()
+    _queue_sim_ok(client)
+    sim = Simulator(client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None,
+                    time_func=lambda: 0.0)
+    sim.simulate("rank(close)")
+    assert [c for c in client.calls if c[0] == "PATCH"] == []
+
+
+def test_auto_tag_patch_loi_khong_lam_hong_ket_qua_sim():
+    class _PatchNoClient(FakeClient):
+        def patch(self, path, **kwargs):
+            self.calls.append(("PATCH", path, kwargs))
+            raise RuntimeError("mạng đứt")
+
+    client = _PatchNoClient()
+    _queue_sim_ok(client)
+    sim = Simulator(client, rate_limiter=_no_sleep_limiter(), sleep_func=lambda *_: None,
+                    time_func=lambda: 0.0, auto_tag="wqtool")
+    result = sim.simulate("rank(close)")
+    assert result.status == "passed"  # PATCH lỗi chỉ log warning, không phá sim

@@ -1009,3 +1009,25 @@ def test_build_closed_loop_wire_combo_cung_dataset(small_panel, repo) -> None:  
                              include_frontier=False, include_combiner=False)
     exprs = [c.expr for c in loop.idea_source.next_batch()]
     assert exprs[0] == f"rank(add({e_a}, {e_b}))"
+
+
+def test_build_closed_loop_wire_pp_ready_fn(small_panel, repo) -> None:  # noqa: ANN001
+    """build_closed_loop bọc select_power_pool_candidates(session_factory) thành pp_ready_fn
+    cho ClosedLoop (repo MiniBrainRepository có session_factory) — DB rỗng trả list rỗng,
+    không nổ."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.lang.registry import default_registry
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2)
+    assert callable(loop.pp_ready_fn)
+    assert loop.pp_ready_fn() == []

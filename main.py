@@ -468,8 +468,11 @@ def _make_validated_simulator(client, pf, session_factory, region, universe):
             pf.known_fields.discard(field_id)
         record(field_id)
 
+    # auto_tag "wqtool": mọi alpha do vòng kín sim đều gắn tag để lọc được trên web Brain
+    # (tab Alphas -> filter tag) — yêu cầu người dùng 2026-07-18.
     return Simulator(
-        client, on_invalid_field=on_invalid_field, pre_sim_validator=pf.check
+        client, on_invalid_field=on_invalid_field, pre_sim_validator=pf.check,
+        auto_tag="wqtool",
     )
 
 

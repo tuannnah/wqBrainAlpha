@@ -189,6 +189,7 @@ class ClosedLoop:
         max_per_family: int | None = None,
         on_family_closed=None,
         max_gp_sims: int | None = 3,
+        pp_ready_fn=None,
     ) -> None:
         self.idea_source = idea_source
         self.refiner = refiner
@@ -222,6 +223,12 @@ class ClosedLoop:
         # các nguồn này KHÔNG bị cap (YAGNI: chỉ GP là nguồn nhiễu đã có bằng chứng thật).
         # None = không cap (tương thích ngược cho ai đang set max_gp_sims=None tường minh).
         self.max_gp_sims = max_gp_sims
+        # Yêu cầu 2026-07-18: callable () -> list[PowerPoolCandidate] (submission.manager.
+        # select_power_pool_candidates bọc session_factory) — _report chấm PP-ready (cấu trúc
+        # + theme + description) cuối phiên và in khối "⭐ PP SẴN SÀNG NỘP". Inject từ
+        # composition root (build_closed_loop) để pipeline KHÔNG import tầng submission (B1).
+        # None -> bỏ qua khối (tương thích ngược).
+        self.pp_ready_fn = pp_ready_fn
 
     def run(self) -> ClosedLoopReport:
         """Lặp: next_batch → mỗi ý tưởng refine_and_sim → record_brain_sim → đếm. Dừng khi
@@ -301,6 +308,36 @@ class ClosedLoop:
                     "thủ công: ./venv/Scripts/python.exe main.py submit --dry-run",
                     SELF_CORR_MAX,
                 )
+            # Yêu cầu 2026-07-18: chấm PP-ready ĐẦY ĐỦ (cấu trúc + theme tuần + description)
+            # ngay cuối phiên — người vận hành không phải tự gõ `submit --power-pool` mới biết.
+            if self.pp_ready_fn is not None:
+                try:
+                    pp_cands = list(self.pp_ready_fn() or [])
+                except Exception as exc:  # noqa: BLE001 - báo cáo phụ không được phá report chính
+                    logger.warning("Không chấm được PP-ready cuối phiên: {}", exc)
+                    pp_cands = []
+                pp_ready = [c for c in pp_cands if not getattr(c, "skip_reason", "")]
+                pp_skipped = [c for c in pp_cands if getattr(c, "skip_reason", "")]
+                if pp_ready:
+                    pp_detail = "\n".join(
+                        f"   • {c.wq_alpha_id}  Sharpe={_fmt(c.sharpe)}  {_short(c.expression, 60)}"
+                        for c in pp_ready
+                    )
+                    logger.info(
+                        "⭐ PP SẴN SÀNG NỘP: {} alpha đạt ĐỦ cấu trúc Power Pool + khớp theme "
+                        "tuần hiện tại + mô tả >=100 ký tự. Nộp (quota 1 pure PP/ngày):\n"
+                        "   ./venv/Scripts/python.exe main.py submit --power-pool --no-dry-run\n{}",
+                        len(pp_ready), pp_detail,
+                    )
+                else:
+                    logger.info(
+                        "⭐ PP SẴN SÀNG NỘP: 0 (chưa ứng viên nào đạt đủ cấu trúc + theme + mô tả)."
+                    )
+                if pp_skipped:
+                    logger.info(
+                        "   ({} ứng viên bị bỏ qua — lý do đầu: {})",
+                        len(pp_skipped), pp_skipped[0].skip_reason,
+                    )
             return ClosedLoopReport(
                 ideas_tried, sims_used, n_passed, n_abandoned, stop_reason,
                 rho_sharpe=self.calibration_tracker.last_rho if self.calibration_tracker else None,
