@@ -17,6 +17,7 @@ from src.simulation.simulator import SimulationResult
 from src.storage.models import (
     AlphaModel,
     BrainSimLinkModel,
+    DataFieldModel,
     DeadFieldModel,
     EvaluationModel,
     ExpressionModel,
@@ -633,6 +634,27 @@ class MiniBrainRepository:
                     continue
                 pairs.append((float(ev.sharpe), float(link.sharpe)))
             return pairs
+        finally:
+            session.close()
+
+    def dataset_of_fields(self, field_ids: "set[str]") -> dict[str, str]:
+        """Map {field_id -> dataset_id} từ bảng data_fields — cross-read có chủ đích (như
+        `submit_ready_alphas`, chỉ đọc). Phục vụ combo cùng-dataset của NearMissVariantSource
+        (bài học KP9Aw3lj 2026-07-16: tổ hợp 2 field cùng dataset thắng 1.03). Field không
+        có trong catalog -> vắng mặt trong map (caller tự quyết, không đoán); dataset_id
+        NULL cũng bị bỏ. Một field xuất hiện nhiều scope (region/universe/delay) -> lấy
+        dataset_id bất kỳ (dataset của field không đổi theo scope trên Brain)."""
+        if not field_ids:
+            return {}
+        session = self.session_factory()
+        try:
+            rows = (
+                session.query(DataFieldModel.id, DataFieldModel.dataset_id)
+                .filter(DataFieldModel.id.in_(field_ids))
+                .filter(DataFieldModel.dataset_id.isnot(None))
+                .all()
+            )
+            return {fid: ds for fid, ds in rows}
         finally:
             session.close()
 

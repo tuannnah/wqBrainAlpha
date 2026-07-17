@@ -237,3 +237,28 @@ def test_near_miss_exprs_chon_dung_dai_sharpe_dedup_va_sort():
     rows = repo.near_miss_exprs(0.6, 1.0, limit=5)
     assert rows == [("expr_a", 0.89), ("expr_b", 0.75)]
     assert repo.near_miss_exprs(0.6, 1.0, limit=1) == [("expr_a", 0.89)]
+
+
+def test_dataset_of_fields_tra_map_field_dataset():
+    """dataset_of_fields: map {field -> dataset_id} từ bảng data_fields (cross-read có chủ
+    đích như submit_ready_alphas) — phục vụ combo cùng-dataset của NearMissVariantSource.
+    Field không có trong catalog -> vắng mặt trong map (caller tự quyết, không đoán)."""
+    from src.storage.models import DataFieldModel
+    from src.storage.repository import MiniBrainRepository
+
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    session = sf()
+    try:
+        session.add(DataFieldModel(id="firm_vol_imbalance", region="USA", universe="TOP1000",
+                                   delay=1, dataset_id="order_flow_imb"))
+        session.add(DataFieldModel(id="snt_social_value", region="USA", universe="TOP1000",
+                                   delay=1, dataset_id="sentiment1"))
+        session.commit()
+    finally:
+        session.close()
+
+    repo = MiniBrainRepository(sf)
+    m = repo.dataset_of_fields({"firm_vol_imbalance", "snt_social_value", "field_la"})
+    assert m == {"firm_vol_imbalance": "order_flow_imb", "snt_social_value": "sentiment1"}
+    assert repo.dataset_of_fields(set()) == {}

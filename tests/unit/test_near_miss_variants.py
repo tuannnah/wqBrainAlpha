@@ -92,3 +92,78 @@ def test_source_uy_quyen_set_saturated_families():
     src = NearMissVariantSource(repo=repo, fallback=fb)
     src.set_saturated_families({"pv_reversal"})
     assert fb.saturated == {"pv_reversal"}
+
+
+# ------------------------- tổ hợp field cùng dataset (bài học KP9Aw3lj 2026-07-16) --------
+# Biến thể THẮNG (Sharpe 0.89 -> 1.03) là TỔ HỢP 2 field cùng dataset order_flow_imb:
+# rank(add(ts_mean(firm...), ts_mean(broker_dealer...))) — các biến thể đơn lẻ chỉ 0.75-0.9.
+
+E_FIRM = "multiply(-1, ts_mean(firm_vol_imbalance, 5))"
+E_BD = "multiply(-1, ts_mean(broker_dealer_vol_imbalance, 5))"
+E_OTHER_DS = "multiply(-1, ts_mean(snt_social_value, 5))"
+
+DS = {
+    "firm_vol_imbalance": "order_flow_imb",
+    "broker_dealer_vol_imbalance": "order_flow_imb",
+    "customer_vol_imbalance": "order_flow_imb",
+    "snt_social_value": "sentiment1",
+}
+
+
+def _ds_map(fields):
+    return {f: DS[f] for f in fields if f in DS}
+
+
+def test_combine_same_dataset_ghep_cap_cung_dataset():
+    from src.generation.near_miss_variants import combine_same_dataset
+
+    combos = combine_same_dataset([(E_BD, 0.89), (E_FIRM, 0.82)], _ds_map)
+    assert f"rank(add({E_BD}, {E_FIRM}))" in combos
+
+
+def test_combine_same_dataset_khong_ghep_khac_dataset():
+    from src.generation.near_miss_variants import combine_same_dataset
+
+    assert combine_same_dataset([(E_BD, 0.89), (E_OTHER_DS, 0.8)], _ds_map) == []
+
+
+def test_combine_same_dataset_khong_ghep_qua_3_field():
+    from src.generation.near_miss_variants import combine_same_dataset
+
+    # a có 2 field, b có 2 field (1 trùng) -> union 3 OK; b' thêm field thứ 4 -> loại
+    a = "subtract(ts_mean(firm_vol_imbalance, 5), ts_mean(broker_dealer_vol_imbalance, 5))"
+    b4 = ("add(subtract(ts_mean(firm_vol_imbalance, 5), ts_mean(customer_vol_imbalance, 5)), "
+          "add(ts_mean(broker_dealer_vol_imbalance, 5), ts_mean(pro_customer_vol_imbalance_otm, 5)))")
+    ds = dict(DS)
+    ds["pro_customer_vol_imbalance_otm"] = "order_flow_imb"
+    combos = combine_same_dataset([(a, 0.8), (b4, 0.7)], lambda fs: {f: ds[f] for f in fs if f in ds})
+    assert combos == []  # union 4 field > 3 (Power Pool)
+
+
+def test_combine_same_dataset_field_khong_ro_dataset_thi_khong_ghep():
+    from src.generation.near_miss_variants import combine_same_dataset
+
+    # dataset map thiếu field -> không dám đoán cùng dataset
+    assert combine_same_dataset([(E_BD, 0.89), (E_FIRM, 0.82)], lambda fs: {}) == []
+
+
+def test_source_sinh_ca_combo_khi_co_dataset_map():
+    repo = _FakeRepo([(E_BD, 0.89), (E_FIRM, 0.82)])
+    fb = _FakeFallback()
+    from src.generation.near_miss_variants import NearMissVariantSource
+
+    src = NearMissVariantSource(repo=repo, fallback=fb, dataset_of_fields_fn=_ds_map)
+    exprs = [c.expr for c in src.next_batch()]
+    assert f"rank(add({E_BD}, {E_FIRM}))" in exprs
+    # combo đứng TRƯỚC biến thể đơn lẻ (bằng chứng: combo thắng 1.03 vs đơn lẻ <=0.9)
+    assert exprs[0] == f"rank(add({E_BD}, {E_FIRM}))"
+
+
+def test_source_khong_co_dataset_map_thi_van_chay_nhu_cu():
+    repo = _FakeRepo([(E_BD, 0.89)])
+    fb = _FakeFallback()
+    from src.generation.near_miss_variants import NearMissVariantSource
+
+    src = NearMissVariantSource(repo=repo, fallback=fb)  # không truyền dataset_of_fields_fn
+    exprs = [c.expr for c in src.next_batch()]
+    assert f"rank({E_BD})" in exprs  # biến thể đơn lẻ vẫn có, không crash

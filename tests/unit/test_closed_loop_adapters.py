@@ -968,3 +968,44 @@ def test_build_closed_loop_wire_near_miss_variant_source(small_panel, repo) -> N
     exprs = [c.expr for c in batch]
     assert "rank(multiply(-1, ts_mean(brain_only_field, 5)))" in exprs
     assert all(c.origin == "alt_data" for c in batch)
+
+
+def test_build_closed_loop_wire_combo_cung_dataset(small_panel, repo) -> None:  # noqa: ANN001
+    """build_closed_loop truyền repo.dataset_of_fields vào NearMissVariantSource: 2 near-miss
+    cùng dataset (catalog data_fields) -> batch đầu chứa combo rank(add(a, b)) đứng trước
+    biến thể đơn lẻ (bài học KP9Aw3lj 2026-07-16)."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.lang.registry import default_registry
+    from src.storage.models import DataFieldModel
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    session = repo.session_factory()
+    try:
+        for fid in ("nm_field_a", "nm_field_b"):
+            session.add(DataFieldModel(id=fid, region="USA", universe="TOP1000", delay=1,
+                                       dataset_id="ds_chung"))
+        session.commit()
+    finally:
+        session.close()
+    e_a = "multiply(-1, ts_mean(nm_field_a, 5))"
+    e_b = "multiply(-1, ts_mean(nm_field_b, 5))"
+    repo.record_brain_sim("h_a", e_a, wq_alpha_id="WQA", region="USA", universe="TOP1000",
+                          sharpe=0.89, fitness=0.3, turnover=0.4, self_corr=None, status="failed")
+    repo.record_brain_sim("h_b", e_b, wq_alpha_id="WQB", region="USA", universe="TOP1000",
+                          sharpe=0.82, fitness=0.3, turnover=0.4, self_corr=None, status="failed")
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2,
+                             curated_seeds=False, include_alt_data=False,
+                             include_fundamental=False, include_hypothesis=False,
+                             include_frontier=False, include_combiner=False)
+    exprs = [c.expr for c in loop.idea_source.next_batch()]
+    assert exprs[0] == f"rank(add({e_a}, {e_b}))"

@@ -1182,9 +1182,14 @@ def build_closed_loop(
     # 1 sim/core -> vòng kín rơi về GP nhiễu best Sharpe 0.68 suốt ~6h): chen GIỮA alt-data
     # và curated/GP — khi kho core cạn, sinh biến thể window/wrapper quanh near-miss Brain-sim
     # (Sharpe [0.6, 1.0)) thay vì nhảy thẳng về GP. Lọc avoid-hashes cùng không gian _dedup_key.
+    # dataset_of_fields (nếu repo có — MiniBrainRepository) bật thêm combo CÙNG-DATASET:
+    # ghép cặp near-miss chung dataset thành rank(add(a,b)) (bài học KP9Aw3lj 2026-07-16:
+    # combo 2 field order_flow_imb thắng Sharpe 1.03 vs biến thể đơn lẻ <=0.9).
+    _ds_fn = getattr(repo, "dataset_of_fields", None)
     idea_source = NearMissVariantSource(
         repo=repo, fallback=idea_source,
         dedup_key_fn=_dedup_key, avoided_hashes=avoided_hashes,
+        dataset_of_fields_fn=_ds_fn if callable(_ds_fn) else None,
     )
     # Alt-data đặt NGOÀI CÙNG -> phục vụ ở batch đầu (trước cả curated PV) để phiên ngắn/
     # --max-ideas nhỏ vẫn chạm alt-data (đòn bẩy độ mới), không bị PV core nuốt hết quota.

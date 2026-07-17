@@ -22,7 +22,7 @@ from src.backtest.local_tuner import iter_constants, set_constant
 from src.lang.ast import Call, Node
 from src.lang.parser import parse
 from src.lang.registry import default_registry
-from src.lang.visitors import Serializer
+from src.lang.visitors import FieldCollector, Serializer
 from src.pipeline.shortlist import ShortlistCandidate
 
 # Bậc thang window (khớp triết lý _WINDOW_LADDER của LocalTuner) — chỉ nâng LÊN một bậc:
@@ -99,6 +99,73 @@ def generate_variants(expr: str, max_variants: int = 4) -> list[str]:
     return out
 
 
+_MAX_PP_FIELDS = 3
+
+
+def combine_same_dataset(
+    rows: "list[tuple[str, float]]", dataset_of_fields_fn, max_combos: int = 3,
+) -> list[str]:
+    """Ghép CẶP biểu thức near-miss mà TOÀN BỘ field của cả hai thuộc CÙNG MỘT dataset —
+    template thắng thật KP9Aw3lj 2026-07-16 (0.89 -> 1.03): `rank(add(a, b))` (mỗi vế đã
+    đúng dấu vì near-miss có Sharpe dương; rank bọc ngoài cho robust cross-section — cùng
+    thứ hạng weights với multiply(-1, rank(add(-a, -b))) sau demean, không cần bóc dấu).
+
+    Chỉ ghép khi: (1) dataset_of_fields_fn phủ ĐỦ mọi field cả hai vế và trả về đúng 1
+    dataset chung (field thiếu map -> không dám đoán, bỏ); (2) union field mang thông tin
+    MỚI (lớn hơn từng vế — không blend 2 công thức trên cùng tập field); (3) giữ chuẩn
+    Power Pool: union <=3 field, <=8 operator, depth <=7. Cặp duyệt theo thứ tự đầu vào
+    (repo đã sort Sharpe giảm dần -> cặp mạnh nhất trước), cắt `max_combos`."""
+    registry = default_registry()
+    ser = Serializer()
+    parsed: list[tuple[Node, frozenset[str], str]] = []  # (node, fields, dataset)
+    for expr, _sharpe in rows:
+        try:
+            node = parse(expr, registry)
+            fields = frozenset(FieldCollector(registry).visit(node))
+        except Exception:  # noqa: BLE001 - biểu thức DB cũ có thể chứa operator đã gỡ
+            continue
+        if not fields:
+            continue
+        ds_map = dataset_of_fields_fn(set(fields)) or {}
+        datasets = {ds_map.get(f) for f in fields}
+        if None in datasets or len(datasets) != 1:
+            continue  # field thiếu map / lẫn nhiều dataset -> không dám ghép
+        parsed.append((node, fields, next(iter(datasets))))
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for i in range(len(parsed)):
+        for j in range(i + 1, len(parsed)):
+            if len(out) >= max_combos:
+                return out
+            node_a, fields_a, ds_a = parsed[i]
+            node_b, fields_b, ds_b = parsed[j]
+            if ds_a != ds_b:
+                continue
+            union = fields_a | fields_b
+            if len(union) > _MAX_PP_FIELDS:
+                continue
+            if union == fields_a or union == fields_b:
+                continue  # không thêm field mới -> chỉ là blend công thức, bỏ
+            combo = Call("rank", (Call("add", (node_a, node_b)),))
+            if _depth(combo) > _MAX_DEPTH:
+                continue
+            text = ser.visit(combo)
+            try:
+                from src.scoring.power_pool import count_operators_fields
+
+                n_ops, _ = count_operators_fields(text)
+                if n_ops > _MAX_PP_OPERATORS:
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
+            if text in seen:
+                continue
+            seen.add(text)
+            out.append(text)
+    return out
+
+
 class NearMissVariantSource:
     """Nguồn ý tưởng cho ClosedLoop: biến thể quanh near-miss sim thật (Sharpe trong
     [min_sharpe, max_sharpe)) từ repo. Phục vụ MỘT lần (như AltDataIdeaSource) rồi ủy quyền
@@ -109,6 +176,7 @@ class NearMissVariantSource:
         self, *, repo, fallback, dedup_key_fn=None, avoided_hashes=None,
         min_sharpe: float = 0.6, max_sharpe: float = 1.0,
         top_k: int = 5, max_variants_per_expr: int = 3,
+        dataset_of_fields_fn=None,
     ) -> None:
         self._repo = repo
         self._fallback = fallback
@@ -118,6 +186,9 @@ class NearMissVariantSource:
         self._max_sharpe = max_sharpe
         self._top_k = top_k
         self._max_variants = max_variants_per_expr
+        # Map {field -> dataset_id} cho tổ hợp cùng-dataset (bài học KP9Aw3lj: combo 2 field
+        # cùng dataset thắng 1.03 vs biến thể đơn lẻ <=0.9). None -> tắt combo (tương thích cũ).
+        self._dataset_of_fields_fn = dataset_of_fields_fn
         self._served = False
 
     def set_saturated_families(self, fams) -> None:
@@ -133,25 +204,42 @@ class NearMissVariantSource:
         rows = near_miss_fn(self._min_sharpe, self._max_sharpe, self._top_k) if callable(near_miss_fn) else []
         empty = np.zeros(0, dtype=np.float64)
         dates = np.zeros(0, dtype="datetime64[ns]")
-        out: list[ShortlistCandidate] = []
+
+        def _blocked(expr: str) -> bool:
+            return (
+                self._dedup_key_fn is not None
+                and self._avoided_hashes is not None
+                and self._dedup_key_fn(expr) in self._avoided_hashes
+            )
+
+        # Combo cùng-dataset đứng TRƯỚC biến thể đơn lẻ (bằng chứng KP9Aw3lj 2026-07-16:
+        # combo thắng 1.03 vs biến thể đơn lẻ <=0.9).
+        exprs: list[str] = []
+        if self._dataset_of_fields_fn is not None and rows:
+            combos = combine_same_dataset(rows, self._dataset_of_fields_fn)
+            if combos:
+                logger.info("NearMissVariant: {} combo cùng-dataset từ {} near-miss.", len(combos), len(rows))
+            exprs.extend(combos)
         for expr, sharpe in rows:
-            for variant in generate_variants(expr, max_variants=self._max_variants):
-                if (
-                    self._dedup_key_fn is not None
-                    and self._avoided_hashes is not None
-                    and self._dedup_key_fn(variant) in self._avoided_hashes
-                ):
-                    continue
-                out.append(
-                    ShortlistCandidate(
-                        expr=variant, metrics=None, pnl=empty, dates=dates, origin="alt_data",
-                    )
-                )
-            if out:
+            variants = generate_variants(expr, max_variants=self._max_variants)
+            if variants:
                 logger.info(
                     "NearMissVariant: sinh {} biến thể quanh near-miss Sharpe={:.2f}: {!r}",
-                    len(out), sharpe, expr if len(expr) <= 60 else expr[:57] + "...",
+                    len(variants), sharpe, expr if len(expr) <= 60 else expr[:57] + "...",
                 )
+            exprs.extend(variants)
+
+        seen: set[str] = set()
+        out: list[ShortlistCandidate] = []
+        for expr in exprs:
+            if expr in seen or _blocked(expr):
+                continue
+            seen.add(expr)
+            out.append(
+                ShortlistCandidate(
+                    expr=expr, metrics=None, pnl=empty, dates=dates, origin="alt_data",
+                )
+            )
         if out:
             return out
         return self._fallback.next_batch()
