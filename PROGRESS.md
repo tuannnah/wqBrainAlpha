@@ -608,3 +608,15 @@
   lần menu-5 tới.
 - **Next step:** chạy menu-5 nghiệm thu NearMissVariantSource + combo trong vòng kín thật;
   theme Power Pool hết hạn 26/07 — cập nhật CALENDAR khi có announcement.
+
+### [2026-07-18] Session 15 — khối "⭐ PP SẴN SÀNG NỘP" cuối phiên + auto-tag wqtool (`3487212`)
+- **Done:** (1) ClosedLoop._report giờ tự chấm PP-ready đầy đủ (cấu trúc + theme + description)
+  qua `pp_ready_fn` inject từ build_closed_loop (select_power_pool_candidates tách module-level,
+  chỉ cần session_factory); in "⭐ PP SẴN SÀNG NỘP: N" + id + lệnh nộp + số bị bỏ qua kèm lý do.
+  (2) Simulator `auto_tag`: mọi alpha menu-5 sim xong được PATCH tags=['wqtool'] (best-effort)
+  — lọc trên web Brain tab Alphas theo tag. TDD 7 test mới, 1511 passed. Nghiệm thu live DB:
+  0 ready/22 bỏ qua (2 bản đạt đã nộp) — đúng.
+- **Cách người dùng biết turn có alpha nộp được:** nhìn khối ⭐ cuối log phiên; muốn kiểm giữa
+  chừng thì `main.py submit --power-pool` (bảng khớp/lệch + lý do).
+- **Next step:** chạy menu-5 thật nghiệm thu 3 tính năng mới cùng lúc (NearMissVariant+combo,
+  khối ⭐, tag wqtool); theme PP hết hạn 26/07 — cập nhật CALENDAR khi có announcement.
