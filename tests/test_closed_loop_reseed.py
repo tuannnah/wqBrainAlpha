@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import main
+import src.app.cli.closed_loop as main
 from src.pipeline.closed_loop import QuotaExhausted
 
 

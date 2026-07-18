@@ -5,7 +5,7 @@ nhau, nhưng vẫn tái lập được nếu chỉ định số cụ thể."""
 
 from __future__ import annotations
 
-import main
+import src.app.cli.closed_loop as main
 
 
 def test_giu_nguyen_seed_cu_the_de_tai_lap() -> None:
