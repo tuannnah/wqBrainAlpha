@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import os
 import sys
 from pathlib import Path
@@ -18,9 +17,6 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from src.simulation.simulator import Simulator
-from src.storage.migrate import migrate_all, _same_database
-from src.llm.marathon import MarathonReport, run_marathon
 from src.app.cli import auth as cli_auth
 from src.app.cli import fields as cli_fields
 from src.app.cli import simulate as cli_simulate
