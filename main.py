@@ -33,6 +33,7 @@ from src.app.cli import auth as cli_auth
 from src.app.cli import fields as cli_fields
 from src.app.cli import simulate as cli_simulate
 from src.app.cli import generate as cli_generate
+from src.app.cli import submit as cli_submit
 
 app = typer.Typer(help="WorldQuant Brain Auto-Alpha Tool")
 app.command()(cli_auth.login)
@@ -46,6 +47,7 @@ app.command()(cli_simulate.simulate)
 app.command("sweep-config")(cli_simulate.sweep_config)
 app.command()(cli_generate.generate)
 app.command("score-one")(cli_generate.score_one_cmd)
+app.command()(cli_submit.submit)
 console = Console()
 
 LOG_DIR = Path("logs")
@@ -1038,71 +1040,6 @@ def originality(
         "[dim]Lưu ý: AST-similarity KHÁC return-correlation thật của WQ — đây chỉ là "
         "bộ lọc rẻ chạy local. Correlation thật kiểm ở bước nộp (GĐ7).[/dim]"
     )
-
-
-@app.command()
-def submit(
-    dry_run: bool = typer.Option(True, help="Chỉ liệt kê, không nộp thật"),
-    diversify: bool = typer.Option(
-        True, "--diversify/--no-diversify",
-        help="Loại alpha trùng cấu trúc (AST) với alpha đã chọn trong tập nộp (T7.1)",
-    ),
-    power_pool: bool = typer.Option(
-        False, "--power-pool",
-        help="Đường nộp PURE Power Pool: alpha Sharpe>=1.0 không đạt Regular nhưng đạt "
-        "cấu trúc PP + khớp theme tuần hiện tại (lịch src/scoring/power_pool_theme.py)",
-    ),
-) -> None:
-    """Chọn và nộp alpha đạt ngưỡng (mặc định dry-run)."""
-    _setup_logging()
-    from src.submission.correlation import CorrelationChecker
-    from src.submission.manager import SubmissionManager
-
-    engine = init_db(make_engine())
-    session_factory = make_session_factory(engine)
-    client = cli_common._make_client()
-    client.authenticate()
-
-    manager = SubmissionManager(
-        client, session_factory, CorrelationChecker(client), diversify=diversify
-    )
-
-    if power_pool:
-        outcomes = manager.submit_power_pool(dry_run=dry_run)
-        title = "Pure Power Pool — dry-run" if dry_run else "Pure Power Pool — đã xử lý"
-        pp_table = Table(title=f"{title} ({len(outcomes)} ứng viên)")
-        pp_table.add_column("WQ Alpha")
-        pp_table.add_column("Sharpe", justify="right")
-        pp_table.add_column("Theme")
-        pp_table.add_column("Kết quả / lý do bỏ qua", overflow="fold")
-        for cand, result in outcomes:
-            pp_table.add_row(
-                cand.wq_alpha_id,
-                f"{cand.sharpe:.2f}" if cand.sharpe is not None else "—",
-                "khớp" if cand.theme_ok else "lệch",
-                (result.status + (f" ({result.detail})" if result.detail else ""))
-                if result is not None
-                else (cand.skip_reason or "sẵn sàng (dry-run — nộp bằng --no-dry-run)"),
-            )
-        console.print(pp_table)
-        return
-
-    selected = manager.run_daily(dry_run=dry_run)
-
-    title = "Sẽ nộp (dry-run)" if dry_run else "Đã nộp"
-    table = Table(title=f"{title} — {len(selected)} alpha")
-    table.add_column("WQ Alpha")
-    table.add_column("Expression", overflow="fold")
-    table.add_column("Sharpe", justify="right")
-    table.add_column("Score", justify="right")
-    for c in selected:
-        table.add_row(
-            c.wq_alpha_id,
-            c.expression,
-            f"{c.sharpe:.3f}" if c.sharpe is not None else "—",
-            f"{c.score:.3f}" if c.score is not None else "—",
-        )
-    console.print(table)
 
 
 @app.command("genius-report")
