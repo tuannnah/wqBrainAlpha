@@ -23,6 +23,13 @@ Phần TRẠNG THÁI (gate/pool_corr/fitness/``_persist`` SQLite) LUÔN chạy t
 chính THEO ĐÚNG THỨ TỰ INDEX GỐC của quần thể — pool self-corr lớn dần theo thứ tự persist
 nên xử lý lệch thứ tự sẽ đổi kết quả gate (song song ≡ tuần tự là bất biến bắt buộc, C2 sẽ
 test parity n_jobs=1 với n_jobs=2). ``n_jobs=1`` (mặc định): đường cũ nguyên vẹn, không đụng.
+
+C1 fix review cuối (2026-07-18): entry ``eval_cache["ok"]`` chỉ giữ ``(daily_pnl, metrics)``
+— KHÔNG giữ ``BacktestResult``/``weights`` nữa (ma trận ``weights`` (T,N) ~10-15MB/cá thể trên
+panel thật; giữ ``pop_size`` × nhiều thế hệ trong dict CHIA SẺ xuyên phiên gây OOM). ``bt`` chỉ
+sống trong phạm vi cục bộ lúc backtest tươi; mọi nơi cần dữ liệu backtest sau đó (gate/
+pool_rho/persist/save_pool_pnl) dùng ``daily_pnl`` (ndarray 1 chiều, vài chục KB) +
+``metrics`` (đã tính, KHÔNG recompute ở ``_persist``).
 """
 
 from __future__ import annotations
@@ -33,7 +40,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from src.backtest.backtester import Backtester, BacktestResult
+from src.backtest.backtester import Backtester
 from src.backtest.config import PortfolioConfig
 from src.backtest.gates import GateEvaluator
 from src.backtest.metrics_local import AlphaMetrics, MetricsCalculator
@@ -151,10 +158,12 @@ class GPEngine:
         # A2: họ nhân tố ClosedLoop đã đóng (0 pass sau max_per_family) — cá thể thuộc họ này
         # bị chặn TRƯỚC backtest trong _evaluate_population (xem gate A2 ở đó).
         self.saturated_families = frozenset(saturated_families)
-        # A3: cache in-memory cấp phiên (canonical_hash -> ("ok", bt, metrics) | ("error",
-        # fail_reasons)) cho phần THUẦN eval/backtest/metrics — hàm xác định của (expr, config,
-        # data) bất biến trong phiên. Chủ sở hữu (GPIdeaSource) truyền dict CHIA SẺ xuyên nhiều
-        # GPEngine/batch; None = tắt cache (mặc định, dùng cho test độc lập không quan tâm cache).
+        # A3: cache in-memory cấp phiên (canonical_hash -> ("ok", daily_pnl, metrics) |
+        # ("error", fail_reasons)) cho phần THUẦN eval/backtest/metrics — hàm xác định của
+        # (expr, config, data) bất biến trong phiên. ``daily_pnl`` (ndarray 1 chiều) THAY cho
+        # ``BacktestResult``/weights đầy đủ (fix OOM review cuối C1 — xem module docstring).
+        # Chủ sở hữu (GPIdeaSource) truyền dict CHIA SẺ xuyên nhiều GPEngine/batch; None = tắt
+        # cache (mặc định, dùng cho test độc lập không quan tâm cache).
         self.eval_cache = eval_cache
         # B1: nhóm field CỐ ĐỊNH cho epoch reseed (GPIdeaSource xoay dataset field ưu tiên
         # mỗi epoch) — None = dùng toàn bộ field của data (hành vi cũ, mọi caller trước B1).
@@ -169,23 +178,27 @@ class GPEngine:
 
     def _evaluate_individual(
         self, ind: Individual, pool_corr: PoolCorrelation,
-    ) -> tuple[FitnessVector | None, str, list[str], BacktestResult | None]:
+    ) -> tuple[FitnessVector | None, str, list[str], "np.ndarray | None", AlphaMetrics | None]:
         """Đánh giá một cá thể: eval signal → build danh mục → backtest → metrics → gate.
 
-        Trả ``(fitness, status, fail_reasons, bt)``; việc persist do caller (``run``) đảm
-        nhiệm. ``status`` là một trong: ``'passed'`` | ``'failed_gate'`` | ``'invalid'`` |
-        ``'error'``. ``fail_reasons`` LUÔN là ``list[str]`` (rỗng khi pass). Quy ước bắt lỗi:
+        Trả ``(fitness, status, fail_reasons, daily_pnl, metrics)``; việc persist do caller
+        (``run``) đảm nhiệm. ``status`` là một trong: ``'passed'`` | ``'failed_gate'`` |
+        ``'invalid'`` | ``'error'``. ``fail_reasons`` LUÔN là ``list[str]`` (rỗng khi pass).
+        Quy ước bắt lỗi:
 
-        - Eval AST hỏng (operator thiếu impl, kiểu sai) → ``'error'`` (fitness None, bt None).
+        - Eval AST hỏng (operator thiếu impl, kiểu sai) → ``'error'`` (fitness/daily_pnl/
+          metrics None).
         - Backtest/metrics ném exception → ``'error'``.
         - Gate hard-fail (depth/fields/self_corr/concentration) → ``'failed_gate'`` (vẫn có
-          bt + fitness để cá thể còn tham gia chọn lọc, không bị loại khỏi quần thể).
+          daily_pnl + metrics + fitness để cá thể còn tham gia chọn lọc, không bị loại khỏi
+          quần thể).
         - Pass mọi hard gate → ``'passed'``.
 
         NGOẠI LỆ (A2): hàm này KHÔNG được gọi cho cá thể vô nghĩa/thuộc họ-đã-đóng — nhánh đó
         bị ``_evaluate_population`` chặn TRƯỚC khi tới đây, tự persist status ``'failed_gate'``
-        riêng với ``bt=None``, ``fitness=None`` (KHÔNG có backtest, KHÔNG tham gia chọn lọc) —
-        khác hẳn ``'failed_gate'`` sinh RA TỪ HÀM NÀY (luôn có bt + fitness như mô tả trên).
+        riêng với ``daily_pnl=None``, ``metrics=None``, ``fitness=None`` (KHÔNG có backtest,
+        KHÔNG tham gia chọn lọc) — khác hẳn ``'failed_gate'`` sinh RA TỪ HÀM NÀY (luôn có
+        daily_pnl + metrics + fitness như mô tả trên).
 
         Lưu ý: ``Evaluator`` hiện gói lỗi parse-time vào exception runtime nên không có nhánh
         ``'invalid'`` riêng ở đây; ``'invalid'`` để dành cho cây sai cấu trúc registry (nếu
@@ -196,14 +209,18 @@ class GPEngine:
         là hàm xác định của ``(expr, config, data)`` — bất biến trong một phiên chạy — nên
         được cache theo ``canonical_hash`` (``self.eval_cache``, dict CHIA SẺ do
         ``GPIdeaSource`` truyền vào xuyên nhiều ``GPEngine``/batch). Phần phụ thuộc pool
-        (gate/pool_rho/fitness ở dưới) LUÔN tính lại tươi vì pool lớn dần trong phiên."""
+        (gate/pool_rho/fitness ở dưới) LUÔN tính lại tươi vì pool lớn dần trong phiên.
+
+        Fix OOM (review cuối C1): entry cache "ok" chỉ giữ ``(daily_pnl, metrics)`` — KHÔNG
+        giữ ``BacktestResult``/``weights`` (nặng ~10-15MB/cá thể trên panel thật). ``bt`` chỉ
+        tồn tại cục bộ trong nhánh miss cache, không lọt ra khỏi hàm này."""
         ch = ind.expr.accept(CanonicalHasher())
         cached = self.eval_cache.get(ch) if self.eval_cache is not None else None
         if cached is not None and cached[0] == "error":
             # Copy list để caller sửa list trả về không làm hỏng entry cache nội bộ.
-            return None, "error", list(cached[1]), None
+            return None, "error", list(cached[1]), None, None
         if cached is not None:
-            _tag, bt, metrics = cached
+            _tag, daily_pnl, metrics = cached
         else:
             try:
                 ctx = EvalContext(data=self.data, registry=self.registry, cache=SubexprCache())
@@ -215,7 +232,7 @@ class GPEngine:
                 # caller) thì caller mutate list trả về sẽ rò ngược vào entry cache nội bộ.
                 if self.eval_cache is not None:
                     self.eval_cache[ch] = ("error", list(reasons))
-                return None, "error", reasons, None
+                return None, "error", reasons, None, None
 
             try:
                 weights = PortfolioBuilder().build(signal, self.config, self.data)
@@ -224,7 +241,7 @@ class GPEngine:
                 reasons = [f"backtest: {type(exc).__name__}: {exc}"]
                 if self.eval_cache is not None:
                     self.eval_cache[ch] = ("error", list(reasons))
-                return None, "error", reasons, None
+                return None, "error", reasons, None, None
 
             try:
                 metrics = MetricsCalculator().compute(bt, self.data)
@@ -232,21 +249,24 @@ class GPEngine:
                 reasons = [f"metrics: {type(exc).__name__}: {exc}"]
                 if self.eval_cache is not None:
                     self.eval_cache[ch] = ("error", list(reasons))
-                return None, "error", reasons, None
+                return None, "error", reasons, None, None
 
+            # Chỉ giữ lại daily_pnl (ndarray 1 chiều) — bt/weights bị vứt khi hàm return,
+            # không giữ tham chiếu nào khác tới BacktestResult đầy đủ.
+            daily_pnl = bt.daily_pnl
             if self.eval_cache is not None:
-                self.eval_cache[ch] = ("ok", bt, metrics)
+                self.eval_cache[ch] = ("ok", daily_pnl, metrics)
 
         depth = ind.expr.accept(DepthVisitor())
         fields = ind.expr.accept(FieldCollector(self.registry))
         fields_ok = bool(fields) and fields.issubset(self.data.field_names())
 
         verdict = GateEvaluator().evaluate_with_pool(
-            metrics, candidate_pnl=bt.daily_pnl, candidate_dates=self.data.dates,
+            metrics, candidate_pnl=daily_pnl, candidate_dates=self.data.dates,
             pool_corr=pool_corr, depth=depth, fields_ok=fields_ok,
         )
         # self_corr tính một lần (gate cũng tính nội bộ; ta cần lại cho fitness + persist).
-        pool_rho, _worst_id = pool_corr.max_corr(bt.daily_pnl, self.data.dates)
+        pool_rho, _worst_id = pool_corr.max_corr(daily_pnl, self.data.dates)
         complexity = ind.expr.accept(ComplexityVisitor())
         # n_trials=1: chưa theo dõi số lần thử per-cá-thể nên không haircut deflation ở đây;
         # đa dạng quần thể đã do NSGA-II + pool_corr_penalty đảm nhiệm (xem fitness_vec).
@@ -255,8 +275,8 @@ class GPEngine:
         )
 
         if not verdict.passed:
-            return fv, "failed_gate", list(verdict.hard_failures), bt
-        return fv, "passed", [], bt
+            return fv, "failed_gate", list(verdict.hard_failures), daily_pnl, metrics
+        return fv, "passed", [], daily_pnl, metrics
 
     def _config_json(self) -> str:
         """Khóa cấu hình stage cho cache/DB — ``sort_keys=True`` để canonical (Minor P5):
@@ -277,18 +297,23 @@ class GPEngine:
         ind: Individual,
         status: str,
         fail_reasons: list[str],
-        bt: BacktestResult | None,
+        daily_pnl: "np.ndarray | None",
+        metrics: AlphaMetrics | None,
         self_corr: float | None,
     ) -> None:
         """Upsert expression + ``record_evaluation`` (mọi outcome: pass/fail/seed — B11
-        avoid-list) + ``save_pool_pnl`` khi pass. ``metrics`` tái lập từ ``bt`` cho trạng
-        thái ``passed``/``failed_gate`` (gate đã chạy nên backtest hợp lệ); ``invalid``/
-        ``error`` -> ``metrics=None`` (cột metric DB để trống).
+        avoid-list) + ``save_pool_pnl`` khi pass. ``metrics`` do CALLER truyền vào (đã tính
+        ở ``_evaluate_individual``, KHÔNG recompute lại ở đây — fix OOM/lãng phí review cuối
+        C1: trước đây hàm này gọi lại ``MetricsCalculator().compute(bt, ...)`` dù caller đã
+        có sẵn kết quả, vừa tốn CPU vừa buộc giữ ``bt`` đầy đủ chỉ để tính lại). ``metrics``
+        chỉ được dùng cho trạng thái ``passed``/``failed_gate``; ``invalid``/``error`` ->
+        ``metrics_for_db=None`` (cột metric DB để trống) dù caller có lỡ truyền metrics khác
+        None (không xảy ra trong thực tế — mọi nhánh error/invalid trả metrics=None).
 
         NGOẠI LỆ (A2): cá thể vô nghĩa/thuộc họ-đã-đóng cũng persist status ``'failed_gate'``
-        nhưng gọi ``_persist`` với ``bt=None`` (chưa từng backtest, bị chặn TRƯỚC bước đó ở
-        ``_evaluate_population``) — nhánh ``if bt is not None and status in {...}`` bên dưới
-        tự nhiên rơi vào ``metrics_for_db=None`` cho trường hợp này, KHÔNG phải lỗi."""
+        nhưng gọi ``_persist`` với ``daily_pnl=None``, ``metrics=None`` (chưa từng backtest,
+        bị chặn TRƯỚC bước đó ở ``_evaluate_population``) — nhánh ``if status in {...}`` bên
+        dưới tự nhiên rơi vào ``metrics_for_db=None`` cho trường hợp này, KHÔNG phải lỗi."""
         expr_string = ind.expr.accept(Serializer())
         canonical_hash = ind.expr.accept(CanonicalHasher())
         depth = ind.expr.accept(DepthVisitor())
@@ -299,9 +324,9 @@ class GPEngine:
             expr_string, canonical_hash, depth, complexity, fields,
         )
 
-        metrics_for_db: AlphaMetrics | None = None
-        if bt is not None and status in {"passed", "failed_gate"}:
-            metrics_for_db = MetricsCalculator().compute(bt, self.data)
+        metrics_for_db: AlphaMetrics | None = (
+            metrics if status in {"passed", "failed_gate"} else None
+        )
 
         eval_id = self.repo.record_evaluation(
             expression_id=expr_id,
@@ -314,17 +339,18 @@ class GPEngine:
             seed=self.seed,
         )
 
-        if status == "passed" and bt is not None:
-            self.repo.save_pool_pnl(eval_id, self.data.dates, bt.daily_pnl)
+        if status == "passed" and daily_pnl is not None:
+            self.repo.save_pool_pnl(eval_id, self.data.dates, daily_pnl)
 
     def _prefetch_parallel(self, population: list[Individual]) -> None:
         """C1: chạy PHẦN THUẦN (eval AST → danh mục → backtest → metrics) SONG SONG qua
         ``self.executor`` cho các cá thể sẽ được backtest, rồi ghi thẳng kết quả vào
         ``self.eval_cache`` — CÙNG ĐỊNH DẠNG ``eval_thuan`` trả về, đúng những gì
-        ``_evaluate_individual`` đọc ở đầu hàm (``("ok", bt, metrics) | ("error",
-        reasons)``). Nhờ vậy vòng lặp TUẦN TỰ THEO INDEX GỐC bên dưới (không đổi so với
-        trước C1) tự động HIT cache thay vì backtest lại trong process chính — không cần
-        đường code riêng cho gate/pool_corr/fitness/persist song song.
+        ``_evaluate_individual`` đọc ở đầu hàm (``("ok", daily_pnl, metrics) | ("error",
+        reasons)`` — ``daily_pnl`` là ``bt.daily_pnl``, KHÔNG phải ``BacktestResult`` đầy đủ,
+        xem fix OOM ở module docstring). Nhờ vậy vòng lặp TUẦN TỰ THEO INDEX GỐC bên dưới
+        (không đổi so với trước C1) tự động HIT cache thay vì backtest lại trong process
+        chính — không cần đường code riêng cho gate/pool_corr/fitness/persist song song.
 
         Lọc TRƯỚC khi submit lặp lại đúng điều kiện A2 (``check_meaningful`` + họ-đã-đóng)
         của vòng lặp tuần tự bên dưới — cá thể bị A2 chặn KHÔNG được submit (không tốn worker
@@ -392,16 +418,16 @@ class GPEngine:
                     ho = None  # không vi phạm
             if not ok or ho is not None:
                 reasons = [f"degenerate: {ly_do}"] if not ok else [f"họ đã đóng: {ho}"]
-                self._persist(ind, "failed_gate", reasons, None, None)
+                self._persist(ind, "failed_gate", reasons, None, None, None)
                 ind.fitness = None
                 n_evaluated += 1
                 continue
-            fv, status, reasons, bt = self._evaluate_individual(ind, pool_corr)
+            fv, status, reasons, daily_pnl, metrics = self._evaluate_individual(ind, pool_corr)
             self_corr: float | None = None
-            if bt is not None:
-                rho, _worst = pool_corr.max_corr(bt.daily_pnl, self.data.dates)
+            if daily_pnl is not None:
+                rho, _worst = pool_corr.max_corr(daily_pnl, self.data.dates)
                 self_corr = float(rho)
-            self._persist(ind, status, reasons, bt, self_corr)
+            self._persist(ind, status, reasons, daily_pnl, metrics, self_corr)
             ind.fitness = fv  # slots non-frozen — gán sau init (xem Individual Task 7.1)
             n_evaluated += 1
             if status == "passed":

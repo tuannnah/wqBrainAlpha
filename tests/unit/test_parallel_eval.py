@@ -53,17 +53,20 @@ def _config_gia() -> PortfolioConfig:
 
 def test_eval_thuan_tra_ok_va_loi() -> None:
     """`eval_thuan` gọi thẳng (không qua pool) sau `khoi_tao_worker`: cây hợp lệ -> "ok"
-    kèm BacktestResult + AlphaMetrics thật; operator không tồn tại -> "error" kèm lý do."""
+    kèm daily_pnl (ndarray 1 chiều, KHÔNG phải BacktestResult đầy đủ — fix OOM review cuối
+    C1) + AlphaMetrics thật; operator không tồn tại -> "error" kèm lý do có prefix "eval:"."""
     khoi_tao_worker(_panel_gia(), _config_gia(), default_registry())
-    tag, bt, metrics = eval_thuan("ts_mean(subtract(close, open), 5)")
+    tag, daily_pnl, metrics = eval_thuan("ts_mean(subtract(close, open), 5)")
     assert tag == "ok"
-    assert isinstance(bt, BacktestResult)
+    assert isinstance(daily_pnl, np.ndarray)
+    assert not isinstance(daily_pnl, BacktestResult)
     assert isinstance(metrics, AlphaMetrics)
-    assert bt.daily_pnl.shape == (60,)
+    assert daily_pnl.shape == (60,)
 
     tag2, reasons = eval_thuan("op_khong_ton_tai(close)")
     assert tag2 == "error"
     assert reasons  # non-empty, có lý do cụ thể
+    assert reasons[0].startswith("eval: ")  # prefix giai đoạn — parity với main process
 
 
 def test_eval_thuan_dung_registry_cua_ctx_khong_phai_default_registry_ngam_dinh() -> None:
@@ -78,6 +81,42 @@ def test_eval_thuan_dung_registry_cua_ctx_khong_phai_default_registry_ngam_dinh(
     tag, reasons = eval_thuan("ts_mean(close, 5)")
     assert tag == "error"
     assert reasons
+    assert reasons[0].startswith("eval: ")  # lỗi parse xếp vào giai đoạn "eval:"
+
+
+def test_eval_thuan_loi_backtest_co_prefix_backtest(monkeypatch) -> None:  # noqa: ANN001
+    """Fix parity (review cuối C1): lỗi ở giai đoạn backtest phải mang prefix ``"backtest: "``
+    -- Y HỆT format main process (``GPEngine._evaluate_individual``: ``f"backtest:
+    {type(exc).__name__}: {exc}"``) -- để DB/avoid-list không lệch text tuỳ ``n_jobs``."""
+    from src.backtest.backtester import Backtester
+
+    def _raise(self, weights, data):  # noqa: ANN001
+        raise RuntimeError("backtest hỏng giả lập")
+
+    monkeypatch.setattr(Backtester, "run", _raise)
+    khoi_tao_worker(_panel_gia(), _config_gia(), default_registry())
+    tag, reasons = eval_thuan("ts_mean(subtract(close, open), 5)")
+    assert tag == "error"
+    assert reasons
+    assert reasons[0].startswith("backtest: ")
+    assert "backtest hỏng giả lập" in reasons[0]
+
+
+def test_eval_thuan_loi_metrics_co_prefix_metrics(monkeypatch) -> None:  # noqa: ANN001
+    """Fix parity (review cuối C1): lỗi ở giai đoạn metrics phải mang prefix ``"metrics: "``
+    -- Y HỆT format main process (``f"metrics: {type(exc).__name__}: {exc}"``)."""
+    from src.backtest.metrics_local import MetricsCalculator
+
+    def _raise(self, bt, data):  # noqa: ANN001
+        raise RuntimeError("metrics hỏng giả lập")
+
+    monkeypatch.setattr(MetricsCalculator, "compute", _raise)
+    khoi_tao_worker(_panel_gia(), _config_gia(), default_registry())
+    tag, reasons = eval_thuan("ts_mean(subtract(close, open), 5)")
+    assert tag == "error"
+    assert reasons
+    assert reasons[0].startswith("metrics: ")
+    assert "metrics hỏng giả lập" in reasons[0]
 
 
 def test_eval_thuan_qua_pool_that_2_worker() -> None:
@@ -91,22 +130,24 @@ def test_eval_thuan_qua_pool_that_2_worker() -> None:
     registry = default_registry()
     expr = "ts_mean(subtract(close, open), 5)"
 
-    expected_tag, expected_bt, expected_metrics = _eval_in_process(data, cfg, registry, expr)
+    expected_tag, expected_pnl, expected_metrics = _eval_in_process(data, cfg, registry, expr)
 
     with ProcessPoolExecutor(
         max_workers=2, initializer=khoi_tao_worker, initargs=(data, cfg, registry),
     ) as ex:
         fut1 = ex.submit(eval_thuan, expr)
         fut2 = ex.submit(eval_thuan, "op_khong_ton_tai(close)")
-        tag1, bt1, metrics1 = fut1.result(timeout=60)
+        tag1, pnl1, metrics1 = fut1.result(timeout=60)
         tag2, reasons2 = fut2.result(timeout=60)
 
     assert tag1 == "ok" == expected_tag
-    assert isinstance(bt1, BacktestResult)
-    np.testing.assert_allclose(bt1.daily_pnl, expected_bt.daily_pnl)
+    assert isinstance(pnl1, np.ndarray)
+    assert not isinstance(pnl1, BacktestResult)
+    np.testing.assert_allclose(pnl1, expected_pnl)
     assert metrics1.sharpe == pytest.approx(expected_metrics.sharpe)
     assert tag2 == "error"
     assert reasons2
+    assert reasons2[0].startswith("eval: ")  # operator không tồn tại -> lỗi giai đoạn eval AST
 
 
 def _eval_in_process(data, config, registry, expr):  # noqa: ANN001

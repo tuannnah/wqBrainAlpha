@@ -109,15 +109,17 @@ def test_evaluate_individual_passed_status_on_valid_seed(small_panel, repo, cfg)
     expr = parse("ts_mean(close, 5)")
     ind = Individual(expr=expr)
     pool_corr = PoolCorrelation(pool={})
-    fv, status, reasons, bt = eng._evaluate_individual(ind, pool_corr)
+    fv, status, reasons, daily_pnl, metrics = eng._evaluate_individual(ind, pool_corr)
     assert status in {"passed", "failed_gate"}
     if status == "passed":
         assert fv is not None
         assert reasons == []
-        assert bt is not None
+        assert daily_pnl is not None
+        assert metrics is not None
     else:
         assert reasons  # non-empty
-        assert bt is not None  # failed_gate vẫn có backtest
+        assert daily_pnl is not None  # failed_gate vẫn có backtest
+        assert metrics is not None
 
 
 def test_evaluate_individual_error_status_for_scalar_root(small_panel, repo, cfg) -> None:  # noqa: ANN001
@@ -130,12 +132,14 @@ def test_evaluate_individual_error_status_for_scalar_root(small_panel, repo, cfg
     )
     ind = Individual(expr=Constant(5.0))  # root = scalar literal, không phải PANEL
     pool_corr = PoolCorrelation(pool={})
-    fv, status, reasons, bt = eng._evaluate_individual(ind, pool_corr)
+    fv, status, reasons, daily_pnl, metrics = eng._evaluate_individual(ind, pool_corr)
     assert status in {"invalid", "error", "failed_gate"}
     assert status != "passed"
     assert reasons  # phải có lý do (không tham chiếu field nào -> fields_ok=False, v.v.)
     if status in {"invalid", "error"}:
         assert fv is None
+        assert daily_pnl is None
+        assert metrics is None
 
 
 def test_eval_cache_hit_khong_backtest_lai(engine_fixture_voi_cache, monkeypatch) -> None:  # noqa: ANN001
@@ -144,9 +148,9 @@ def test_eval_cache_hit_khong_backtest_lai(engine_fixture_voi_cache, monkeypatch
 
     engine, cache = engine_fixture_voi_cache  # GPEngine(eval_cache=cache), data giả nhiều field
     i1 = Individual(expr=parse("ts_mean(subtract(close, ts_delay(close, 1)), 10)"))
-    fv1, st1, rs1, bt1 = engine._evaluate_individual(i1, _pool_corr_rong())
+    fv1, st1, rs1, pnl1, met1 = engine._evaluate_individual(i1, _pool_corr_rong())
     assert len(cache) == 1
-    assert bt1 is not None  # eval phải thành công để test cache "ok" có ý nghĩa
+    assert pnl1 is not None  # eval phải thành công để test cache "ok" có ý nghĩa
 
     so_lan = {"n": 0}
     that = eng_mod.Backtester.run
@@ -155,10 +159,10 @@ def test_eval_cache_hit_khong_backtest_lai(engine_fixture_voi_cache, monkeypatch
         lambda self, w, d: so_lan.__setitem__("n", so_lan["n"] + 1) or that(self, w, d),
     )
     i2 = Individual(expr=parse("ts_mean(subtract(close, ts_delay(close, 1)), 10)"))
-    fv2, st2, rs2, bt2 = engine._evaluate_individual(i2, _pool_corr_rong())
+    fv2, st2, rs2, pnl2, met2 = engine._evaluate_individual(i2, _pool_corr_rong())
     assert so_lan["n"] == 0
     assert st2 == st1
-    np.testing.assert_array_equal(bt2.daily_pnl, bt1.daily_pnl)
+    np.testing.assert_array_equal(pnl2, pnl1)
 
 
 def test_eval_cache_error_khong_luu_bt_va_khong_mutate(engine_fixture_voi_cache) -> None:  # noqa: ANN001
@@ -167,19 +171,64 @@ def test_eval_cache_error_khong_luu_bt_va_khong_mutate(engine_fixture_voi_cache)
     trả list MỚI (copy) để caller sửa list trả về không làm hỏng entry cache nội bộ."""
     engine, cache = engine_fixture_voi_cache
     ind1 = Individual(expr=parse("ts_mean(open, 5)"))
-    fv1, st1, rs1, bt1 = engine._evaluate_individual(ind1, _pool_corr_rong())
+    fv1, st1, rs1, pnl1, met1 = engine._evaluate_individual(ind1, _pool_corr_rong())
     assert st1 == "error"
-    assert bt1 is None
+    assert pnl1 is None
+    assert met1 is None
     assert fv1 is None
     assert len(cache) == 1
     rs1.append("mutated bởi caller")  # caller sửa list trả về...
 
     ind2 = Individual(expr=parse("ts_mean(open, 5)"))
-    fv2, st2, rs2, bt2 = engine._evaluate_individual(ind2, _pool_corr_rong())
+    fv2, st2, rs2, pnl2, met2 = engine._evaluate_individual(ind2, _pool_corr_rong())
     assert st2 == "error"
-    assert bt2 is None
+    assert pnl2 is None
     assert "mutated bởi caller" not in rs2  # ...không được rò vào cache nội bộ
     assert len(cache) == 1  # vẫn 1 entry — không ghi đè/nhân đôi khi cache hit
+
+
+def test_eval_cache_ok_khong_chua_backtestresult_hay_weights(engine_fixture_voi_cache) -> None:  # noqa: ANN001
+    """Fix OOM (review cuối C1): entry cache "ok" chỉ giữ (daily_pnl, metrics) — phần tử thứ
+    2 phải là ``np.ndarray`` 1 chiều (daily_pnl), KHÔNG phải ``BacktestResult`` (vốn giữ thêm
+    ``weights`` ma trận (T,N) nặng ~10-15MB/cá thể trên panel thật, gây OOM khi tích luỹ
+    xuyên cache CHIA SẺ nhiều thế hệ/batch)."""
+    from src.backtest.backtester import BacktestResult
+    from src.backtest.metrics_local import AlphaMetrics
+
+    engine, cache = engine_fixture_voi_cache
+    ind = Individual(expr=parse("ts_mean(subtract(close, ts_delay(close, 1)), 10)"))
+    engine._evaluate_individual(ind, _pool_corr_rong())
+    assert len(cache) == 1
+    (tag, payload, metrics), = cache.values()
+    assert tag == "ok"
+    assert isinstance(payload, np.ndarray)
+    assert payload.ndim == 1  # daily_pnl (T,), không phải weights (T,N)
+    assert not isinstance(payload, BacktestResult)
+    assert isinstance(metrics, AlphaMetrics)
+
+
+def test_persist_khong_goi_lai_metricscalculator_khi_da_co_metrics(  # noqa: ANN001
+    engine_fixture, monkeypatch,
+) -> None:
+    """Fix OOM/lãng phí (review cuối C1): ``_persist`` KHÔNG được recompute
+    ``MetricsCalculator().compute(...)`` khi caller đã truyền sẵn ``metrics`` — trước đây
+    ``_persist`` gọi lại tính metrics từ ``bt`` dù caller có sẵn kết quả."""
+    import src.gp.engine as eng_mod
+
+    so_lan = {"n": 0}
+    that = eng_mod.MetricsCalculator.compute
+    monkeypatch.setattr(
+        eng_mod.MetricsCalculator, "compute",
+        lambda self, bt, data: so_lan.__setitem__("n", so_lan["n"] + 1) or that(self, bt, data),
+    )
+    engine = engine_fixture
+    ind = Individual(expr=parse("ts_mean(close, 5)"))
+    pool_corr = _pool_corr_rong()
+    fv, status, reasons, daily_pnl, metrics = engine._evaluate_individual(ind, pool_corr)
+    assert status in {"passed", "failed_gate"}
+    so_lan["n"] = 0  # reset đếm — chỉ quan tâm số lần gọi TRONG _persist
+    engine._persist(ind, status, reasons, daily_pnl, metrics, 0.0)
+    assert so_lan["n"] == 0
 
 
 def test_engine_runs_pop4_gen1_persists_evaluations(small_panel, repo, cfg) -> None:  # noqa: ANN001
