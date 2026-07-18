@@ -31,6 +31,7 @@ from src.storage.db import init_db, make_engine, make_session_factory
 from src.storage.migrate import migrate_all, _same_database
 from src.storage.repository import AlphaRepository, InvalidFieldRepository
 from src.llm.marathon import MarathonReport, run_marathon
+from src.app.cli import common as cli_common
 
 app = typer.Typer(help="WorldQuant Brain Auto-Alpha Tool")
 console = Console()
@@ -62,22 +63,13 @@ def prompt_credentials(input_func=input, password_func=None):
         console.print("[red]❌ Email và mật khẩu không được để trống[/red]")
 
 
-def _make_client() -> WQBrainClient:
-    # Ưu tiên .env nếu đã điền; nếu trống thì nhập tương tác trong PowerShell.
-    email = settings.wq_email
-    password = settings.wq_password
-    if not email or not password:
-        email, password = prompt_credentials()
-    return WQBrainClient(email, password)
-
-
 @app.command()
 def login(force: bool = typer.Option(False, help="Đăng nhập lại dù session còn hạn")) -> None:
     """Đăng nhập (dùng session cũ nếu còn hạn)."""
     _setup_logging()
     from src.storage.db import write_active_account
 
-    client = _make_client()
+    client = cli_common._make_client()
     client.authenticate(force=force)
     # Ghi email tài khoản -> các lệnh sau chọn đúng DB theo email (mỗi tài khoản 1 DB).
     if client.email:
@@ -114,7 +106,7 @@ def probe_fields(
 ) -> None:
     """Gọi /data-fields THẬT và in nguyên JSON 1 trang để kiểm tra format."""
     _setup_logging()
-    client = _make_client()
+    client = cli_common._make_client()
     client.authenticate()
     resp = client.get(
         "/data-fields",
@@ -145,7 +137,7 @@ def warm_cache_cmd(
 
     engine = init_db(make_engine())
     sf = make_session_factory(engine)
-    client = _make_client()
+    client = cli_common._make_client()
     client.authenticate()
     field_repo = FieldRepository(client, sf)
     op_repo = OperatorRepository(client, sf)
@@ -195,7 +187,7 @@ def fetch_fields(
             f"({region}/{universe}/delay={delay})"
         )
         return
-    client = _make_client()
+    client = cli_common._make_client()
     client.authenticate()
     repo.client = client
     try:
@@ -245,7 +237,7 @@ def fetch_operators(
         operators = repo.load_cached()
         console.print(f"[green]Operators: {len(operators)}[/green] — dùng CACHE, không tải mới")
         return
-    client = _make_client()
+    client = cli_common._make_client()
     client.authenticate()
     repo.client = client
     operators = repo.fetch_all()
@@ -311,7 +303,7 @@ def simulate(
 
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
-    client = _make_client()
+    client = cli_common._make_client()
     client.authenticate()
 
     sim_config = SimConfig(
@@ -358,7 +350,7 @@ def sweep_config(
 
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
-    client = _make_client()
+    client = cli_common._make_client()
     client.authenticate()
 
     grid = {
@@ -399,100 +391,6 @@ def sweep_config(
             f"truncation={c.truncation}, neutralization={c.neutralization} "
             f"(IS sharpe={res.best_result.sharpe:.3f}, OS sharpe={res.best_result.os_sharpe:.3f})"
         )
-
-
-def _cached_symbols(session_factory):
-    """Trả (field_ids, operator_names, field_types, matrix_only_ops, operator_arity).
-
-    field_types: id->MATRIX/VECTOR/GROUP để prefilter chặn type mismatch.
-    matrix_only_ops: operator Time Series/Cross Sectional đòi input MATRIX.
-    operator_arity: name->arity (số input tối đa theo chữ ký) để prefilter chặn
-    biểu thức thừa input (lỗi WQ "Invalid number of inputs")."""
-    field_repo = FieldRepository(None, session_factory)
-    op_repo = OperatorRepository(None, session_factory)
-    cached_fields = field_repo.load_cached()
-    cached_ops = op_repo.load_cached()
-    # Loại field 'chết' (WQ từ chối khi simulate) khỏi nguồn sinh — vùng chết tự học.
-    blacklist = InvalidFieldRepository(session_factory).blacklist()
-    fields = [f.id for f in cached_fields if f.id and f.id not in blacklist]
-    operators = {o.name for o in cached_ops if o.name}
-    field_types = {f.id: f.type for f in cached_fields if f.id and getattr(f, "type", None)}
-    matrix_only_ops = {
-        o.name for o in cached_ops
-        if o.name and getattr(o, "category", "") in ("Time Series", "Cross Sectional")
-    }
-    # Arity TỐI ĐA (gồm cả param có default `=`) từ definition đã lưu -> chỉ chặn khi THỪA
-    # input so với chữ ký (Brain cho truyền positional cả param default: ts_backfill/rank/…).
-    operator_arity = {}
-    for o in cached_ops:
-        if not o.name:
-            continue
-        n = count_max_arity(o.definition or "")
-        if n:
-            operator_arity[o.name] = n
-    return fields, operators, field_types, matrix_only_ops, operator_arity
-
-
-def _local_operator_arity() -> dict[str, int]:
-    """Cap arity LOCAL suy từ chữ ký `OperatorRegistry` (`len(spec.signature)`).
-
-    Nguồn BỔ SUNG cho PreFilter, lấp lỗ hổng: op vắng mặt trong catalog Brain (hoặc
-    definition không parse được -> `count_max_arity` trả 0) trước đây bị BỎ QUA kiểm arity
-    hoàn toàn (3 sim đã chết vì lỗi WQ "Invalid number of inputs" do lỗ hổng này). Import
-    `src.operators_local` trước để đảm bảo registry đã nạp đủ toàn bộ operator thật (không
-    chỉ 6 op tối thiểu Phase 1) — idempotent, an toàn gọi lại nhiều lần."""
-    import src.operators_local  # noqa: F401  (nạp operator thật vào registry)
-    from src.lang.registry import default_registry
-
-    return {name: len(spec.signature) for name, spec in default_registry().all_specs().items()}
-
-
-def _make_invalid_field_recorder(session_factory, region, universe):
-    """Trả callback(field_id) ghi field 'chết' vào blacklist (tự học vùng chết)."""
-    repo = InvalidFieldRepository(session_factory)
-
-    def record(field_id: str) -> None:
-        logger.warning("Field WQ từ chối (chết/event) -> blacklist: {}", field_id)
-        repo.record(field_id, region=region, universe=universe, reason="WQ từ chối (chết/event)")
-
-    return record
-
-
-def _make_validated_simulator(client, pf, session_factory, region, universe):
-    """Dựng Simulator có cổng tiền-kiểm (pf.check) + recorder loại field chết khỏi
-    pf.known_fields ngay trong phiên (không thử lại) và ghi blacklist bền vững."""
-    record = _make_invalid_field_recorder(session_factory, region, universe)
-
-    def on_invalid_field(field_id: str) -> None:
-        if pf.known_fields is not None:
-            pf.known_fields.discard(field_id)
-        record(field_id)
-
-    # auto_tag "wqtool": mọi alpha do vòng kín sim đều gắn tag để lọc được trên web Brain
-    # (tab Alphas -> filter tag) — yêu cầu người dùng 2026-07-18.
-    return Simulator(
-        client, on_invalid_field=on_invalid_field, pre_sim_validator=pf.check,
-        auto_tag="wqtool",
-    )
-
-
-def _portfolio_config_from_opts(
-    neutralization: str, decay: int, truncation: float, delay: int,
-) -> "PortfolioConfig":  # noqa: F821
-    """Dựng PortfolioConfig từ option CLI; neutralization là tên enum không phân biệt hoa."""
-    from src.backtest.config import Neutralization, PortfolioConfig
-
-    try:
-        neut = Neutralization[neutralization.upper()]
-    except KeyError as exc:
-        console.print(
-            f"[red]neutralization '{neutralization}' không hợp lệ. Chọn: "
-            f"{', '.join(n.name for n in Neutralization)}[/red]"
-        )
-        raise typer.Exit(code=1) from exc
-    return PortfolioConfig(
-        neutralization=neut, decay=decay, truncation=truncation, scale_book=1.0, delay=delay,
-    )
 
 
 @app.command()
@@ -538,7 +436,7 @@ def generate(
     # (vd bug ts_std/ts_std_dev đã gặp) TRƯỚC khi GPEngine dựng cây — tránh sinh biểu thức
     # Brain chắc chắn từ chối (tốn phí pre-sim). Catalog rỗng (chưa `wq load-operators`)
     # -> hàm tự bỏ qua, không crash.
-    _, _catalog_ops, _, _, _ = _cached_symbols(session_factory)
+    _, _catalog_ops, _, _, _ = cli_common._cached_symbols(session_factory)
     enforce_gp_vocab_against_catalog(default_registry(), _catalog_ops)
 
     panel_source = ParquetSource(market_data_dir)
@@ -549,7 +447,7 @@ def generate(
         raise typer.Exit(code=1) from exc
 
     repo = MiniBrainRepository(session_factory)
-    cfg = _portfolio_config_from_opts(neutralization, decay, truncation, delay)
+    cfg = cli_common._portfolio_config_from_opts(neutralization, decay, truncation, delay)
     gp_engine = GPEngine(
         data=data, repo=repo, config=cfg, registry=default_registry(),
         pop_size=count, n_generations=n_generations, seed=seed,
@@ -602,7 +500,7 @@ def score_one_cmd(
         console.print(f"[red]Không load được MarketData: {exc}[/red]")
         raise typer.Exit(code=1) from exc
 
-    cfg = _portfolio_config_from_opts(neutralization, decay, truncation, delay)
+    cfg = cli_common._portfolio_config_from_opts(neutralization, decay, truncation, delay)
 
     pool = None
     if not no_pool:
@@ -675,7 +573,7 @@ def _closed_loop_configs(
     from src.simulation.config import SimConfig
 
     local_neut = _local_neutralization(neutralization, available_groups)
-    cfg = _portfolio_config_from_opts(local_neut, decay, truncation, delay)
+    cfg = cli_common._portfolio_config_from_opts(local_neut, decay, truncation, delay)
     sim_config = SimConfig.default(region=region, universe=universe, delay=delay).with_overrides(
         neutralization=neutralization, decay=decay, truncation=truncation,
     )
@@ -713,7 +611,7 @@ def _run_closed_loop_session(
     # Guard tổng quát (Task 2): loại khỏi vocab GP mọi operator KHÔNG có trong catalog
     # Brain live TRƯỚC khi vòng kín sinh ý tưởng — né phí pre-sim vô ích khi GP emit
     # operator Brain chắc chắn từ chối (vd ts_std trước đây). Catalog rỗng -> bỏ qua.
-    _catalog_fields, _catalog_ops, _, _, _ = _cached_symbols(session_factory)
+    _catalog_fields, _catalog_ops, _, _, _ = cli_common._cached_symbols(session_factory)
     enforce_gp_vocab_against_catalog(default_registry(), _catalog_ops)
     # Field-validity guard (RC1/RC2 fix idea-generator, Task known_fields): core alt-data/
     # fundamental/hypothesis tham chiếu field KHÔNG có trong catalog cache thật bị lọc bỏ
@@ -909,7 +807,7 @@ def closed_loop_cmd(
         console.print(f"[red]Không thấy thư mục MarketData: {market_data_dir}[/red]")
         raise typer.Exit(code=1)
 
-    client = _make_client()
+    client = cli_common._make_client()
     client.authenticate()
 
     engine_db = init_db(make_engine())
@@ -1122,11 +1020,11 @@ def _make_research_loop(
     from src.simulation.pre_filter import PreFilter
 
     deepseek = _make_router()  # T6.3: routing tác vụ khó -> model mạnh (nếu cấu hình)
-    fields, operators, field_types, matrix_only_ops, operator_arity = _cached_symbols(session_factory)
+    fields, operators, field_types, matrix_only_ops, operator_arity = cli_common._cached_symbols(session_factory)
     pf = PreFilter(
         known_operators=operators or None, known_fields=set(fields) or None,
         field_types=field_types, matrix_only_ops=matrix_only_ops,
-        operator_arity=operator_arity, local_arity=_local_operator_arity(),
+        operator_arity=operator_arity, local_arity=cli_common._local_operator_arity(),
     )
     field_repo = FieldRepository(None, session_factory)
     op_repo = OperatorRepository(None, session_factory)
@@ -1154,7 +1052,7 @@ def _make_research_loop(
         hypothesis_gen=HypothesisGenerator(deepseek),
         translator=translator,
         refiner=refiner,
-        simulator=_make_validated_simulator(client, pf, session_factory, region, universe),
+        simulator=cli_common._make_validated_simulator(client, pf, session_factory, region, universe),
         prefilter=pf,
         repo=repo,
         region=region,
@@ -1271,10 +1169,10 @@ def research(
     _setup_logging()
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
-    if not _cached_symbols(session_factory)[0]:
+    if not cli_common._cached_symbols(session_factory)[0]:
         console.print("[red]Chưa có fields — chạy fetch-fields trước.[/red]")
         raise typer.Exit(code=1)
-    client = _make_client()
+    client = cli_common._make_client()
     client.authenticate()
 
     # Hướng để trống -> LLM tự đề xuất (giống miner cũ tự seed). Closure chỉ chạy
@@ -1282,11 +1180,11 @@ def research(
     def _auto_direction():
         from src.simulation.pre_filter import PreFilter
 
-        f, o, ft, mo, oa = _cached_symbols(session_factory)
+        f, o, ft, mo, oa = cli_common._cached_symbols(session_factory)
         pf = PreFilter(
             known_operators=o or None, known_fields=set(f) or None,
             field_types=ft, matrix_only_ops=mo, operator_arity=oa,
-            local_arity=_local_operator_arity(),
+            local_arity=cli_common._local_operator_arity(),
         )
         return _make_llm_generator(session_factory, pf).generate_ideas(1)
 
@@ -1371,11 +1269,11 @@ def _marathon_direction_provider(session_factory):
     from src.simulation.pre_filter import PreFilter
 
     def _provider():
-        f, o, ft, mo, oa = _cached_symbols(session_factory)
+        f, o, ft, mo, oa = cli_common._cached_symbols(session_factory)
         pf = PreFilter(
             known_operators=o or None, known_fields=set(f) or None,
             field_types=ft, matrix_only_ops=mo, operator_arity=oa,
-            local_arity=_local_operator_arity(),
+            local_arity=cli_common._local_operator_arity(),
         )
         ideas = _make_llm_generator(session_factory, pf).generate_ideas(1)
         direction = resolve_direction("", lambda: ideas)[0]
@@ -1449,10 +1347,10 @@ def marathon(
     _setup_logging()
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
-    if not _cached_symbols(session_factory)[0]:
+    if not cli_common._cached_symbols(session_factory)[0]:
         console.print("[red]Chưa có fields — chạy fetch-fields trước.[/red]")
         raise typer.Exit(code=1)
-    client = _make_client()
+    client = cli_common._make_client()
     client.authenticate()
     _run_marathon_session(
         session_factory, client, region, universe, delay,
@@ -1471,11 +1369,11 @@ def llm_generate(
 
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
-    fields, operators, field_types, matrix_only_ops, operator_arity = _cached_symbols(session_factory)
+    fields, operators, field_types, matrix_only_ops, operator_arity = cli_common._cached_symbols(session_factory)
     pf = PreFilter(
         known_operators=operators or None, known_fields=set(fields) or None,
         field_types=field_types, matrix_only_ops=matrix_only_ops,
-        operator_arity=operator_arity, local_arity=_local_operator_arity(),
+        operator_arity=operator_arity, local_arity=cli_common._local_operator_arity(),
     )
     llm_gen = _make_llm_generator(session_factory, pf)
 
@@ -1600,7 +1498,7 @@ def submit(
 
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
-    client = _make_client()
+    client = cli_common._make_client()
     client.authenticate()
 
     manager = SubmissionManager(
@@ -1725,7 +1623,7 @@ def _menu_login(state: _MenuState) -> None:
     nếu thiếu) — để mục 4/5 chạy được ngay mà không bắt người dùng tự bấm 2/3 lần đầu."""
     from src.storage.db import active_database_url, write_active_account
 
-    client = _make_client()
+    client = cli_common._make_client()
     client.authenticate()
     state.client = client
     state.email = client.email or ""
@@ -1847,13 +1745,13 @@ def _menu_test_engine(state: _MenuState) -> None:
 
     import src.operators_local  # noqa: F401  (nạp 27 operator vào registry)
 
-    f, o, ft, mo, oa = _cached_symbols(sf)
+    f, o, ft, mo, oa = cli_common._cached_symbols(sf)
     prefilter = PreFilter(
         known_operators=o or None, known_fields=set(f) or None,
         field_types=ft, matrix_only_ops=mo, operator_arity=oa,
-        local_arity=_local_operator_arity(),
+        local_arity=cli_common._local_operator_arity(),
     )
-    cfg = _portfolio_config_from_opts("NONE", 0, 0.10, state.delay)
+    cfg = cli_common._portfolio_config_from_opts("NONE", 0, 0.10, state.delay)
 
     console.print("[cyan]Đang chạy 1 lượt test engine cục bộ (GP → LLM refine → re-score)…[/cyan]")
     result = run_local_engine_test(
