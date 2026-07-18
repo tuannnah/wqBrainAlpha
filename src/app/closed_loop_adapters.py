@@ -854,7 +854,7 @@ class GPIdeaSource:
     def __init__(
         self, data: object, repo: object, config: object, registry: object, *,
         pop_size: int = 30, n_generations: int = 3, base_seed: int = 42,
-        top_k: int = 10, max_corr: float = 0.70, max_empty_retries: int = 8,
+        top_k: int = 10, max_corr: float = 0.70, max_empty_retries: int = 2,
     ) -> None:
         # Lưu dưới Any để forward vào GPEngine/generate_many mà không cần cast cứng
         self._data: Any = data
@@ -925,6 +925,10 @@ class GPIdeaSource:
         # Một quần thể GP (1 seed) có thể tình cờ 0 ứng viên qua gate/decorrelate — đừng
         # vội kết luận "cạn ý tưởng" (no_more_ideas) chỉ vì 1 seed xui. Thử tới
         # max_empty_retries lô (seed khác nhau) rồi mới trả rỗng thật sự.
+        # A4: từ khi A2 chuyển lọc họ-đóng + degenerate vào TRONG tiến hoá (trước backtest,
+        # xem saturated_families ở _run_one_batch), lô rỗng không còn là "xui vì lọc sau-sinh"
+        # (default cũ 8 là để bù rủi ro đó) — giờ nó gần như luôn nghĩa là cạn ý tưởng thật sự,
+        # nên default hạ xuống 2 lần thử seed khác là đủ chống nhiễu ngẫu nhiên còn lại.
         for _ in range(max(1, self.max_empty_retries)):
             batch = self._run_one_batch()
             if self._saturated:

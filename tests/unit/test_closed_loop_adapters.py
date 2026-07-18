@@ -408,6 +408,14 @@ def test_wrapper_uy_quyen_set_gp_budget_exhausted():
     assert gp._gp_budget_exhausted is True
 
 
+def test_max_empty_retries_mac_dinh_la_2():
+    """A4: sau A2 (lọc họ-đóng + degenerate chuyển vào TRONG tiến hoá, trước backtest), lô
+    rỗng từ next_batch() giờ nghĩa là cạn ý tưởng thật sự chứ không còn "xui vì lọc sau-sinh"
+    -> default hạ từ 8 xuống 2 lần thử seed khác là đủ chống nhiễu, tiết kiệm thời gian/batch."""
+    src = GPIdeaSource(data=None, repo=None, config=None, registry=None)
+    assert src.max_empty_retries == 2
+
+
 def test_build_closed_loop_on_family_closed_noi_toi_idea_source(small_panel, repo) -> None:  # noqa: ANN001
     """Task 4, verify (b): build_closed_loop phải nối on_family_closed -> idea_source (chuỗi
     generator THẬT), không chỉ tới idea_generator (LLM re-seed riêng, mặc định None). Gọi
