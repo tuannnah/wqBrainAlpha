@@ -1,6 +1,13 @@
 # MiniBrain — Progress log
 
 ## Current state
+- **Phase [2026-07-18, Session 16]:** Engine vòng kín đã tối ưu TỐC ĐỘ + CHẤT LƯỢNG (8 task
+  A1-C2 merge main `38b4ade`, suite 1534 passed): GP tắt khi gp_budget cạn, lọc degenerate/họ-đóng
+  trước backtest, cache backtest canonical_hash (entry gọn daily_pnl+metrics), retry 8→2, reseed
+  epoch tự động (giữ họ đóng, max_gp_sims per-epoch), two-stage dataset sampling, hạ tầng song song
+  n_jobs (chưa nối CLI). **Next: USER chạy menu 5 nghiệm thu** — batch sau budget-cạn <30s, log
+  `🔄 Epoch #1`, RAM ổn định; LƯU Ý B1-xoay/B2 inert với panel PV 6 field (cần field alt-data +
+  filler trong pop mới kích hoạt — follow-up). Ahead origin/main 59 commit chưa push.
 - **Phase [2026-07-14, Session 11]:** Menu-5 nay chạy TỚI HẾT QUOTA/Ctrl+C (`no_more_ideas` →
   reseed GP, không kết thúc phiên nữa — `_run_reseed_until_quota`, commit `6453271`). Kho seed
   **FRONTIER** đã merge main (`ff211cc..078b1bf`): 40 core / 57 field verify live / 12 dataset
@@ -620,3 +627,12 @@
   chừng thì `main.py submit --power-pool` (bảng khớp/lệch + lý do).
 - **Next step:** chạy menu-5 thật nghiệm thu 3 tính năng mới cùng lúc (NearMissVariant+combo,
   khối ⭐, tag wqtool); theme PP hết hạn 26/07 — cập nhật CALENDAR khi có announcement.
+
+### [2026-07-18] Session 16 — tốc độ + chất lượng vòng kín: 8 task (A1-C2) merge main `38b4ade`
+- **Phase:** vận hành/tối ưu engine (sau frontier seeds) — spec `docs/superpowers/specs/2026-07-18-toc-do-chat-luong-vong-kin-design.md`, plan `docs/superpowers/plans/2026-07-18-toc-do-chat-luong-vong-kin.md`, ledger `.superpowers/sdd/progress.md`.
+- **Done:** Điều tra log 18/07 (batch GP 3–14 phút, retry 8 lô ~24' khi họ đóng, GP vẫn chạy khi gp_budget cạn) → 8 task subagent-driven, mỗi task review riêng + final whole-branch review (fable): A1 tắt GP khi budget cạn (callback `on_gp_budget_exhausted`); A2 lọc degenerate/họ-đóng TRƯỚC backtest trong GPEngine; A3 eval_cache canonical_hash (fix Critical final-review: entry gọn `(daily_pnl, metrics)` — KHÔNG giữ weights ~10-15MB/entry, `_persist` hết recompute metrics); A4 max_empty_retries 8→2; B1 reseed epoch tự động (seed+10k, xoay `field_groups` theo dataset, GIỮ họ đóng/avoid-list; batch rỗng ngay-sau-reseed → dừng thật; `max_gp_sims` nay là ngân sách MỖI-EPOCH — user duyệt ở spec); B2 two-stage dataset sampling trong `_random_leaf`; C1 ProcessPoolExecutor phần backtest thuần (`src/gp/parallel_eval.py`, kết quả về QUA eval_cache, `n_jobs` default 1 CHƯA nối CLI); C2 parity test song song ≡ tuần tự (pop10×2 thế hệ, bit-exact).
+- **Decisions:** (1) Tốc độ KHÔNG đánh đổi chất lượng — mọi tối ưu bất biến kết quả hoặc tăng chất lượng, chốt bằng parity test. (2) Reseed giữ họ đóng (không mở lại pv_reversal). (3) Worker dùng `_CTX` registry tường minh thay default_registry ngầm (chặn lệch song song/tuần tự). (4) Hai tầng reseed (main.py `_run_reseed_until_quota` ngoài + B1 trong) đã xác minh không vòng lặp vô hạn — QuotaExhausted vẫn chặn quota thật.
+- **In progress:** không.
+- **Blockers / open risks:** ⚠️ B1-xoay-dataset/B2 hiện INERT production: `all_seed_cores` 82 seed ≥ pop 30 → init_population toàn seed không filler; panel live 6 field PV → `field_groups=None`. Bất biến đúng, không hại — nhưng lợi ích chỉ kích hoạt khi panel có field alt-data + có chỗ filler. Follow-up sau merge: tỉ lệ filler/pop + truyền field_groups vào mutation; trần max_epochs; nối n_jobs CLI kèm close()+BrokenProcessPool guard.
+- **Next step:** USER chạy menu 5 nghiệm thu live: (1) batch sau khi gp_budget cạn < 30 giây (trước 3–14 phút); (2) log `🔄 Epoch #1: reseed` khi cạn ý tưởng; (3) RAM ổn định phiên dài; (4) đừng kỳ vọng thấy xoay dataset (inert, xem trên). Local repo ahead origin/main 59 commit — chưa push (chờ user).
+- **Tests:** 1534 passed (+~40 test mới) + 1 fail psycopg CÓ SẴN. Parity 2-worker thật xanh trên main sau merge.
