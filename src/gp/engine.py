@@ -14,12 +14,22 @@ A2 (2026-07-18): thêm ``src.reporting.diagnostics.classify_family`` (họ nhân
 thuần) để lọc họ-đã-đóng TRƯỚC backtest — ``diagnostics`` chỉ import ngược
 ``src.generation.frontier_seeds`` -> ``src.lang.registry``, không chạm ``src.gp``/``src.llm``
 nên không tạo vòng import.
+
+C1 (2026-07-18): ``_evaluate_population`` song song hoá PHẦN THUẦN (eval AST → backtest →
+metrics) qua ``ProcessPoolExecutor`` khi ``n_jobs > 1`` VÀ có ``executor`` truyền vào
+(``GPIdeaSource`` dựng pool MỘT LẦN, sống xuyên nhiều ``GPEngine``/batch) — xem
+``_prefetch_parallel`` + ``src/gp/parallel_eval.py`` (worker module-level, Windows spawn).
+Phần TRẠNG THÁI (gate/pool_corr/fitness/``_persist`` SQLite) LUÔN chạy tuần tự trong process
+chính THEO ĐÚNG THỨ TỰ INDEX GỐC của quần thể — pool self-corr lớn dần theo thứ tự persist
+nên xử lý lệch thứ tự sẽ đổi kết quả gate (song song ≡ tuần tự là bất biến bắt buộc, C2 sẽ
+test parity n_jobs=1 với n_jobs=2). ``n_jobs=1`` (mặc định): đường cũ nguyên vẹn, không đụng.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -35,6 +45,7 @@ from src.engine.subexpr_cache import SubexprCache
 from src.gp.fitness_vec import FitnessVector, from_metrics
 from src.gp.individual import Individual
 from src.gp.init import init_population
+from src.gp.parallel_eval import eval_thuan
 from src.gp.seeds import all_seed_cores
 from src.gp.selection import nsga2_select
 from src.gp.variation import (
@@ -59,6 +70,13 @@ from src.lang.visitors import (
 # engine.py không import src.llm).
 from src.reporting.diagnostics import classify_family
 from src.storage.repository import MiniBrainRepository
+
+if TYPE_CHECKING:
+    # C1: chỉ dùng cho type hint tham số ``executor`` — ``from __future__ import
+    # annotations`` (trên) khiến annotation không evaluate lúc runtime, nên import này
+    # không bắt buộc phải chạy thật (tránh engine.py phải kéo concurrent.futures ở mọi
+    # đường n_jobs=1, đúng yêu cầu "đường cũ nguyên vẹn, không import concurrent.futures").
+    from concurrent.futures import ProcessPoolExecutor
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +120,7 @@ class GPEngine:
         data_window: str = "default",
         with_llm_seeds: bool = False,
         n_jobs: int = 1,
+        executor: "ProcessPoolExecutor | None" = None,
         saturated_families: "frozenset[str] | set[str]" = frozenset(),
         eval_cache: "dict[str, tuple] | None" = None,
         fields_override: "tuple[str, ...] | None" = None,
@@ -121,6 +140,14 @@ class GPEngine:
         self.data_window = data_window
         self.with_llm_seeds = with_llm_seeds
         self.n_jobs = n_jobs
+        # C1: pool process CHIA SẺ do GPIdeaSource dựng MỘT LẦN (không tạo/hủy pool mỗi
+        # GPEngine — tốn kém). None = không song song hoá (n_jobs=1 mặc định, hoặc caller
+        # chưa nối executor) -> _evaluate_population đi đường tuần tự NGUYÊN VẸN như trước
+        # C1, không import concurrent.futures ở engine.py. LƯU Ý: song song CHỈ có hiệu lực
+        # khi caller CŨNG truyền ``eval_cache`` (dict thật, không None) — đó là kênh DUY NHẤT
+        # đưa kết quả worker về (xem _prefetch_parallel); executor+n_jobs>1 mà eval_cache=None
+        # vẫn ĐÚNG (đường tuần tự tự lo) nhưng KHÔNG tăng tốc.
+        self.executor = executor
         # A2: họ nhân tố ClosedLoop đã đóng (0 pass sau max_per_family) — cá thể thuộc họ này
         # bị chặn TRƯỚC backtest trong _evaluate_population (xem gate A2 ở đó).
         self.saturated_families = frozenset(saturated_families)
@@ -290,11 +317,65 @@ class GPEngine:
         if status == "passed" and bt is not None:
             self.repo.save_pool_pnl(eval_id, self.data.dates, bt.daily_pnl)
 
+    def _prefetch_parallel(self, population: list[Individual]) -> None:
+        """C1: chạy PHẦN THUẦN (eval AST → danh mục → backtest → metrics) SONG SONG qua
+        ``self.executor`` cho các cá thể sẽ được backtest, rồi ghi thẳng kết quả vào
+        ``self.eval_cache`` — CÙNG ĐỊNH DẠNG ``eval_thuan`` trả về, đúng những gì
+        ``_evaluate_individual`` đọc ở đầu hàm (``("ok", bt, metrics) | ("error",
+        reasons)``). Nhờ vậy vòng lặp TUẦN TỰ THEO INDEX GỐC bên dưới (không đổi so với
+        trước C1) tự động HIT cache thay vì backtest lại trong process chính — không cần
+        đường code riêng cho gate/pool_corr/fitness/persist song song.
+
+        Lọc TRƯỚC khi submit lặp lại đúng điều kiện A2 (``check_meaningful`` + họ-đã-đóng)
+        của vòng lặp tuần tự bên dưới — cá thể bị A2 chặn KHÔNG được submit (không tốn worker
+        cho cá thể sẽ bị vứt trước backtest); vòng tuần tự tính lại A2 (rẻ, thuần, không
+        side-effect) để tự persist reasons — không trùng lặp logic, chỉ trùng lặp một phép
+        tính rẻ.
+
+        CHỈ chạy khi có ``self.eval_cache``: đây là kênh DUY NHẤT chuyển kết quả từ process
+        con về vòng lặp tuần tự (không có SQLite/IPC nào khác ở tầng này) — ``eval_cache=None``
+        thì bỏ qua hoàn toàn (không submit gì), vòng tuần tự phía sau tự lo — vẫn ĐÚNG (chỉ
+        không tăng tốc, không phá kết quả)."""
+        if self.eval_cache is None:
+            return
+        to_submit: dict[str, str] = {}  # canonical_hash -> expr_string, dedup trong 1 lô
+        for ind in population:
+            if ind.fitness is not None:
+                continue
+            ok, _ly_do = check_meaningful(ind.expr, self.registry)
+            ho: str | None = None
+            if ok:
+                expr_str = ind.expr.accept(Serializer())
+                ho = classify_family(expr_str)
+                if ho not in self.saturated_families:
+                    ho = None
+            if not ok or ho is not None:
+                continue  # A2 chặn — không backtest, vòng tuần tự phía sau tự persist
+            ch = ind.expr.accept(CanonicalHasher())
+            if ch in self.eval_cache or ch in to_submit:
+                continue  # đã có sẵn trong cache (A3) hoặc đã đưa vào lô nộp lần này
+            to_submit[ch] = ind.expr.accept(Serializer())
+        if not to_submit:
+            return
+        futures = {
+            ch: self.executor.submit(eval_thuan, expr) for ch, expr in to_submit.items()  # type: ignore[union-attr]
+        }
+        for ch, fut in futures.items():
+            self.eval_cache[ch] = fut.result()
+
     def _evaluate_population(
         self, population: list[Individual], pool_corr: PoolCorrelation,
     ) -> tuple[int, int]:
         """Đánh giá + persist mọi cá thể CHƯA có fitness. Trả ``(n_evaluated, n_passed)``.
-        Cá thể đã eval ở thế hệ trước (fitness != None, được NSGA-II giữ lại) bỏ qua."""
+        Cá thể đã eval ở thế hệ trước (fitness != None, được NSGA-II giữ lại) bỏ qua.
+
+        C1: khi ``self.n_jobs > 1`` và có ``self.executor``, phần THUẦN (eval/backtest/
+        metrics) của các cá thể MISS cache được tính SONG SONG trước (``_prefetch_parallel``,
+        ghi kết quả vào ``eval_cache``) — vòng lặp bên dưới sau đó CHẠY Y HỆT đường tuần tự
+        (index gốc), chỉ khác là phần lớn cá thể đã HIT cache nên bỏ qua backtest lặp lại.
+        ``n_jobs=1`` (mặc định) hoặc không có executor: bỏ qua bước này, đường cũ nguyên vẹn."""
+        if self.n_jobs > 1 and self.executor is not None:
+            self._prefetch_parallel(population)
         n_evaluated = 0
         n_passed = 0
         for ind in population:

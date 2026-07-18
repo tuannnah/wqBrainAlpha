@@ -4,6 +4,8 @@ engine ổn định (không quá nhiều status 'error')."""
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -11,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 import src.operators_local  # noqa: F401  (side-effect: nạp 27 operator vào registry)
 from src.backtest.config import Neutralization, PortfolioConfig
 from src.gp.engine import GPEngine, GPRunResult
+from src.gp.parallel_eval import khoi_tao_worker
 from src.lang.registry import default_registry
 from src.storage.db import init_db
 from src.storage.models import EvaluationModel, ExpressionModel
@@ -81,3 +84,58 @@ def test_gp_engine_run_zero_gen_evaluates_initial_population(  # noqa: ANN001
     finally:
         session.close()
     assert n_eval >= 1
+
+
+def test_gp_engine_song_song_giong_het_tuan_tu(small_panel, repo) -> None:  # noqa: ANN001
+    """C1: n_jobs=2 (ProcessPoolExecutor thật, 2 worker) phải cho kết quả GIỐNG HỆT n_jobs=1
+    -- cùng tập canonical_hash trong quần thể cuối, cùng n_evaluated/n_passed, cùng fitness
+    (sharpe_deflated) cho mỗi cá thể. Ràng buộc bắt buộc của C1 (C2 sẽ test parity chính
+    thức rộng hơn): xử lý kết quả THEO INDEX GỐC ở process chính (gate/pool_corr/fitness/
+    persist tuần tự) phải làm quần thể song song tiến hoá HỆT quần thể tuần tự."""
+    cfg = PortfolioConfig(
+        neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+        scale_book=1.0, delay=1,
+    )
+    registry = default_registry()
+
+    repo_seq = repo
+    engine = create_engine("sqlite:///:memory:", future=True)
+    init_db(engine)
+    repo_par = MiniBrainRepository(sessionmaker(bind=engine, future=True, expire_on_commit=False))
+
+    eng_seq = GPEngine(
+        data=small_panel, repo=repo_seq, config=cfg, registry=registry,
+        pop_size=6, n_generations=1, seed=99, n_jobs=1,
+    )
+    result_seq = eng_seq.run()
+
+    executor = ProcessPoolExecutor(
+        max_workers=2, initializer=khoi_tao_worker, initargs=(small_panel, cfg, registry),
+    )
+    try:
+        eng_par = GPEngine(
+            data=small_panel, repo=repo_par, config=cfg, registry=registry,
+            pop_size=6, n_generations=1, seed=99, n_jobs=2, executor=executor,
+            eval_cache={},
+        )
+        result_par = eng_par.run()
+    finally:
+        executor.shutdown(wait=True)
+
+    assert result_seq.n_evaluated == result_par.n_evaluated
+    assert result_seq.n_passed == result_par.n_passed
+
+    hashes_seq = sorted(i.canonical_hash() for i in result_seq.final_population)
+    hashes_par = sorted(i.canonical_hash() for i in result_par.final_population)
+    assert hashes_seq == hashes_par
+
+    fit_seq = {
+        i.canonical_hash(): i.fitness for i in result_seq.final_population if i.fitness
+    }
+    fit_par = {
+        i.canonical_hash(): i.fitness for i in result_par.final_population if i.fitness
+    }
+    assert fit_seq.keys() == fit_par.keys()
+    for h in fit_seq:
+        assert fit_seq[h].sharpe_deflated == pytest.approx(fit_par[h].sharpe_deflated)
+        assert fit_seq[h].pool_corr_penalty == pytest.approx(fit_par[h].pool_corr_penalty)

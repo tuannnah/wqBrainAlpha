@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
+    from concurrent.futures import ProcessPoolExecutor
+
     from src.pipeline.closed_loop import ClosedLoop
 
 from loguru import logger
@@ -35,6 +37,7 @@ from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
 from src.generation.hypothesis_seeds import HYPOTHESIS_CORES
 from src.generation.combiner import SubSignal
 from src.gp.engine import GPEngine
+from src.gp.parallel_eval import khoi_tao_worker
 from src.lang.ast import Call, Constant
 from src.lang.parser import parse
 from src.lang.registry import default_registry
@@ -869,6 +872,7 @@ class GPIdeaSource:
         pop_size: int = 30, n_generations: int = 3, base_seed: int = 42,
         top_k: int = 10, max_corr: float = 0.70, max_empty_retries: int = 2,
         field_groups: "tuple[tuple[str, ...], ...] | None" = None,
+        n_jobs: int = 1,
     ) -> None:
         # Lưu dưới Any để forward vào GPEngine/generate_many mà không cần cast cứng
         self._data: Any = data
@@ -882,6 +886,21 @@ class GPIdeaSource:
         self.max_corr = max_corr
         self.max_empty_retries = max_empty_retries
         self._batch = 0
+        # C1: song song hoá backtest thuần — n_jobs=1 (mặc định) KHÔNG tạo pool, GPEngine đi
+        # đường tuần tự y hệt trước C1 (CLI/menu nối n_jobs thật ở task sau, ngoài phạm vi
+        # C1). n_jobs>1: dựng ProcessPoolExecutor MỘT LẦN ở đây, sống xuyên suốt mọi batch/
+        # GPEngine của phiên (không tạo/hủy pool mỗi batch — khởi động worker process tốn
+        # thời gian). initializer nạp data/config/registry MỘT LẦN mỗi worker (không pickle
+        # lại mỗi task, xem khoi_tao_worker).
+        self.n_jobs = n_jobs
+        self._executor: "ProcessPoolExecutor | None" = None
+        if n_jobs > 1:
+            from concurrent.futures import ProcessPoolExecutor as _ProcessPoolExecutor
+
+            self._executor = _ProcessPoolExecutor(
+                max_workers=n_jobs, initializer=khoi_tao_worker,
+                initargs=(data, config, registry),
+            )
         # B1: nhóm field theo dataset (dataset ÍT field trước — proxy "ít dùng"), để xoay
         # sang nhóm khác mỗi epoch reseed (xem reseed_epoch/_run_one_batch bên dưới). None =
         # không xoay (dùng toàn bộ field mọi epoch, tương thích ngược).
@@ -899,6 +918,13 @@ class GPIdeaSource:
         # mọi GPEngine dựng ở _run_one_batch -> biểu thức trùng giữa các seed/batch không bị
         # backtest lại từ đầu. Cap 5000 entry tránh phình bộ nhớ vô hạn trong phiên dài.
         self._eval_cache: "dict[str, tuple]" = {}
+
+    def close(self) -> None:
+        """C1: đóng pool process (nếu có) — gọi khi phiên ClosedLoop kết thúc. An toàn gọi
+        nhiều lần / khi n_jobs=1 (không có pool để đóng, no-op)."""
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = None
 
     def set_saturated_families(self, fams: "set[str] | frozenset[str]") -> None:
         """Nhận tập họ vừa đóng (ClosedLoop truyền TOÀN BỘ closed_families mỗi lần, tích luỹ
@@ -949,6 +975,10 @@ class GPIdeaSource:
             saturated_families=self._saturated,
             # A3: cache backtest thuần CHIA SẺ xuyên mọi GPEngine dựng trong phiên này.
             eval_cache=self._eval_cache,
+            # C1: pool process CHIA SẺ (nếu n_jobs>1) — mọi GPEngine của phiên dùng CHUNG một
+            # executor sống xuyên batch (không tạo/hủy pool mỗi batch).
+            n_jobs=self.n_jobs,
+            executor=self._executor,
             # B1: nhóm field ưu tiên của epoch hiện tại (None = toàn bộ field, epoch 0 hoặc
             # không có field_groups).
             fields_override=fields_override,
