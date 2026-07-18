@@ -506,7 +506,7 @@ Thay TẤT CẢ lời gọi `_make_client()` còn lại trong `main.py` (ở `lo
 `_portfolio_config_from_opts(...)` → `cli_common._portfolio_config_from_opts(...)`.
 
 (Đây là bước tạm thời — các lời gọi này sẽ tự nhiên "chuyển nhà" cùng hàm cha ở các task
-B2–B13 kế tiếp; sửa ở đây chỉ để `main.py` không vỡ ngay bây giờ.)
+6–17 kế tiếp; sửa ở đây chỉ để `main.py` không vỡ ngay bây giờ.)
 
 - [ ] **Step 6: Chạy toàn bộ test suite**
 
