@@ -10,8 +10,8 @@ from rich.table import Table
 from config.settings import settings
 from src.storage.db import init_db, make_engine, make_session_factory
 from src.llm.marathon import MarathonReport, run_marathon
-from src.app.cli import common as cli_common
-from src.app.cli import llm as cli_llm
+from src.app.cli.common import _cached_symbols, _local_operator_arity, _make_client
+from src.app.cli.llm import _make_llm_generator
 from src.app.cli.research import _make_research_loop, resolve_direction
 
 console = Console()
@@ -39,13 +39,13 @@ def _marathon_direction_provider(session_factory):
     from src.simulation.pre_filter import PreFilter
 
     def _provider():
-        f, o, ft, mo, oa = cli_common._cached_symbols(session_factory)
+        f, o, ft, mo, oa = _cached_symbols(session_factory)
         pf = PreFilter(
             known_operators=o or None, known_fields=set(f) or None,
             field_types=ft, matrix_only_ops=mo, operator_arity=oa,
-            local_arity=cli_common._local_operator_arity(),
+            local_arity=_local_operator_arity(),
         )
-        ideas = cli_llm._make_llm_generator(session_factory, pf).generate_ideas(1)
+        ideas = _make_llm_generator(session_factory, pf).generate_ideas(1)
         direction = resolve_direction("", lambda: ideas)[0]
         console.print(f"\n[cyan]Hướng mới:[/cyan] {direction}")
         return direction
@@ -118,10 +118,10 @@ def marathon(
     _setup_logging()
     engine = init_db(make_engine())
     session_factory = make_session_factory(engine)
-    if not cli_common._cached_symbols(session_factory)[0]:
+    if not _cached_symbols(session_factory)[0]:
         console.print("[red]Chưa có fields — chạy fetch-fields trước.[/red]")
         raise typer.Exit(code=1)
-    client = cli_common._make_client()
+    client = _make_client()
     client.authenticate()
     _run_marathon_session(
         session_factory, client, region, universe, delay,

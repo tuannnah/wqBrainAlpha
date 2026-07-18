@@ -49,9 +49,9 @@ def test_marathon_wiring(monkeypatch):
     monkeypatch.setattr(main, "init_db", lambda e: e)
     monkeypatch.setattr(main, "make_engine", lambda: None)
     monkeypatch.setattr(main, "make_session_factory", lambda e: (lambda: None))
-    monkeypatch.setattr(main.cli_common, "_cached_symbols",
+    monkeypatch.setattr(main, "_cached_symbols",
                         lambda sf: (["close"], {"rank"}, {"close": "MATRIX"}, {"rank"}, {"rank": 1}))
-    monkeypatch.setattr(main.cli_common, "_make_client", lambda: _FakeClient())
+    monkeypatch.setattr(main, "_make_client", lambda: _FakeClient())
     monkeypatch.setattr(main, "_make_research_loop", _fake_builder)
     monkeypatch.setattr(main, "run_marathon", _fake_run_marathon)
 
