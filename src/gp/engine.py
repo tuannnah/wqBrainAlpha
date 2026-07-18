@@ -137,6 +137,11 @@ class GPEngine:
           bt + fitness để cá thể còn tham gia chọn lọc, không bị loại khỏi quần thể).
         - Pass mọi hard gate → ``'passed'``.
 
+        NGOẠI LỆ (A2): hàm này KHÔNG được gọi cho cá thể vô nghĩa/thuộc họ-đã-đóng — nhánh đó
+        bị ``_evaluate_population`` chặn TRƯỚC khi tới đây, tự persist status ``'failed_gate'``
+        riêng với ``bt=None``, ``fitness=None`` (KHÔNG có backtest, KHÔNG tham gia chọn lọc) —
+        khác hẳn ``'failed_gate'`` sinh RA TỪ HÀM NÀY (luôn có bt + fitness như mô tả trên).
+
         Lưu ý: ``Evaluator`` hiện gói lỗi parse-time vào exception runtime nên không có nhánh
         ``'invalid'`` riêng ở đây; ``'invalid'`` để dành cho cây sai cấu trúc registry (nếu
         tầng eval phân biệt sau này). ``SubexprCache`` tạo MỚI mỗi cá thể — tránh chia sẻ
@@ -205,7 +210,12 @@ class GPEngine:
         """Upsert expression + ``record_evaluation`` (mọi outcome: pass/fail/seed — B11
         avoid-list) + ``save_pool_pnl`` khi pass. ``metrics`` tái lập từ ``bt`` cho trạng
         thái ``passed``/``failed_gate`` (gate đã chạy nên backtest hợp lệ); ``invalid``/
-        ``error`` -> ``metrics=None`` (cột metric DB để trống)."""
+        ``error`` -> ``metrics=None`` (cột metric DB để trống).
+
+        NGOẠI LỆ (A2): cá thể vô nghĩa/thuộc họ-đã-đóng cũng persist status ``'failed_gate'``
+        nhưng gọi ``_persist`` với ``bt=None`` (chưa từng backtest, bị chặn TRƯỚC bước đó ở
+        ``_evaluate_population``) — nhánh ``if bt is not None and status in {...}`` bên dưới
+        tự nhiên rơi vào ``metrics_for_db=None`` cho trường hợp này, KHÔNG phải lỗi."""
         expr_string = ind.expr.accept(Serializer())
         canonical_hash = ind.expr.accept(CanonicalHasher())
         depth = ind.expr.accept(DepthVisitor())
