@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import Mock
 
-from main import prompt_credentials
+from src.app.cli.auth import prompt_credentials
 
 
 def test_prompt_credentials_yeu_cau_nhap_lai_khi_rong():

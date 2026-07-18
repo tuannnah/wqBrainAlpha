@@ -32,8 +32,10 @@ from src.storage.migrate import migrate_all, _same_database
 from src.storage.repository import AlphaRepository, InvalidFieldRepository
 from src.llm.marathon import MarathonReport, run_marathon
 from src.app.cli import common as cli_common
+from src.app.cli import auth as cli_auth
 
 app = typer.Typer(help="WorldQuant Brain Auto-Alpha Tool")
+app.command()(cli_auth.login)
 console = Console()
 
 LOG_DIR = Path("logs")
@@ -48,33 +50,6 @@ def _setup_logging() -> None:
         return
     LOG_DIR.mkdir(exist_ok=True)
     logger.add(LOG_DIR / "wq_alpha_{time:YYYY-MM-DD}.log", rotation="10 MB", retention="14 days")
-
-
-def prompt_credentials(input_func=input, password_func=None):
-    """Nhập email/mật khẩu trực tiếp trong console (mật khẩu ẩn)."""
-    import getpass
-
-    password_func = password_func or getpass.getpass
-    while True:
-        email = input_func("\nEmail WorldQuant BRAIN: ").strip()
-        password = password_func("Mật khẩu (ẩn): ")
-        if email and password:
-            return email, password
-        console.print("[red]❌ Email và mật khẩu không được để trống[/red]")
-
-
-@app.command()
-def login(force: bool = typer.Option(False, help="Đăng nhập lại dù session còn hạn")) -> None:
-    """Đăng nhập (dùng session cũ nếu còn hạn)."""
-    _setup_logging()
-    from src.storage.db import write_active_account
-
-    client = cli_common._make_client()
-    client.authenticate(force=force)
-    # Ghi email tài khoản -> các lệnh sau chọn đúng DB theo email (mỗi tài khoản 1 DB).
-    if client.email:
-        write_active_account(client.email)
-    console.print("[green]OK[/green]")
 
 
 @app.command("migrate-sqlite")

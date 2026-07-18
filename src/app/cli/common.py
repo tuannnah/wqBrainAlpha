@@ -21,9 +21,11 @@ def _make_client() -> WQBrainClient:
     email = settings.wq_email
     password = settings.wq_password
     if not email or not password:
-        # Nhập trễ: prompt_credentials tạm thời vẫn còn ở main.py (chuyển hẳn sang
-        # src/app/cli/auth.py ở Task 6) — import trễ để tránh vòng import main<->common.
-        from main import prompt_credentials
+        # Nhập trễ: prompt_credentials nằm ở src/app/cli/auth.py, module đó lại import
+        # _make_client từ common.py này ở đầu file -> nếu đưa import này lên đầu module
+        # sẽ tạo vòng import module-level auth<->common. Import trễ trong thân hàm tránh
+        # vòng lặp vì chỉ chạy khi hàm thực sự được gọi, lúc đó cả 2 module đã nạp xong.
+        from src.app.cli.auth import prompt_credentials
 
         email, password = prompt_credentials()
     return WQBrainClient(email, password)
