@@ -236,14 +236,21 @@ def test_select_power_pool_fallback_description_tu_bang_submissions():
 
 
 def test_submit_power_pool_thieu_hypothesis_khong_nop_va_neu_ro_ly_do():
-    """Không có hypothesis -> không dựng được mô tả Idea/Rationale (bắt buộc theo docs) ->
-    KHÔNG nộp, skip_reason nêu rõ; không âm thầm nộp alpha thiếu mô tả."""
+    """Không có hypothesis VÀ field ngoài kho frontier (không có hypothesis category để
+    fallback) -> không dựng được mô tả Idea/Rationale (bắt buộc theo docs) -> KHÔNG nộp,
+    skip_reason nêu rõ; không âm thầm nộp alpha thiếu mô tả."""
     engine = init_db(_engine())
     sf = make_session_factory(engine)
+    # Field KHÔNG thuộc FRONTIER_CATEGORY_BY_FIELD và dataset không bị theme loại trừ.
+    expr = "multiply(-1, ts_delta(some_niche_field, 22))"
     session = sf()
     try:
         _seed_fields(session)
-        _add_sim(session, "a1", "PP1", PP_EXPR, 1.71, 0.61, ["LOW_FITNESS"], hypothesis=None)
+        session.add(DataFieldModel(
+            id="some_niche_field", region="USA", universe="TOP1000", delay=1,
+            dataset_id="niche42",
+        ))
+        _add_sim(session, "a1", "PP1", expr, 1.71, 0.61, ["LOW_FITNESS"], hypothesis=None)
         session.commit()
     finally:
         session.close()
@@ -257,3 +264,29 @@ def test_submit_power_pool_thieu_hypothesis_khong_nop_va_neu_ro_ly_do():
     assert result is None
     assert "mô tả" in cand.skip_reason
     assert client.calls == []
+
+
+def test_select_power_pool_fallback_mo_ta_tu_frontier_hypothesis():
+    """Alpha dùng field frontier nhưng hypothesis rỗng '{}' (thực tế DB 2026-07-18:
+    LLdLVX0a — mọi alpha đường sim-thẳng/near-miss đều '{}') -> tự dựng mô tả từ
+    FRONTIER_HYPOTHESES của category, hết skip oan "thiếu mô tả"."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    expr = "ts_rank(multiply(-1, ts_mean(firm_vol_imbalance, 5)), 66)"
+    session = sf()
+    try:
+        _seed_fields(session)
+        session.add(DataFieldModel(
+            id="firm_vol_imbalance", region="USA", universe="TOP1000", delay=1,
+            dataset_id="order_flow_imb",
+        ))
+        _add_sim(session, "a1", "OFI1", expr, 1.08, 0.33, [], hypothesis="{}")
+        session.commit()
+    finally:
+        session.close()
+
+    cands = _mgr(sf).select_power_pool_candidates(on_date=ON_DATE, calendar=CALENDAR)
+    assert len(cands) == 1
+    assert cands[0].description is not None
+    assert cands[0].description.startswith("Idea: ")
+    assert cands[0].skip_reason == ""

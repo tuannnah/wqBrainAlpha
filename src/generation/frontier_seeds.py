@@ -308,3 +308,138 @@ def frontier_pp_choice(expr: str, registry=None) -> "str | None":
     if not cats:
         return None
     return _PP_BY_CATEGORY.get(cats[0], "STATISTICAL")
+
+
+# =========================== Hypothesis cấu trúc theo category =========================
+# Hypothesis 4 phần vốn ghi ở COMMENT từng nhóm core phía trên — dạng đó con người đọc
+# được nhưng selector Power Pool không dựng được mô tả Idea/Rationale (bắt buộc >=100 ký
+# tự khi nộp pure PP). Bằng chứng 2026-07-18: LLdLVX0a (Sharpe 1.08, khớp theme) bị skip
+# "thiếu mô tả" vì alphas.hypothesis = '{}' trên MỌI alpha đường sim-thẳng/near-miss.
+# Nội dung TIẾNG ANH vì mô tả được PATCH thẳng lên Brain khi nộp. Ánh xạ vào mẫu
+# build_power_pool_description: observation+background -> "Idea", implementation_spec ->
+# "Rationale for data used", economic_rationale -> "Rationale for operators used".
+# Hướng (dấu) viết TRUNG TÍNH vì core trong 1 category có thể follow hoặc fade.
+from src.llm.hypothesis import Hypothesis  # noqa: E402 - sau registry để tránh vòng import
+
+FRONTIER_HYPOTHESES: dict[str, Hypothesis] = {
+    "insider": Hypothesis(
+        observation="Corporate insiders buying with their own money is a strong information"
+        " signal, while insider selling is often mere diversification (Lakonishok-Lee 2001).",
+        background="Insiders hold private information about firm prospects; open-market net"
+        " buying reveals conviction that is incorporated into prices only gradually.",
+        economic_rationale="Sparse event-based insider fields are ts_backfill-ed (66d) so the"
+        " latest filing keeps informing the signal between events; differencing buy versus"
+        " sell activity isolates the direction of insider conviction.",
+        implementation_spec="insider_trx_matrix transaction counts and USD signal values"
+        " (total/top buy and sell counts, signal value tiers) aggregated as buy-minus-sell"
+        " differences over a 66-day backfill window.",
+    ),
+    "call_filing": Hypothesis(
+        observation="The tone of unscripted earnings-call answers and of 10-K/10-Q filings"
+        " predicts returns: lying is costly when pressed by analysts (Larcker-Zakolyukina)"
+        " and investors underreact to long documents (Loughran-McDonald).",
+        background="Textual tone diffuses slowly into prices because processing long"
+        " disclosures is costly; Q&A answers are harder to stage than prepared remarks.",
+        economic_rationale="Positive-minus-negative chunk counts normalized by total chunks"
+        " (+1 to avoid division by zero) build a bounded tone ratio; ts_backfill keeps the"
+        " quarterly signal alive between calls or filings.",
+        implementation_spec="earningscall_sentiment Q&A/summary/presentation chunk counts,"
+        " insiders3 8-K/10-Q tone scores and filing_sentiment term counts, backfilled 66"
+        " days to bridge quarterly reporting gaps.",
+    ),
+    "attention": Hypothesis(
+        observation="Spikes in Google search interest for a company mark bursts of retail"
+        " attention (Da-Engelberg-Gao, 'In Search of Attention').",
+        background="Retail investors predominantly buy stocks that catch their attention,"
+        " creating short-horizon price pressure that subsequently mean-reverts; persistently"
+        " high attention marks overpricing.",
+        economic_rationale="Ratios and differences of short versus long search-interest"
+        " windows isolate attention SHOCKS from the attention level; ts_rank bounds the"
+        " signal against extreme spikes.",
+        implementation_spec="stock_search_trends corporate-name search interest over"
+        " today/7d/28d/84d windows plus the search_interest normalized relative-interest"
+        " score (vector field averaged via vec_avg).",
+    ),
+    "option_flow": Hypothesis(
+        observation="Signed option volume split by account type (customer=retail,"
+        " firm/professional=informed, broker-dealer=liquidity provider) carries distinct"
+        " information about future stock returns (Pan-Poteshman 2006).",
+        background="Informed traders prefer options for leverage; retail flow is"
+        " systematically biased, and flow absorbed by liquidity providers marks short-term"
+        " extremes that revert. Option-implied expected-move asymmetry carries the same"
+        " forward-looking information (Bali-Cakici-Whitelaw lottery preference).",
+        economic_rationale="ts_mean over one week smooths daily imbalance noise; rank or"
+        " ts_rank converts flow into a bounded cross-sectional or temporal signal, and sign"
+        " selection follows informed flow while fading retail/dealer-absorbed flow.",
+        implementation_spec="order_flow_imb account-type volume imbalances"
+        " (customer/firm/pro/broker-dealer) and expected_move upward-versus-downward"
+        " lognormal move percentages and straddle-implied moves.",
+    ),
+    "microstructure": Hypothesis(
+        observation="Order imbalance left unabsorbed at the closing auction (as %ADV)"
+        " carries over into subsequent sessions.",
+        background="Residual auction demand or supply cannot be fully absorbed at the"
+        " close, so the imbalance predicts short-horizon drift in the same direction.",
+        economic_rationale="vec_avg aggregates the auction imbalance vector into one daily"
+        " cross-sectional value; ts_delta captures fresh imbalance shocks rather than the"
+        " standing level.",
+        implementation_spec="order_book_imbalance auction_order_imbalance_pct_adv, the"
+        " closing-auction order imbalance normalized by average daily volume.",
+    ),
+    "ownership": Hypothesis(
+        observation="Rising institutional ownership breadth predicts returns"
+        " (Chen-Hong-Stein 2002), while very crowded institutional positions are prone to"
+        " synchronized unwinds.",
+        background="Breadth expansion reveals accumulating informed demand; crowding"
+        " concentration raises fire-sale risk when funds de-lever together.",
+        economic_rationale="Quarterly 13F fields are ts_backfill-ed (66d) to stay defined"
+        " between filings; ts_delta captures ownership changes and ts_rank fades the most"
+        " crowded names on a bounded scale.",
+        implementation_spec="institutions18 holder counts, current-versus-prior holdings"
+        " and percent-held from quarterly 13F filings, backfilled 66 days.",
+    ),
+    "fund_panel": Hypothesis(
+        observation="A daily panel of fund holdings shows concentration (Herfindahl,"
+        " crowding scores) and account-breadth changes in near real time.",
+        background="High holding concentration means a few funds dominate the register and"
+        " can trigger correlated unwinds; growing account breadth signals fresh inflows.",
+        economic_rationale="vec_avg reduces per-fund vectors to one daily value; fading"
+        " concentration (multiply -1, ts_rank) and following breadth growth (ts_delta)"
+        " express the two mechanisms on a bounded scale.",
+        implementation_spec="fund_holdings_panel daily holding-value distribution score,"
+        " Herfindahl index of holdings, total holder accounts and top-weighted account"
+        " numbers (vector fields).",
+    ),
+    "short_period": Hypothesis(
+        observation="Published short interest arrives bi-weekly; model-predicted changes"
+        " and surprises versus prediction lead the published number.",
+        background="Short sellers are informed traders (Boehmer-Jones-Zhang): predicted"
+        " short-interest builds and positive surprises precede underperformance.",
+        economic_rationale="ts_backfill(22) bridges the bi-weekly reporting cycle;"
+        " differencing surprise versus prior surprise isolates NEW short-pressure"
+        " information, and multiply(-1) takes the side against rising short pressure.",
+        implementation_spec="short_interest_pred predicted change, surprise ratio, prior"
+        " surprise ratio and surprise amount around the bi-weekly short-interest cycle.",
+    ),
+    "short_daily": Hypothesis(
+        observation="The daily fraction of trading volume executed as short sales (Reg SHO"
+        " data) measures short-side pressure at daily frequency (Diether-Lee-Werner).",
+        background="Daily short-sale ratios reveal informed short pressure much faster than"
+        " bi-weekly short interest; rising ratios precede underperformance.",
+        economic_rationale="Normalizing short volume by total volume (+1 to avoid division"
+        " by zero) makes the pressure comparable across stocks; ts_sum/ts_delta windows"
+        " capture pressure build-up versus its change.",
+        implementation_spec="us_short_sale executed and reported short-sale share counts"
+        " against aggregate/total trade share quantities, over 5-day sums or 22-day"
+        " changes.",
+    ),
+}
+
+
+def frontier_hypothesis(expr: str, registry=None) -> "Hypothesis | None":
+    """Hypothesis cấu trúc của category frontier chứa field trong expr (ưu tiên theo thứ
+    tự _NEUT_BY_CATEGORY như frontier_neutralization); None nếu expr không dùng field
+    frontier. Nguồn dữ liệu cho selector Power Pool dựng mô tả khi alpha thiếu hypothesis
+    riêng (đường sim-thẳng/near-miss ghi '{}')."""
+    cats = _frontier_categories(expr, registry)
+    return FRONTIER_HYPOTHESES.get(cats[0]) if cats else None

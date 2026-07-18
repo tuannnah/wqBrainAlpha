@@ -212,7 +212,7 @@ def select_power_pool_candidates(
                 except (ValueError, TypeError):
                     description = None
             if description is None:
-                # Fallback: description đã set trước đó qua set_properties (bảng
+                # Fallback 1: description đã set trước đó qua set_properties (bảng
                 # submissions.regular_desc — trường hợp KP92dQAx 2026-07-15 viết tay
                 # qua API) — không skip oan alpha thiếu hypothesis nhưng đã có mô tả.
                 prev = (
@@ -224,6 +224,21 @@ def select_power_pool_candidates(
                 )
                 if prev and prev[0] and is_valid_power_pool_description(prev[0]):
                     description = prev[0]
+            if description is None:
+                # Fallback 2: alpha dùng field frontier -> hypothesis cấu trúc mức
+                # CATEGORY (frontier_seeds.FRONTIER_HYPOTHESES). Đường sim-thẳng/
+                # near-miss ghi alphas.hypothesis='{}' nên không có hypothesis riêng
+                # (bằng chứng 2026-07-18: LLdLVX0a khớp theme vẫn skip "thiếu mô tả").
+                try:
+                    from src.generation.frontier_seeds import frontier_hypothesis
+
+                    cat_hyp = frontier_hypothesis(alpha.expression)
+                    if cat_hyp is not None:
+                        desc = build_power_pool_description(cat_hyp)
+                        if is_valid_power_pool_description(desc):
+                            description = desc
+                except Exception:  # noqa: BLE001 - expr lạ không được làm sập selection
+                    description = None
 
             skip = ""
             if not theme_ok:
