@@ -3,7 +3,7 @@ Kiểm `_menu_counts`: đếm fields theo đúng scope (region/universe/delay) +
 
 from __future__ import annotations
 
-import main
+import src.app.menu as main
 from src.storage.db import init_db, make_engine, make_session_factory
 from src.storage.models import DataFieldModel, OperatorModel
 
