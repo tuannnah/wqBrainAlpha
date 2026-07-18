@@ -894,6 +894,9 @@ class GPIdeaSource:
             data=self._data, repo=self._repo, config=self._config, registry=self._registry,
             pop_size=self.pop_size, n_generations=self.n_generations, seed=seed,
             seed_offset=seed_offset,
+            # A2: truyền họ đã đóng xuống GPEngine -> lọc TRƯỚC backtest trong GP thay vì chỉ
+            # lọc SAU sinh ở next_batch() (defense in depth — lọc sau vẫn giữ nguyên bên dưới).
+            saturated_families=self._saturated,
         )
         pool: Any = self._repo.load_pool() or None
         # GPEngine.run() -> GPRunResult; Protocol _RunsGP đòi _GPRunResultLike với

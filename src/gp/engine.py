@@ -10,6 +10,10 @@ cùng config phải cho cùng quần thể cuối. Không dùng ``np.random`` to
 
 Dependency rule (B1): module này được phép import lang/engine/backtest/storage/operators_local
 nhưng KHÔNG import ``src.llm`` (seed LLM lấy qua ``all_seed_cores`` với dependency truyền vào).
+A2 (2026-07-18): thêm ``src.reporting.diagnostics.classify_family`` (họ nhân tố, chuỗi->chuỗi
+thuần) để lọc họ-đã-đóng TRƯỚC backtest — ``diagnostics`` chỉ import ngược
+``src.generation.frontier_seeds`` -> ``src.lang.registry``, không chạm ``src.gp``/``src.llm``
+nên không tạo vòng import.
 """
 
 from __future__ import annotations
@@ -40,6 +44,7 @@ from src.gp.variation import (
     point_mutation,
     subtree_mutation,
 )
+from src.lang.meaningfulness import check_meaningful
 from src.lang.registry import OperatorRegistry
 from src.lang.visitors import (
     CanonicalHasher,
@@ -48,6 +53,11 @@ from src.lang.visitors import (
     FieldCollector,
     Serializer,
 )
+# A2: classify_family suy họ nhân tố từ chuỗi expr (heuristic substring, không parse ngược) —
+# src.reporting.diagnostics chỉ import src.generation.frontier_seeds -> src.lang.registry,
+# KHÔNG import ngược src.gp nên import module-level ở đây không tạo vòng import (B1 vẫn giữ:
+# engine.py không import src.llm).
+from src.reporting.diagnostics import classify_family
 from src.storage.repository import MiniBrainRepository
 
 
@@ -92,6 +102,7 @@ class GPEngine:
         data_window: str = "default",
         with_llm_seeds: bool = False,
         n_jobs: int = 1,
+        saturated_families: "frozenset[str] | set[str]" = frozenset(),
     ) -> None:
         self.data = data
         self.repo = repo
@@ -107,6 +118,9 @@ class GPEngine:
         self.data_window = data_window
         self.with_llm_seeds = with_llm_seeds
         self.n_jobs = n_jobs
+        # A2: họ nhân tố ClosedLoop đã đóng (0 pass sau max_per_family) — cá thể thuộc họ này
+        # bị chặn TRƯỚC backtest trong _evaluate_population (xem gate A2 ở đó).
+        self.saturated_families = frozenset(saturated_families)
 
     def _evaluate_individual(
         self, ind: Individual, pool_corr: PoolCorrelation,
@@ -229,6 +243,21 @@ class GPEngine:
         n_passed = 0
         for ind in population:
             if ind.fitness is not None:
+                continue
+            # A2: chặn TRƯỚC backtest — cá thể vô nghĩa/họ-đóng không tốn eval, không chiếm
+            # suất NSGA-II (fitness=None -> bị loại khỏi chọn lọc), vẫn persist để avoid-list học.
+            ok, ly_do = check_meaningful(ind.expr, self.registry)
+            ho: str | None = None
+            if ok:
+                expr_str = ind.expr.accept(Serializer())
+                ho = classify_family(expr_str)
+                if ho not in self.saturated_families:
+                    ho = None  # không vi phạm
+            if not ok or ho is not None:
+                reasons = [f"degenerate: {ly_do}"] if not ok else [f"họ đã đóng: {ho}"]
+                self._persist(ind, "failed_gate", reasons, None, None)
+                ind.fitness = None
+                n_evaluated += 1
                 continue
             fv, status, reasons, bt = self._evaluate_individual(ind, pool_corr)
             self_corr: float | None = None

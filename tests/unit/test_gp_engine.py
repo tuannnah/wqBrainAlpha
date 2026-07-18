@@ -43,6 +43,31 @@ def cfg() -> PortfolioConfig:
     )
 
 
+@pytest.fixture
+def engine_fixture(small_panel, repo, cfg) -> GPEngine:  # noqa: ANN001
+    """GPEngine chuẩn (saturated_families rỗng) trên small_panel — dùng cho test A2 gate
+    degenerate TRƯỚC backtest."""
+    return GPEngine(
+        data=small_panel, repo=repo, config=cfg, registry=default_registry(),
+        pop_size=2, n_generations=0, seed=42,
+    )
+
+
+@pytest.fixture
+def engine_fixture_voi_saturated(small_panel, repo, cfg) -> GPEngine:  # noqa: ANN001
+    """GPEngine với saturated_families={'pv_reversal'} — dùng cho test A2 gate họ-đã-đóng."""
+    return GPEngine(
+        data=small_panel, repo=repo, config=cfg, registry=default_registry(),
+        pop_size=2, n_generations=0, seed=42, saturated_families={"pv_reversal"},
+    )
+
+
+def _pool_corr_rong() -> PoolCorrelation:
+    """PoolCorrelation rỗng (không có alpha nào trong pool) — đủ dùng cho test chỉ quan tâm
+    hành vi lọc trước-backtest, không cần self-corr thật."""
+    return PoolCorrelation(pool={})
+
+
 def test_gprunresult_is_frozen_dataclass() -> None:
     """GPRunResult bất biến: gán lại field sau khởi tạo phải raise (frozen dataclass)."""
     r = GPRunResult(
@@ -265,3 +290,47 @@ def test_engine_seed_offset_mac_dinh_0(small_panel, repo, cfg, monkeypatch) -> N
     )
     eng.run()
     assert captured["seed_offset"] == 0
+
+
+# --- A2: lọc meaningfulness + họ-đã-đóng TRONG GP, TRƯỚC backtest ---
+
+def test_evaluate_population_bo_ca_the_vo_nghia_khong_backtest(engine_fixture, monkeypatch) -> None:  # noqa: ANN001
+    """Cá thể volume-only bị chặn TRƯỚC backtest: Backtester.run không được gọi."""
+    import src.gp.engine as eng_mod
+
+    goi_backtest = []
+    monkeypatch.setattr(
+        eng_mod.Backtester, "run",
+        lambda self, w, d: goi_backtest.append(1) or (_ for _ in ()).throw(AssertionError),
+    )
+    engine = engine_fixture  # GPEngine với data giả có field 'volume'
+    ind = Individual(expr=parse("rank(ts_zscore(volume, 5))"))
+    n_ev, n_pa = engine._evaluate_population([ind], _pool_corr_rong())
+    assert ind.fitness is None
+    assert goi_backtest == []
+    assert n_ev == 1
+    assert n_pa == 0
+
+
+def test_evaluate_population_bo_ca_the_ho_da_dong(engine_fixture_voi_saturated) -> None:  # noqa: ANN001
+    """engine dựng với saturated_families={'pv_reversal'} -> cá thể close-open bị bỏ, không
+    backtest (classify_family("multiply(-1, ts_mean(subtract(close, open), 10))") ==
+    "pv_reversal", nằm trong saturated_families)."""
+    engine = engine_fixture_voi_saturated  # saturated_families={"pv_reversal"}
+    ind = Individual(expr=parse("multiply(-1, ts_mean(subtract(close, open), 10))"))
+    n_ev, n_pa = engine._evaluate_population([ind], _pool_corr_rong())
+    assert ind.fitness is None
+    assert n_ev == 1
+    assert n_pa == 0
+
+
+def test_evaluate_population_ca_the_binh_thuong_van_duoc_backtest(engine_fixture) -> None:  # noqa: ANN001
+    """Seed core hợp lệ (dùng field giá, không thuộc họ đóng nào) KHÔNG bị chặn oan bởi gate
+    A2 — vẫn đi qua backtest thật (status passed/failed_gate, KHÔNG phải bị chặn ở gate mới)."""
+    engine = engine_fixture
+    ind = Individual(expr=parse("ts_mean(close, 5)"))
+    n_ev, n_pa = engine._evaluate_population([ind], _pool_corr_rong())
+    assert n_ev == 1
+    # Cá thể hợp lệ luôn có fitness (không None) dù pass hay failed_gate — CHỈ bị chặn A2
+    # (fitness=None, không backtest) khi vô nghĩa/họ đóng, mà "ts_mean(close, 5)" không phải.
+    assert ind.fitness is not None
