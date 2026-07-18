@@ -3,7 +3,7 @@
 Bối cảnh: `VERIFIED_CORES` mang nhãn "Sharpe ~1.5+ trên Brain" (docstring, commit d481fe1)
 nhưng KHÔNG kèm universe/decay/neutralization gốc — nghi vấn config drift đã ghi nhận
 (SIM_DEFAULTS.universe hiện = TOP3000, có phiên CSV cũ chạy TOP1000; xem
-docs/tailieu/review20260710/IMPROVEMENT_SPEC_v2.md mục C7). Đừng tin nhãn cũ mù quáng —
+docs/tailieu/old/review20260710/IMPROVEMENT_SPEC_v2.md mục C7). Đừng tin nhãn cũ mù quáng —
 script này in RÕ (a) nhãn cũ đang claim gì và (b) settings sim SẼ dùng nếu core này được
 sim NGAY BÂY GIỜ qua đường mặc định, để người dùng tự so sánh / quyết định re-sim.
 
@@ -34,7 +34,7 @@ from src.simulation.config import SimConfig
 CLAIMED_LABEL = (
     "Sharpe ~1.5+ tren Brain (docstring VERIFIED_CORES, commit d481fe1) -- "
     "KHONG luu universe/decay/neutralization goc; nghi van config drift "
-    "(xem docs/tailieu/review20260710/IMPROVEMENT_SPEC_v2.md muc C7), dung tin nhan cu mu quang"
+    "(xem docs/tailieu/old/review20260710/IMPROVEMENT_SPEC_v2.md muc C7), dung tin nhan cu mu quang"
 )
 
 
