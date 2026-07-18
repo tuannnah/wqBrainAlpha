@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import date
 
 # Map token tự do trong "neutralization in (...)" của theme -> enum API BRAIN (verbatim từ
-# docs/worldquantbrain/docs/advanced-topics/*-risk-neutralized-alphas.md). Token lạ -> bỏ qua.
+# docs/wq_scraped_docs/docs/advanced-topics/*-risk-neutralized-alphas.md). Token lạ -> bỏ qua.
 _NEUT_TOKEN_TO_API: dict[str, str] = {
     "slow": "SLOW",
     "fast": "FAST",

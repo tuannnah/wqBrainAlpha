@@ -112,7 +112,7 @@ def _is_quota_exhausted(resp) -> bool:
 
 
 # Giới hạn số phần tử/mảng multi-simulation (POST /simulations với body là MẢNG) — nguồn:
-# docs/worldquantbrain/docs/_/brain-api.md dòng 266 (tài liệu chính thức /simulations POST):
+# docs/wq_scraped_docs/docs/_/brain-api.md dòng 266 (tài liệu chính thức /simulations POST):
 # "Multiple simulations can be run by posting an array of length 2..10 of the above simulation
 # objects." Mảng > 10 phần tử phải chia nhiều request (simulate_many tự chunk).
 MULTI_SIM_MAX = 10
@@ -340,7 +340,7 @@ class Simulator:
         Brain (POST /simulations với body là MẢNG payload) thay vì N lần POST/poll tuần tự.
 
         NGUỒN xác nhận định dạng (điều tra Task 6, KHÔNG đoán mò):
-        1. `docs/worldquantbrain/docs/_/brain-api.md` (dòng 213-337, tài liệu BRAIN API chính
+        1. `docs/wq_scraped_docs/docs/_/brain-api.md` (dòng 213-337, tài liệu BRAIN API chính
            thức, mục `/simulations` POST) — nguồn CHUẨN, trích dẫn nguyên văn:
            - "Multiple simulations can be run by posting an array of length 2..10 of the above
              simulation objects. The user requires the MULTI_SIMULATION permission... Also the

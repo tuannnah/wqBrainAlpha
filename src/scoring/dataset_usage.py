@@ -1,7 +1,7 @@
 """Phát hiện 'Single Dataset Alpha' (WQ Brain: mọi field trừ 6 grouping field đến từ ĐÚNG 1
 dataset) — dùng để gắn nhãn/tham khảo khi sinh alpha, KHÔNG dùng để gate nộp (WQ Brain tự áp
 ngưỡng nới lỏng cho loại này qua `is.checks`, xem
-docs/worldquantbrain/docs/consultant-information/single-dataset-alphas.md và đính chính
+docs/wq_scraped_docs/docs/consultant-information/single-dataset-alphas.md và đính chính
 sub-project B trong docs/superpowers/specs/2026-07-02-submission-compliance-roadmap-design.md)."""
 
 from __future__ import annotations

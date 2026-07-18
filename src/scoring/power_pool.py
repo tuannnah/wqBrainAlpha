@@ -2,7 +2,7 @@
 KHÔNG gồm Power Pool Correlation/Theme matching (endpoint/danh sách thật chưa xác nhận, xem
 docs/superpowers/plans/2026-07-02-power-pool-alphas.md mục "Phạm vi KHÔNG làm").
 
-Nguồn tiêu chí: docs/worldquantbrain/docs/consultant-information/power-pool-alphas.md."""
+Nguồn tiêu chí: docs/wq_scraped_docs/docs/consultant-information/power-pool-alphas.md."""
 
 from __future__ import annotations
 

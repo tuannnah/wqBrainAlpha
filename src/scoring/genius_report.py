@@ -1,5 +1,5 @@
 """Báo cáo READ-ONLY cho tiêu chí tie-break BRAIN Genius tính được LOCAL từ alpha đã nộp —
-KHÔNG phải gate nộp. Nguồn: docs/worldquantbrain/docs/consultant-information/brain-genius.md
+KHÔNG phải gate nộp. Nguồn: docs/wq_scraped_docs/docs/consultant-information/brain-genius.md
 (mục "What happens if more consultants qualify..."). Phạm vi KHÔNG làm (pyramid, streak,
 community leader, Combined Alpha Performance) ghi ở
 docs/superpowers/plans/2026-07-02-genius-tracking-report.md."""

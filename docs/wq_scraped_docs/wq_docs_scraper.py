@@ -11,7 +11,7 @@ Có HAI chế độ:
    Không cần trình duyệt/playwright.
 
        pip install markdownify beautifulsoup4      # httpx/dotenv/loguru đã có sẵn
-       python docs/worldquantbrain/wq_docs_scraper.py --api
+       python docs/wq_scraped_docs/wq_docs_scraper.py --api
 
 2) BROWSER (dự phòng) — `--login` rồi `--crawl`
    Render SPA bằng headless Chromium (đăng nhập thủ công 1 lần). Chỉ dùng khi API
@@ -19,8 +19,8 @@ Có HAI chế độ:
 
        pip install playwright markdownify beautifulsoup4
        python -m playwright install chromium
-       python docs/worldquantbrain/wq_docs_scraper.py --login
-       python docs/worldquantbrain/wq_docs_scraper.py --crawl
+       python docs/wq_scraped_docs/wq_docs_scraper.py --login
+       python docs/wq_scraped_docs/wq_docs_scraper.py --crawl
 
 Kết quả (đặt tại thư mục hiện hành):
     out/docs/<slug>.md        một file markdown / trang
@@ -161,7 +161,7 @@ def _render_content(content) -> str:
 
 # --------------------------------------------------------------- chế độ API
 def _project_root() -> Path:
-    # docs/worldquantbrain/wq_docs_scraper.py -> gốc dự án là 2 cấp trên.
+    # docs/wq_scraped_docs/wq_docs_scraper.py -> gốc dự án là 2 cấp trên.
     return Path(__file__).resolve().parents[2]
 
 

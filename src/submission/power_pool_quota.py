@@ -1,6 +1,6 @@
 """Đếm số lần đã nộp 'Power Pool thuần' (tag PowerPoolSelected) trong khoảng thời gian — phục
 vụ tự kiểm tra quota 10/tháng + 1/ngày trước khi gọi submit() (sub-project A, Task 4).
-Nguồn tiêu chí: docs/worldquantbrain/docs/consultant-information/power-pool-alphas.md
+Nguồn tiêu chí: docs/wq_scraped_docs/docs/consultant-information/power-pool-alphas.md
 (mục "Submission Quotas After 3 Months"). CHỈ đếm dựa trên cột `SubmissionModel.tags` đã lưu
 qua SubmissionManager.set_properties() (sub-project C) — KHÔNG tự gắn tag ở đây."""
 

@@ -20,7 +20,7 @@ GROUP_NEUTRALIZATIONS = frozenset(
     {"NONE", "MARKET", "SECTOR", "INDUSTRY", "SUBINDUSTRY", "COUNTRY", "EXCHANGE"}
 )
 # Neutralization rủi ro (risk-based) — bắt buộc cho Power Pool Theme; enum verbatim từ
-# docs/worldquantbrain/docs/advanced-topics/{statistical,crowding,ram}-risk-neutralized-alphas.md.
+# docs/wq_scraped_docs/docs/advanced-topics/{statistical,crowding,ram}-risk-neutralized-alphas.md.
 RISK_NEUTRALIZATIONS = frozenset(
     {"STATISTICAL", "CROWDING", "REVERSION_AND_MOMENTUM", "SLOW", "FAST", "SLOW_AND_FAST"}
 )
