@@ -3,7 +3,7 @@ xuất (giống miner cũ tự seed). Có fallback chuỗi mặc định khi LLM
 
 from __future__ import annotations
 
-import main
+import src.app.cli.research as main
 
 DEFAULT = "mean-reversion theo thanh khoản"
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from main import _make_pnl_fn
+from src.app.cli.research import _make_pnl_fn
 from tests.fakes import FakeClient, FakeResponse
 
 

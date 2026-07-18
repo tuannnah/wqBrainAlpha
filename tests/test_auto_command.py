@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import date
 
-import main
+from src.app.cli import research as cli_research
 from src.app.cli import simulate as cli_simulate
 from src.app.power_pool_config import resolve_theme_sim_config
 from src.simulation.config import SimConfig
@@ -98,16 +98,16 @@ def test_research_truyen_fixed_sim_config_xuong_loop_builder(monkeypatch):
         captured["reseed_every"] = reseed_every
         return object(), object()
 
-    monkeypatch.setattr(main, "init_db", lambda e: e)
-    monkeypatch.setattr(main, "make_engine", lambda: None)
-    monkeypatch.setattr(main, "make_session_factory", lambda e: (lambda: None))
-    monkeypatch.setattr(main.cli_common, "_cached_symbols", lambda sf: (["close"], {"rank"}, {"close": "MATRIX"}, {"rank"}, {"rank": 1}))
-    monkeypatch.setattr(main.cli_common, "_make_client", lambda: _FakeClient())
-    monkeypatch.setattr(main, "_make_research_loop", _fake_builder)
-    monkeypatch.setattr(main, "_run_research_with_progress", lambda *a, **k: object())
-    monkeypatch.setattr(main, "_render_research_result", lambda *a, **k: None)
+    monkeypatch.setattr(cli_research, "init_db", lambda e: e)
+    monkeypatch.setattr(cli_research, "make_engine", lambda: None)
+    monkeypatch.setattr(cli_research, "make_session_factory", lambda e: (lambda: None))
+    monkeypatch.setattr(cli_research, "_cached_symbols", lambda sf: (["close"], {"rank"}, {"close": "MATRIX"}, {"rank"}, {"rank": 1}))
+    monkeypatch.setattr(cli_research, "_make_client", lambda: _FakeClient())
+    monkeypatch.setattr(cli_research, "_make_research_loop", _fake_builder)
+    monkeypatch.setattr(cli_research, "_run_research_with_progress", lambda *a, **k: object())
+    monkeypatch.setattr(cli_research, "_render_research_result", lambda *a, **k: None)
 
-    main.research(
+    cli_research.research(
         direction="test",
         region="EUR",
         universe="TOP1200",
