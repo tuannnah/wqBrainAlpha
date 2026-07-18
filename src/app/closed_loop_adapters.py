@@ -952,6 +952,11 @@ class GPIdeaSource:
             # B1: nhóm field ưu tiên của epoch hiện tại (None = toàn bộ field, epoch 0 hoặc
             # không có field_groups).
             fields_override=fields_override,
+            # B2: two-stage sampling CHỈ có ý nghĩa ở epoch 0 (toàn bộ field, dataset đông/ít
+            # field cùng cạnh tranh). Từ epoch 1 trở đi, fields_override đã thu về MỘT nhóm
+            # duy nhất (xem trên) -> two-stage thừa (chỉ 1 nhóm thì mọi field trong đó vẫn
+            # uniform phẳng như cũ), nên truyền None để không đổi hành vi.
+            field_groups=self.field_groups if self._epoch == 0 else None,
         )
         pool: Any = self._repo.load_pool() or None
         # GPEngine.run() -> GPRunResult; Protocol _RunsGP đòi _GPRunResultLike với

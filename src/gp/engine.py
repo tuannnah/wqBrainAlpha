@@ -105,6 +105,7 @@ class GPEngine:
         saturated_families: "frozenset[str] | set[str]" = frozenset(),
         eval_cache: "dict[str, tuple] | None" = None,
         fields_override: "tuple[str, ...] | None" = None,
+        field_groups: "tuple[tuple[str, ...], ...] | None" = None,
     ) -> None:
         self.data = data
         self.repo = repo
@@ -133,6 +134,11 @@ class GPEngine:
         # PHẢI là tập con của data.field_names() — caller (composition root) lọc trước khi
         # truyền; run() không tự kiểm tra lại.
         self.fields_override = fields_override
+        # B2: nhóm field theo dataset để init_population sinh leaf ngẫu nhiên two-stage
+        # (chọn nhóm dataset uniform trước, field trong nhóm uniform sau) — dataset ít field
+        # không bị dataset đông field (vd price/volume) áp đảo xác suất. None = uniform phẳng
+        # (hành vi cũ, mọi caller trước B2).
+        self.field_groups = field_groups
 
     def _evaluate_individual(
         self, ind: Individual, pool_corr: PoolCorrelation,
@@ -389,6 +395,7 @@ class GPEngine:
             fields=fields,
             max_depth=self.max_depth,
             seed_offset=self.seed_offset,
+            field_groups=self.field_groups,
         )
 
         total_eval = 0

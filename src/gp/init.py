@@ -44,6 +44,7 @@ def random_tree(
     min_depth: int = 1,
     *,
     kind: ArgKind = ArgKind.PANEL,
+    field_groups: "tuple[tuple[str, ...], ...] | None" = None,
 ) -> Node:
     """Sinh 1 cây ngẫu nhiên sâu tối đa ``depth``, sâu tối thiểu ``min_depth``. full=True:
     mọi nhánh đi tới đúng depth (cây "full"). full=False ("grow"): dừng sớm ngẫu nhiên ở
@@ -51,18 +52,22 @@ def random_tree(
     nhất của ramped half-and-half vẫn đạt sàn độ sâu, không co thành leaf đơn).
 
     ``kind`` là vai trò mà cây sinh ra sẽ đóng trong cây cha: mặc định ``ArgKind.PANEL``
-    (cây phải là tín hiệu — leaf chỉ được là Field, KHÔNG Constant)."""
+    (cây phải là tín hiệu — leaf chỉ được là Field, KHÔNG Constant).
+
+    ``field_groups`` (B2, keyword-only, mặc định None): nhóm field theo dataset để leaf
+    chọn field two-stage (nhóm uniform trước, field trong nhóm uniform sau) — xem
+    ``_random_leaf``. None = hành vi cũ (uniform phẳng trên ``fields``)."""
     if depth <= 1:
-        return _random_leaf(rng, fields, kind=kind)
+        return _random_leaf(rng, fields, kind=kind, field_groups=field_groups)
 
     must_expand = min_depth > 1  # còn phải mở rộng để chạm sàn min_depth
     stop_early = (not full) and (not must_expand) and rng.random() < (1.0 / depth)
     if stop_early:
-        return _random_leaf(rng, fields, kind=kind)
+        return _random_leaf(rng, fields, kind=kind, field_groups=field_groups)
 
     ops = registry.gp_function_set()
     if not ops:
-        return _random_leaf(rng, fields, kind=kind)
+        return _random_leaf(rng, fields, kind=kind, field_groups=field_groups)
     spec = ops[rng.integers(0, len(ops))]
 
     args: list[Node] = []
@@ -71,6 +76,7 @@ def random_tree(
             case ArgKind.PANEL:
                 args.append(random_tree(
                     registry, rng, depth - 1, fields, full, min_depth - 1, kind=ArgKind.PANEL,
+                    field_groups=field_groups,
                 ))
             case ArgKind.WINDOW:
                 choice = spec.window_choices[rng.integers(0, len(spec.window_choices))]
@@ -96,6 +102,7 @@ def _bounded_random_tree(
     *,
     kind: ArgKind = ArgKind.PANEL,
     max_nodes: int = MAX_NODES,
+    field_groups: "tuple[tuple[str, ...], ...] | None" = None,
 ) -> Node:
     """``random_tree`` nhưng RÀNG BUỘC THÊM số node (RC5): cây vượt ``max_nodes`` sau khi
     sinh sẽ bị resample (tối đa ``_MAX_RESAMPLE`` lần) thay vì được trả về để rồi bị
@@ -103,11 +110,16 @@ def _bounded_random_tree(
 
     Hết lượt resample vẫn vượt ngân sách -> co dần ``depth`` (giữ ``min_depth`` không vượt
     quá depth mới) cho tới khi vừa ngân sách; ``depth=1`` LUÔN là leaf đơn (1 node) nên vòng
-    lặp co depth CHẮC CHẮN kết thúc (không bao giờ vô hạn) và luôn trả một cây hợp lệ."""
+    lặp co depth CHẮC CHẮN kết thúc (không bao giờ vô hạn) và luôn trả một cây hợp lệ.
+
+    ``field_groups`` (B2): xem ``random_tree``/``_random_leaf`` — chỉ ảnh hưởng cách chọn
+    field ở leaf, không ảnh hưởng logic ràng buộc số node."""
     best: Node | None = None
     best_size: int | None = None
     for _ in range(_MAX_RESAMPLE):
-        tree = random_tree(registry, rng, depth, fields, full, min_depth, kind=kind)
+        tree = random_tree(
+            registry, rng, depth, fields, full, min_depth, kind=kind, field_groups=field_groups,
+        )
         size = ComplexityVisitor().visit(tree)
         if size <= max_nodes:
             return tree
@@ -118,6 +130,7 @@ def _bounded_random_tree(
     while shrink_depth >= 1:
         tree = random_tree(
             registry, rng, shrink_depth, fields, full, min(min_depth, shrink_depth), kind=kind,
+            field_groups=field_groups,
         )
         size = ComplexityVisitor().visit(tree)
         if size <= max_nodes:
@@ -131,11 +144,21 @@ def _bounded_random_tree(
 
 def _random_leaf(
     rng: np.random.Generator, fields: tuple[str, ...], *, kind: ArgKind = ArgKind.PANEL,
+    field_groups: "tuple[tuple[str, ...], ...] | None" = None,
 ) -> Node:
     """Leaf cho cây ngẫu nhiên. Ở slot PANEL CHỈ trả ``Field`` (tín hiệu thật — Constant là
-    literal số, không phải PANEL signal). Ở slot SCALAR mới được trả ``Constant`` float."""
+    literal số, không phải PANEL signal). Ở slot SCALAR mới được trả ``Constant`` float.
+
+    ``field_groups`` (B2, mặc định None): nếu có, chọn field theo HAI TẦNG — chọn NHÓM
+    dataset uniform trước, rồi field uniform TRONG nhóm — để dataset ít field (vd một
+    alt-data hiếm) không bị dataset đông field (vd price/volume hàng trăm field) áp đảo
+    xác suất xuất hiện trong quần thể khởi tạo. None (mặc định) giữ nguyên hành vi cũ:
+    uniform phẳng trên toàn bộ ``fields``."""
     if kind is ArgKind.SCALAR:
         return Constant(_random_scalar(rng))
+    if field_groups:
+        nhom = field_groups[rng.integers(0, len(field_groups))]
+        return Field(nhom[rng.integers(0, len(nhom))])
     return Field(fields[rng.integers(0, len(fields))])
 
 
@@ -147,12 +170,17 @@ def ramped_half_and_half(
     max_depth: int,
     fields: tuple[str, ...],
     max_nodes: int = MAX_NODES,
+    *,
+    field_groups: "tuple[tuple[str, ...], ...] | None" = None,
 ) -> list[Node]:
     """Chia n cây đều cho mỗi độ sâu trong [min_depth, max_depth], nửa full nửa grow mỗi
     độ sâu (Koza). Phần dư dồn vào độ sâu lớn nhất.
 
     (RC5) Mỗi cây sinh ra qua ``_bounded_random_tree`` -- ràng buộc số node <= ``max_nodes``
-    NGAY khi sinh (reject-and-resample nội bộ), thay vì để ``PreFilter`` reject sau này."""
+    NGAY khi sinh (reject-and-resample nội bộ), thay vì để ``PreFilter`` reject sau này.
+
+    ``field_groups`` (B2, keyword-only, mặc định None): xem ``_random_leaf`` — two-stage
+    sampling khi có, None giữ nguyên hành vi cũ."""
     depths = list(range(min_depth, max_depth + 1))
     per_depth = n // len(depths)
     remainder = n - per_depth * len(depths)
@@ -165,6 +193,7 @@ def ramped_half_and_half(
             full = j < half
             trees.append(_bounded_random_tree(
                 registry, rng, depth, fields, full, min_depth=min_depth, max_nodes=max_nodes,
+                field_groups=field_groups,
             ))
     return trees
 
@@ -191,6 +220,8 @@ def init_population(
     fields: tuple[str, ...],
     max_depth: int,
     seed_offset: int = 0,
+    *,
+    field_groups: "tuple[tuple[str, ...], ...] | None" = None,
 ) -> list[Individual]:
     """Quần thể ban đầu: ưu tiên seed kinh nghiệm, lấp đầy phần còn lại bằng ramped
     half-and-half. Seed/cây vượt max_depth bị loại + log warning (không crash).
@@ -198,7 +229,10 @@ def init_population(
     ``seed_offset`` chọn lô seed nào được dùng khi số seed hợp lệ nhiều hơn
     ``population_size`` (xoay vòng qua ``_rotating_slice`` thay vì luôn cố định
     seed_cores[:population_size]) — caller (GPEngine/GPIdeaSource) tăng dần offset mỗi
-    batch để qua nhiều lần gọi, toàn bộ seed hợp lệ đều được dùng."""
+    batch để qua nhiều lần gọi, toàn bộ seed hợp lệ đều được dùng.
+
+    ``field_groups`` (B2, keyword-only, mặc định None): truyền xuống ``ramped_half_and_half``
+    cho phần filler ngẫu nhiên — two-stage sampling khi có, None giữ nguyên hành vi cũ."""
     valid_seeds = [t for t in seed_cores if DepthVisitor().visit(t) <= max_depth]
     dropped = len(seed_cores) - len(valid_seeds)
     if dropped:
@@ -209,5 +243,8 @@ def init_population(
         return [Individual(expr=t) for t in chosen]
 
     remaining = population_size - len(valid_seeds)
-    filler = ramped_half_and_half(registry, rng, remaining, min_depth=2, max_depth=max_depth, fields=fields)
+    filler = ramped_half_and_half(
+        registry, rng, remaining, min_depth=2, max_depth=max_depth, fields=fields,
+        field_groups=field_groups,
+    )
     return [Individual(expr=t) for t in valid_seeds + filler]

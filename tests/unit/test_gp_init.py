@@ -203,3 +203,34 @@ def test_bounded_resample_returns_smallest_seen_when_shrink_impossible():
         registry, rng, depth=6, fields=_FIELDS, full=True, min_depth=1, max_nodes=15,
     )
     assert ComplexityVisitor().visit(tree) <= 15
+
+
+# --- B2: cân bằng dataset two-stage khi sinh leaf ngẫu nhiên ---
+
+
+def test_random_leaf_two_stage_can_bang_nhom():
+    """1000 leaf với nhóm (1 field pv) vs (1 field alt): tỉ lệ mỗi nhóm ~50% (±10 điểm %),
+    dù nhóm pv có 99 field và alt chỉ 1 field thì mỗi NHÓM vẫn 50%."""
+    from src.gp.init import _random_leaf
+
+    rng = np.random.default_rng(7)
+    pv = tuple(f"pv_{i}" for i in range(99))
+    groups = (pv, ("alt_duy_nhat",))
+    fields = pv + ("alt_duy_nhat",)
+    dem_alt = sum(
+        1 for _ in range(1000)
+        if _random_leaf(rng, fields, field_groups=groups).name == "alt_duy_nhat"
+    )
+    assert 400 <= dem_alt <= 600  # uniform phẳng chỉ cho ~10/1000
+
+
+def test_field_groups_none_giu_hanh_vi_cu():
+    """field_groups mặc định None -> hành vi cũ (uniform phẳng) nguyên vẹn từng bit, số lần
+    gọi rng giữ nguyên thứ tự (cùng seed cho ra cùng chuỗi field)."""
+    from src.gp.init import _random_leaf
+
+    rng1, rng2 = np.random.default_rng(3), np.random.default_rng(3)
+    f = ("a", "b", "c")
+    cu = [_random_leaf(rng1, f).name for _ in range(50)]
+    moi = [_random_leaf(rng2, f, field_groups=None).name for _ in range(50)]
+    assert cu == moi
