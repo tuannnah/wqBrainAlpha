@@ -26,7 +26,7 @@ from src.data.operators import OperatorRepository
 from src.simulation.simulator import Simulator
 from src.storage.db import init_db, make_engine, make_session_factory
 from src.storage.migrate import migrate_all, _same_database
-from src.storage.repository import AlphaRepository, InvalidFieldRepository
+from src.storage.repository import AlphaRepository
 from src.llm.marathon import MarathonReport, run_marathon
 from src.app.cli import common as cli_common
 from src.app.cli import auth as cli_auth
@@ -36,6 +36,7 @@ from src.app.cli import generate as cli_generate
 from src.app.cli import submit as cli_submit
 from src.app.cli import report as cli_report
 from src.app.cli import migrate as cli_migrate
+from src.app.cli import llm as cli_llm
 
 app = typer.Typer(help="WorldQuant Brain Auto-Alpha Tool")
 app.command()(cli_auth.login)
@@ -55,6 +56,9 @@ app.command()(cli_report.originality)
 app.command("genius-report")(cli_report.genius_report_cmd)
 app.command("migrate-sqlite")(cli_migrate.migrate_sqlite)
 app.command("calibrate")(cli_migrate.calibrate)
+app.command("check-deepseek")(cli_llm.check_deepseek)
+app.command("llm-generate")(cli_llm.llm_generate)
+app.command("llm-ideas")(cli_llm.llm_ideas)
 console = Console()
 
 LOG_DIR = Path("logs")
@@ -376,126 +380,6 @@ def closed_loop_cmd(
         raise typer.Exit(code=1)
 
 
-def _make_deepseek(model: str | None = None):
-    if settings.llm_backend == "agent":
-        from src.llm.agent_bridge import AgentBridgeClient
-
-        return AgentBridgeClient(settings.llm_bridge_dir)
-
-    if settings.llm_backend in ("claude-cli", "codex-cli"):
-        from src.llm.cli_client import make_cli_client
-
-        return make_cli_client(settings.llm_backend, settings)
-
-    from src.llm.deepseek_client import DeepSeekClient
-
-    if not settings.deepseek_api_key:
-        console.print("[red]Thiếu DEEPSEEK_API_KEY trong .env[/red]")
-        raise typer.Exit(code=1)
-    return DeepSeekClient(
-        settings.deepseek_api_key, settings.deepseek_base_url,
-        model=model or settings.deepseek_model,
-        max_tokens=settings.deepseek_max_tokens,
-    )
-
-
-def run_deepseek_smoke(
-    *,
-    api_key: str,
-    base_url: str,
-    model: str,
-    message: str = "hello",
-    client_cls=None,
-) -> str:
-    """Gọi chat completion rất ngắn để kiểm tra DeepSeek API."""
-    if not api_key.strip():
-        raise ValueError("Thiếu DEEPSEEK_API_KEY")
-    if not base_url.strip():
-        raise ValueError("Thiếu DEEPSEEK_BASE_URL")
-    if not model.strip():
-        raise ValueError("Thiếu DEEPSEEK_MODEL")
-
-    from src.llm.deepseek_client import DeepSeekClient
-
-    client_cls = client_cls or DeepSeekClient
-    client = client_cls(api_key.strip(), base_url.strip().rstrip("/"), model=model.strip())
-    return client.complete(
-        "You are a concise API smoke-test assistant.",
-        message,
-        json_mode=False,
-    )
-
-
-def describe_deepseek_smoke_error(exc: Exception) -> str:
-    """Diễn giải lỗi smoke check theo ngữ cảnh người dùng cần biết."""
-    text = str(exc)
-    if "Insufficient Balance" in text or "Error code: 402" in text:
-        return (
-            "Đã tới DeepSeek, nhưng chat completion bị từ chối vì "
-            "Insufficient Balance. Hãy nạp balance hoặc kiểm tra quota của API key."
-        )
-    return text
-
-
-@app.command("check-deepseek")
-def check_deepseek(
-    message: str = typer.Option("hello", "--message", "-m", help="Tin nhắn test gửi tới DeepSeek"),
-    model: str = typer.Option("", "--model", help="Ghi đè DEEPSEEK_MODEL cho lần check này"),
-) -> None:
-    """Gọi DeepSeek chat thật bằng DEEPSEEK_API_KEY/BASE_URL/MODEL."""
-    _setup_logging()
-    selected_model = model or settings.deepseek_model
-    base_url = settings.deepseek_base_url
-    if not base_url.rstrip("/").endswith("/anthropic"):
-        console.print(
-            "[yellow]Cảnh báo:[/yellow] repo này dùng Anthropic-compatible API, "
-            "DEEPSEEK_BASE_URL nên là https://api.deepseek.com/anthropic"
-        )
-
-    console.print(f"[dim]DEEPSEEK_BASE_URL={base_url}[/dim]")
-    console.print(f"[dim]DEEPSEEK_MODEL={selected_model}[/dim]")
-    try:
-        reply = run_deepseek_smoke(
-            api_key=settings.deepseek_api_key,
-            base_url=base_url,
-            model=selected_model,
-            message=message,
-        )
-    except Exception as exc:
-        console.print(f"[red]DeepSeek API check thất bại:[/red] {describe_deepseek_smoke_error(exc)}")
-        raise typer.Exit(code=1)
-
-    console.print("[green]DeepSeek API OK[/green]")
-    console.print((reply or "").strip() or "[dim]<empty response>[/dim]")
-
-
-def _make_router():
-    """LLM client cho vòng nghiên cứu. Có model mạnh riêng -> ModelRouter định tuyến
-    tác vụ khó sang model mạnh (T6.3); không -> dùng một DeepSeekClient."""
-    cheap = _make_deepseek()
-    if not settings.deepseek_model_strong:
-        return cheap
-    from src.llm.router import ModelRouter
-
-    strong = _make_deepseek(settings.deepseek_model_strong)
-    return ModelRouter(cheap=cheap, strong=strong, default="strong")
-
-
-def _make_llm_generator(session_factory, prefilter):
-    from src.llm.generator import LLMAlphaGenerator
-
-    deepseek = _make_deepseek()
-    field_repo = FieldRepository(None, session_factory)
-    op_repo = OperatorRepository(None, session_factory)
-    # blacklist field chết -> cấm LLM nêu lại trong prompt sinh ý tưởng.
-    blacklist = InvalidFieldRepository(session_factory).blacklist()
-    # repo -> bộ sinh hướng đọc phản hồi từ DB (top alpha để khai thác, field yếu tránh).
-    return LLMAlphaGenerator(
-        deepseek, field_repo, op_repo, prefilter,
-        repo=AlphaRepository(session_factory), blacklist=blacklist,
-    )
-
-
 def _make_pool_corr_fn(client):
     """Đóng gói CorrelationChecker của WQ thành callback (wq_alpha_id -> self-corr|None)
     cho RefinementLoop. Đây chính là con số chặn-nộp thật của nền tảng. Lỗi hạ tầng
@@ -569,7 +453,7 @@ def _make_research_loop(
     from src.llm.translator import AlphaTranslator
     from src.simulation.pre_filter import PreFilter
 
-    deepseek = _make_router()  # T6.3: routing tác vụ khó -> model mạnh (nếu cấu hình)
+    deepseek = cli_llm._make_router()  # T6.3: routing tác vụ khó -> model mạnh (nếu cấu hình)
     fields, operators, field_types, matrix_only_ops, operator_arity = cli_common._cached_symbols(session_factory)
     pf = PreFilter(
         known_operators=operators or None, known_fields=set(fields) or None,
@@ -594,7 +478,7 @@ def _make_research_loop(
     # T4.2: bộ lọc nhất quán giả thuyết–công thức trước sim (bật/tắt qua --align).
     aligner = AlignmentScorer(deepseek) if align else None
     # Task 1b: re-seed diversity — chỉ dựng idea generator khi bật (tốn lượt LLM).
-    idea_generator = _make_llm_generator(session_factory, pf) if reseed_every > 0 else None
+    idea_generator = cli_llm._make_llm_generator(session_factory, pf) if reseed_every > 0 else None
     # Marathon: trọng tài LLM + bộ tinh chỉnh config (dùng chung deepseek/router).
     referee = Referee(deepseek) if marathon else None
     config_tuner = ConfigTuner(deepseek) if marathon else None
@@ -736,7 +620,7 @@ def research(
             field_types=ft, matrix_only_ops=mo, operator_arity=oa,
             local_arity=cli_common._local_operator_arity(),
         )
-        return _make_llm_generator(session_factory, pf).generate_ideas(1)
+        return cli_llm._make_llm_generator(session_factory, pf).generate_ideas(1)
 
     direction, auto_dir = resolve_direction(direction, _auto_direction)
     if auto_dir:
@@ -825,7 +709,7 @@ def _marathon_direction_provider(session_factory):
             field_types=ft, matrix_only_ops=mo, operator_arity=oa,
             local_arity=cli_common._local_operator_arity(),
         )
-        ideas = _make_llm_generator(session_factory, pf).generate_ideas(1)
+        ideas = cli_llm._make_llm_generator(session_factory, pf).generate_ideas(1)
         direction = resolve_direction("", lambda: ideas)[0]
         console.print(f"\n[cyan]Hướng mới:[/cyan] {direction}")
         return direction
@@ -906,51 +790,6 @@ def marathon(
         session_factory, client, region, universe, delay,
         decay, truncation, neutralization, per_direction_sims, max_patience, retry,
     )
-
-
-@app.command("llm-generate")
-def llm_generate(
-    idea: str = typer.Option(..., help="Ý tưởng alpha bằng ngôn ngữ tự nhiên"),
-    count: int = typer.Option(5),
-) -> None:
-    """Sinh alpha từ một ý tưởng bằng DeepSeek."""
-    _setup_logging()
-    from src.simulation.pre_filter import PreFilter
-
-    engine = init_db(make_engine())
-    session_factory = make_session_factory(engine)
-    fields, operators, field_types, matrix_only_ops, operator_arity = cli_common._cached_symbols(session_factory)
-    pf = PreFilter(
-        known_operators=operators or None, known_fields=set(fields) or None,
-        field_types=field_types, matrix_only_ops=matrix_only_ops,
-        operator_arity=operator_arity, local_arity=cli_common._local_operator_arity(),
-    )
-    llm_gen = _make_llm_generator(session_factory, pf)
-
-    alphas = llm_gen.generate(idea, n=count)
-    repo = AlphaRepository(session_factory)
-    for expr in alphas:
-        repo.save_alpha(expr, source="llm")
-    console.print(f"[green]Đã sinh {len(alphas)} alpha[/green] từ ý tưởng: {idea}")
-    for expr in alphas:
-        console.print(f"  • {expr}")
-    console.print(f"[dim]Token usage: {llm_gen.deepseek.usage.total_tokens} "
-                  f"(~${llm_gen.deepseek.usage.estimated_cost():.4f})[/dim]")
-
-
-@app.command("llm-ideas")
-def llm_ideas(count: int = typer.Option(10)) -> None:
-    """Cho DeepSeek brainstorm các ý tưởng alpha."""
-    _setup_logging()
-    from src.simulation.pre_filter import PreFilter
-
-    engine = init_db(make_engine())
-    session_factory = make_session_factory(engine)
-    pf = PreFilter()
-    llm_gen = _make_llm_generator(session_factory, pf)
-    ideas = llm_gen.generate_ideas(count)
-    for i, idea in enumerate(ideas, 1):
-        console.print(f"  {i}. {idea}")
 
 
 # ============================ Menu tương tác (start) ============================
@@ -1110,7 +949,7 @@ def _menu_test_engine(state: _MenuState) -> None:
         return
 
     try:
-        deepseek = _make_router()
+        deepseek = cli_llm._make_router()
     except typer.Exit:
         console.print("[red]Chưa cấu hình LLM backend hợp lệ trong .env (LLM_BACKEND).[/red]")
         return

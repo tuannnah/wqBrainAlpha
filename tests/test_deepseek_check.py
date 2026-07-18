@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-import main
+from src.app.cli import llm as main
 from config.settings import Settings
 
 
