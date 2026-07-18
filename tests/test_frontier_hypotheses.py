@@ -42,3 +42,17 @@ def test_frontier_hypothesis_theo_bieu_thuc():
     hyp = frontier_hypothesis("ts_rank(multiply(-1, ts_mean(firm_vol_imbalance, 5)), 66)")
     assert hyp is FRONTIER_HYPOTHESES["option_flow"]
     assert frontier_hypothesis("rank(ts_delta(close, 5))") is None
+
+
+def test_frontier_hypothesis_khong_phu_thuoc_operator_da_dang_ky():
+    """Bug live 2026-07-18: tiến trình `submit --power-pool` không import module đăng ký
+    operator local -> parse STRICT ném 'operator không tồn tại: ts_rank' -> fallback câm
+    lặng, LLdLVX0a vẫn skip. Trích field chỉ cần cú pháp (parse_expression lenient) —
+    phải chạy được cả với registry TRỐNG."""
+    from src.lang.registry import OperatorRegistry
+
+    bare = OperatorRegistry()  # không có ts_rank/multiply/ts_mean
+    hyp = frontier_hypothesis(
+        "ts_rank(multiply(-1, ts_mean(firm_vol_imbalance, 5)), 66)", registry=bare
+    )
+    assert hyp is FRONTIER_HYPOTHESES["option_flow"]

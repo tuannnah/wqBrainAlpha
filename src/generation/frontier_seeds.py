@@ -283,13 +283,18 @@ _PP_BY_CATEGORY = {
 
 def _frontier_categories(expr: str, registry=None) -> "list[str]":
     """Category frontier xuất hiện trong expr, theo THỨ TỰ ưu tiên ổn định của
-    _NEUT_BY_CATEGORY (microstructure trước — đặc thù nhất). Rỗng = không phải frontier."""
-    from src.lang.parser import parse
+    _NEUT_BY_CATEGORY (microstructure trước — đặc thù nhất). Rỗng = không phải frontier.
+
+    parse_expression (lenient, chỉ kiểm cú pháp) thay vì parse strict: trích field không
+    cần operator-tồn-tại/arity, và tiến trình gọi (vd `submit --power-pool`) có thể chưa
+    import module đăng ký operator local — bug live 2026-07-18: strict ném ParseError
+    'ts_rank' làm fallback mô tả câm lặng."""
+    from src.lang.parser import parse_expression
     from src.lang.registry import default_registry
     from src.lang.visitors import FieldCollector
 
     reg = registry or default_registry()
-    fields = FieldCollector(reg).visit(parse(expr))
+    fields = FieldCollector(reg).visit(parse_expression(expr))
     cats = {FRONTIER_CATEGORY_BY_FIELD[f] for f in fields if f in FRONTIER_CATEGORY_BY_FIELD}
     return [c for c in _NEUT_BY_CATEGORY if c in cats]
 
