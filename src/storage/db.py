@@ -15,7 +15,7 @@ from src.storage.models import Base
 
 # DB SQLite mặc định. Khi đang dùng đúng URL này, ta tách file theo email đăng
 # nhập (mỗi tài khoản 1 file). URL tùy biến (vd Postgres) thì giữ nguyên.
-DEFAULT_SQLITE_URL = "sqlite:///wq_alpha.db"
+DEFAULT_SQLITE_URL = "sqlite:///data/db/wq_alpha.db"
 # Email của lần đăng nhập gần nhất (ghi bởi lệnh login) — dùng chọn DB khi .env
 # để trống WQ_EMAIL (luồng nhập email tương tác).
 ACCOUNT_FILE = Path(".wq_account")
@@ -55,11 +55,14 @@ def active_database_url(account_file: Path = ACCOUNT_FILE) -> str:
     email = (settings.wq_email or read_active_account(account_file)).strip()
     if not email:
         return url
-    return f"sqlite:///wq_alpha_{_email_slug(email)}.db"
+    return f"sqlite:///data/db/wq_alpha_{_email_slug(email)}.db"
 
 
 def make_engine(database_url: str | None = None) -> Engine:
     url = database_url or active_database_url()
+    if url.startswith("sqlite") and ":memory:" not in url:
+        db_path = Path(url[len("sqlite:///"):])
+        db_path.parent.mkdir(parents=True, exist_ok=True)
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
     engine = create_engine(url, future=True, connect_args=connect_args)
 

@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     claude_cli_model: str = ""  # alias ('opus'/'sonnet'/'fable') hoặc tên model đầy đủ
     claude_cli_effort: str = ""  # mức suy luận ('high'...)
     codex_cli_model: str = ""  # model khi backend=codex-cli; rỗng = mặc định CLI
-    database_url: str = "sqlite:///wq_alpha.db"
+    database_url: str = "sqlite:///data/db/wq_alpha.db"
     cache_ttl_days: int = 30
     default_region: str = "USA"
     default_universe: str = "TOP3000"

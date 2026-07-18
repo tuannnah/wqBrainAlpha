@@ -33,7 +33,7 @@ def test_env_email_derives_per_account_db(tmp_path, restore_settings):
     settings.wq_email = "Tuan.Anh+wq@Gmail.com"
     settings.database_url = db.DEFAULT_SQLITE_URL
     acc = tmp_path / ".wq_account"
-    assert db.active_database_url(acc) == "sqlite:///wq_alpha_tuan_anh_wq_gmail_com.db"
+    assert db.active_database_url(acc) == "sqlite:///data/db/wq_alpha_tuan_anh_wq_gmail_com.db"
 
 
 def test_account_file_fallback_when_env_empty(tmp_path, restore_settings):
@@ -41,7 +41,7 @@ def test_account_file_fallback_when_env_empty(tmp_path, restore_settings):
     settings.database_url = db.DEFAULT_SQLITE_URL
     acc = tmp_path / ".wq_account"
     acc.write_text("foo@bar.com", encoding="utf-8")
-    assert db.active_database_url(acc) == "sqlite:///wq_alpha_foo_bar_com.db"
+    assert db.active_database_url(acc) == "sqlite:///data/db/wq_alpha_foo_bar_com.db"
 
 
 def test_env_email_overrides_account_file(tmp_path, restore_settings):
@@ -49,7 +49,7 @@ def test_env_email_overrides_account_file(tmp_path, restore_settings):
     settings.database_url = db.DEFAULT_SQLITE_URL
     acc = tmp_path / ".wq_account"
     acc.write_text("file@y.com", encoding="utf-8")
-    assert db.active_database_url(acc) == "sqlite:///wq_alpha_env_x_com.db"
+    assert db.active_database_url(acc) == "sqlite:///data/db/wq_alpha_env_x_com.db"
 
 
 def test_custom_url_is_left_unchanged(tmp_path, restore_settings):
@@ -67,3 +67,11 @@ def test_write_then_read_account_roundtrip(tmp_path):
 
 def test_read_account_missing_file_returns_empty(tmp_path):
     assert db.read_active_account(tmp_path / "nope") == ""
+
+
+def test_make_engine_tao_thu_muc_cha_neu_chua_co(tmp_path):
+    target = tmp_path / "newsub" / "test.db"
+    assert not target.parent.exists()
+    engine = db.make_engine(f"sqlite:///{target}")
+    engine.dispose()
+    assert target.parent.exists()

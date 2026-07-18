@@ -37,7 +37,7 @@ from src.storage.repository import AlphaRepository  # noqa: E402
 
 import httpx  # noqa: E402
 
-DB_URL = "sqlite:///wq_alpha_phtrang1229_gmail_com.db"
+DB_URL = "sqlite:///data/db/wq_alpha_phtrang1229_gmail_com.db"
 REGION = "USA"
 UNIVERSE = "TOP3000"
 CONFIG_KEY = "USA|TOP3000|delay1|groundtruth"  # khớp persist_groundtruth.py

@@ -87,7 +87,7 @@ def login(force: bool = typer.Option(False, help="Đăng nhập lại dù sessio
 
 @app.command("migrate-sqlite")
 def migrate_sqlite(
-    source: str = typer.Option("sqlite:///wq_alpha.db", help="URL DB nguồn (SQLite)"),
+    source: str = typer.Option("sqlite:///data/db/wq_alpha.db", help="URL DB nguồn (SQLite)"),
     dest: str = typer.Option("", help="URL DB đích; rỗng = dùng DATABASE_URL"),
 ) -> None:
     """Copy toàn bộ dữ liệu từ SQLite sang DB đích (Postgres), idempotent."""

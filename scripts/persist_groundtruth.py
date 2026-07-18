@@ -25,7 +25,7 @@ from src.simulation.simulator import SimulationResult  # noqa: E402
 from src.storage.db import make_engine, init_db, make_session_factory  # noqa: E402
 from src.storage.repository import AlphaRepository  # noqa: E402
 
-DB_URL = "sqlite:///wq_alpha_phtrang1229_gmail_com.db"
+DB_URL = "sqlite:///data/db/wq_alpha_phtrang1229_gmail_com.db"
 REGION = "USA"
 UNIVERSE = "TOP3000"
 # config_key cố định để expr_hash ổn định khi tái mô phỏng bộ này (calibration).
