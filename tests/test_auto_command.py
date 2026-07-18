@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import date
 
 import main
+from src.app.cli import simulate as cli_simulate
 from src.app.power_pool_config import resolve_theme_sim_config
 from src.simulation.config import SimConfig
 
@@ -42,14 +43,14 @@ def test_simulate_command_truyen_day_du_sim_config(monkeypatch):
         def save_simulation(self, result, **kwargs):
             captured["saved"] = kwargs
 
-    monkeypatch.setattr(main, "init_db", lambda e: e)
-    monkeypatch.setattr(main, "make_engine", lambda: None)
-    monkeypatch.setattr(main, "make_session_factory", lambda e: (lambda: None))
-    monkeypatch.setattr(main.cli_common, "_make_client", lambda: _FakeClient())
-    monkeypatch.setattr(main, "Simulator", _FakeSimulator)
-    monkeypatch.setattr(main, "AlphaRepository", _FakeRepo)
+    monkeypatch.setattr(cli_simulate, "init_db", lambda e: e)
+    monkeypatch.setattr(cli_simulate, "make_engine", lambda: None)
+    monkeypatch.setattr(cli_simulate, "make_session_factory", lambda e: (lambda: None))
+    monkeypatch.setattr(cli_simulate, "_make_client", lambda: _FakeClient())
+    monkeypatch.setattr(cli_simulate, "Simulator", _FakeSimulator)
+    monkeypatch.setattr(cli_simulate, "AlphaRepository", _FakeRepo)
 
-    main.simulate(
+    cli_simulate.simulate(
         expr="rank(close)",
         region="EUR",
         universe="TOP1200",
