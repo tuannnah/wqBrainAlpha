@@ -6,7 +6,7 @@ from __future__ import annotations
 import inspect
 from types import SimpleNamespace
 
-import main
+import src.app.cli.marathon as main
 from src.simulation.config import SimConfig
 
 
