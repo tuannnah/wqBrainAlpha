@@ -1068,3 +1068,58 @@ def test_build_closed_loop_wire_pp_ready_fn(small_panel, repo) -> None:  # noqa:
                              pop_size=6, n_generations=0, top_k=3, max_ideas=2)
     assert callable(loop.pp_ready_fn)
     assert loop.pp_ready_fn() == []
+
+
+class _DataGia:
+    """Data giả cho test reseed_epoch — chỉ cần field_names() (GPIdeaSource._run_one_batch
+    dùng để dựng fields/seed_cores, và build_closed_loop dùng để nhóm field_groups)."""
+
+    def field_names(self):
+        return {"close", "open", "volume", "vwap"}
+
+
+class _RepoGia:
+    """Repo giả cho test reseed_epoch — chỉ cần load_pool() (GPIdeaSource._run_one_batch)."""
+
+    def load_pool(self):
+        return None
+
+
+class _EngineGiaRong:
+    """GPEngine giả — generate_many() bị monkeypatch để bỏ qua nội dung engine, chỉ cần một
+    giá trị trả về hợp lệ từ GPEngine(...) (chữ ký lambda giả trong test)."""
+
+    def run(self):
+        from src.gp.engine import GPRunResult
+        return GPRunResult(generations_run=0, final_population=[], best_by_sharpe=None,
+                           n_evaluated=0, n_passed=0, seed=42)
+
+
+def test_reseed_epoch_doi_seed_va_mo_lai_gp():
+    """B1: reseed_epoch() tăng epoch, đổi seed (+10_000), reset batch counter, MỞ LẠI ngân
+    sách GP (gp_budget_exhausted=False) cho epoch mới."""
+    from src.app.closed_loop_adapters import GPIdeaSource
+    src = GPIdeaSource(data=None, repo=None, config=None, registry=None, base_seed=42)
+    src.set_gp_budget_exhausted(True)
+    src.reseed_epoch()
+    assert src.base_seed == 10_042
+    assert src._gp_budget_exhausted is False
+    assert src._batch == 0
+
+
+def test_reseed_epoch_xoay_field_groups(monkeypatch):
+    """B1: field_groups (nếu truyền) xoay theo epoch — epoch 0 dùng toàn bộ field (không
+    override, fields_override=None); từ epoch 1 trở đi truyền fields_override=field_groups[
+    epoch % len(field_groups)] xuống GPEngine."""
+    from src.app import closed_loop_adapters as m
+    nhan = []
+    monkeypatch.setattr(m, "GPEngine", lambda **kw: nhan.append(kw.get("fields_override")) or _EngineGiaRong())
+    monkeypatch.setattr(m, "generate_many", lambda **kw: [])
+    groups = (("close", "open"), ("volume", "vwap"))
+    src = m.GPIdeaSource(data=_DataGia(), repo=_RepoGia(), config=None, registry=None,
+                         field_groups=groups, max_empty_retries=1)
+    src.next_batch()                 # epoch 0: không override
+    assert nhan[-1] is None
+    src.reseed_epoch()               # epoch 1: nhóm groups[1 % 2]
+    src.next_batch()
+    assert nhan[-1] == ("volume", "vwap")

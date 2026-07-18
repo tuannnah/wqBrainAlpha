@@ -191,6 +191,7 @@ class ClosedLoop:
         max_gp_sims: int | None = 3,
         pp_ready_fn=None,
         on_gp_budget_exhausted=None,
+        on_epoch_reseed=None,
     ) -> None:
         self.idea_source = idea_source
         self.refiner = refiner
@@ -236,6 +237,13 @@ class ClosedLoop:
         # gp_budget bên dưới. Gọi ĐÚNG MỘT LẦN với True trong run() (xem `gp_budget_da_bao`);
         # None -> bỏ qua (tương thích ngược).
         self.on_gp_budget_exhausted = on_gp_budget_exhausted
+        # B1: callable () -> bool — gọi khi batch RỖNG (KHÔNG chắc đã cạn tuyệt đối), để mở
+        # epoch mới (seed mới + xoay dataset field, giữ nguyên họ đóng/eval_cache) thay vì dừng
+        # ngay. Trả True = đã reseed thật (run() chạy tiếp); False/None = không reseed được
+        # (dừng như cũ, `no_more_ideas`). Composition root (build_closed_loop) nối xuống
+        # GPIdeaSource.reseed_epoch(). None -> bỏ qua (tương thích ngược, dừng ngay khi rỗng
+        # như hành vi trước B1).
+        self.on_epoch_reseed = on_epoch_reseed
 
     def run(self) -> ClosedLoopReport:
         """Lặp: next_batch → mỗi ý tưởng refine_and_sim → record_brain_sim → đếm. Dừng khi
@@ -251,6 +259,12 @@ class ClosedLoop:
         # A1: cờ đã bắn on_gp_budget_exhausted(True) trong phiên này chưa — đảm bảo callback
         # chỉ gọi ĐÚNG MỘT LẦN dù nhiều candidate GP sau đó vẫn rơi vào nhánh gp_budget.
         gp_budget_da_bao = False
+        # B1: đếm số epoch đã reseed (chỉ để log) + cờ "batch VỪA rỗng ngay sau một reseed"
+        # (đảm bảo tối đa 1 lần reseed liên tiếp cho mỗi lần rỗng thật — rỗng NGAY SAU reseed
+        # nghĩa là epoch mới cũng cạn ngay lập tức -> cạn tuyệt đối, dừng thật thay vì reseed
+        # vô hạn). Reset về False mỗi khi batch KHÔNG rỗng (còn ý tưởng để chạy).
+        so_epoch = 0
+        vua_reseed = False
         # seen chứa DEDUP KEY (canonical fold Pha 1.2), không phải chuỗi thô. Nạp avoid-list
         # bền = UNION 3 tập (avoided_hashes ∪ avoided_hashes_original ∪ dedup(avoided_exprs))
         # qua `compute_avoided_hashes` — hàm DÙNG CHUNG với `build_closed_loop` (Finding #2
@@ -359,8 +373,29 @@ class ClosedLoop:
             batch = self.idea_source.next_batch()
             gen_batch_ms = (time.perf_counter() - _gen_t0) * 1000.0
             if not batch:
+                # B1: batch rỗng chưa chắc đã cạn tuyệt đối — thử mở epoch mới (seed mới +
+                # xoay dataset field ưu tiên) MỘT LẦN; rỗng NGAY SAU reseed đó (vua_reseed vẫn
+                # True vì chưa có batch không-rỗng nào reset nó) mới coi là cạn tuyệt đối.
+                if (not vua_reseed) and self.on_epoch_reseed is not None and self.on_epoch_reseed():
+                    vua_reseed = True
+                    so_epoch += 1
+                    # Ngân sách sim GP (Task 3/A1) là NGÂN SÁCH THEO PHIÊN NGHIÊN CỨU, nhưng
+                    # epoch mới coi như một đợt tìm kiếm mới (seed mới + có thể xoay field) —
+                    # reset để candidate gp lại được sim ở epoch mới, KHÔNG bị khoá bởi trần đã
+                    # chạm ở epoch trước. gp_budget_da_bao (cờ một-lần của callback A1) cũng
+                    # phải reset — nếu không, epoch mới chạm trần lần nữa sẽ KHÔNG bắn lại
+                    # on_gp_budget_exhausted(True) (cờ tưởng đã bắn từ epoch trước), khiến
+                    # GPIdeaSource của epoch mới không được báo tắt tiến hoá khi thật sự chạm trần.
+                    gp_sims_used = 0
+                    gp_budget_da_bao = False
+                    logger.info(
+                        "🔄 Epoch #{}: reseed (batch rỗng) — seed mới + xoay dataset, giữ họ đóng.",
+                        so_epoch,
+                    )
+                    continue
                 logger.info("Cạn ý tưởng (batch rỗng) — dừng vòng kín.")
                 return _report("no_more_ideas")
+            vua_reseed = False
             # Chi phí sinh (GP/decorrelate) là của CẢ batch; phân bổ đều cho mỗi ứng viên để
             # điền gen_ms (refiner không biết chi phí này). Xấp xỉ đủ tốt cho funnel timing.
             gen_ms_each = gen_batch_ms / len(batch)

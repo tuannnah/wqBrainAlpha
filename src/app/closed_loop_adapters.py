@@ -660,6 +660,13 @@ class CuratedIdeaSource:
         if hasattr(self._fallback, "set_gp_budget_exhausted"):
             self._fallback.set_gp_budget_exhausted(flag)
 
+    def reseed_epoch(self) -> None:
+        """B1: uỷ quyền xuống fallback (cùng pattern set_saturated_families/
+        set_gp_budget_exhausted) — CuratedIdeaSource tự nó không có epoch/seed, việc reseed
+        thật xảy ra ở GPIdeaSource cuối chuỗi."""
+        if hasattr(self._fallback, "reseed_epoch"):
+            self._fallback.reseed_epoch()
+
     def next_batch(self):
         if not self._served_curated:
             self._served_curated = True
@@ -782,6 +789,12 @@ class AltDataIdeaSource:
         if hasattr(self._fallback, "set_gp_budget_exhausted"):
             self._fallback.set_gp_budget_exhausted(flag)
 
+    def reseed_epoch(self) -> None:
+        """B1: uỷ quyền xuống fallback, cùng pattern set_saturated_families/
+        set_gp_budget_exhausted (xem CuratedIdeaSource.reseed_epoch)."""
+        if hasattr(self._fallback, "reseed_epoch"):
+            self._fallback.reseed_epoch()
+
     def _presim_batch(self, cores: list[str]) -> None:
         """Task 6: sim NHÓM `cores` (cắt trần `presim_cap` — xem docstring class, Finding #1)
         1 lần qua `simulate_many` (thay vì N lần tuần tự sau này trong `_sim_direct`), ghi kết
@@ -855,6 +868,7 @@ class GPIdeaSource:
         self, data: object, repo: object, config: object, registry: object, *,
         pop_size: int = 30, n_generations: int = 3, base_seed: int = 42,
         top_k: int = 10, max_corr: float = 0.70, max_empty_retries: int = 2,
+        field_groups: "tuple[tuple[str, ...], ...] | None" = None,
     ) -> None:
         # Lưu dưới Any để forward vào GPEngine/generate_many mà không cần cast cứng
         self._data: Any = data
@@ -868,6 +882,13 @@ class GPIdeaSource:
         self.max_corr = max_corr
         self.max_empty_retries = max_empty_retries
         self._batch = 0
+        # B1: nhóm field theo dataset (dataset ÍT field trước — proxy "ít dùng"), để xoay
+        # sang nhóm khác mỗi epoch reseed (xem reseed_epoch/_run_one_batch bên dưới). None =
+        # không xoay (dùng toàn bộ field mọi epoch, tương thích ngược).
+        self.field_groups = field_groups
+        # B1: đếm epoch hiện tại (0 = epoch gốc, dùng toàn bộ field như cũ). Tăng dần mỗi lần
+        # reseed_epoch() được gọi (ClosedLoop gọi khi batch rỗng nhưng chưa chắc đã cạn hẳn).
+        self._epoch = 0
         # Task 4: họ đã đóng (ClosedLoop báo qua on_family_closed) -> lọc bỏ candidate cùng họ
         # TRƯỚC khi trả, tránh sinh mãi pv_reversal rồi bị ClosedLoop loại sau (tốn ~2 phút/batch).
         self._saturated: set[str] = set()
@@ -890,6 +911,18 @@ class GPIdeaSource:
         3–14 phút/batch). Epoch reseed (B1) gọi lại với False để mở lại."""
         self._gp_budget_exhausted = flag
 
+    def reseed_epoch(self) -> None:
+        """B1: mở epoch mới khi ClosedLoop báo batch rỗng (chưa chắc đã cạn tuyệt đối) — đổi
+        seed (base_seed += 10_000, đủ xa để không trùng lô seed cũ), reset batch counter (epoch
+        mới bắt đầu lại từ seed_offset=0), MỞ LẠI ngân sách sim GP (gp_budget_exhausted=False —
+        trần cũ thuộc epoch trước, epoch mới là một đợt tìm kiếm mới). GIỮ NGUYÊN
+        `_saturated` (họ đã đóng vẫn đóng — không "quên" bài học trong phiên) và `_eval_cache`
+        (backtest thuần là hàm xác định của (expr, config, data), không phụ thuộc epoch)."""
+        self._epoch += 1
+        self.base_seed += 10_000
+        self._batch = 0
+        self._gp_budget_exhausted = False
+
     def _run_one_batch(self) -> list[ShortlistCandidate]:
         seed = self.base_seed + self._batch
         seed_offset = self._batch * self.pop_size
@@ -898,6 +931,15 @@ class GPIdeaSource:
         # hit trong đa số cửa sổ batch gần nhau, không cần bền vững cả phiên).
         if len(self._eval_cache) > 5000:
             self._eval_cache.clear()
+        # B1: epoch 0 (gốc) luôn dùng TOÀN BỘ field như cũ (fields_override=None). Từ epoch 1
+        # trở đi (đã reseed ít nhất 1 lần) mới xoay sang nhóm field ưu tiên tiếp theo — nếu
+        # field_groups không được tiêm (composition root không xác định được dataset), giữ
+        # nguyên None mọi epoch.
+        fields_override = (
+            self.field_groups[self._epoch % len(self.field_groups)]
+            if self.field_groups and self._epoch > 0
+            else None
+        )
         engine = GPEngine(
             data=self._data, repo=self._repo, config=self._config, registry=self._registry,
             pop_size=self.pop_size, n_generations=self.n_generations, seed=seed,
@@ -907,6 +949,9 @@ class GPIdeaSource:
             saturated_families=self._saturated,
             # A3: cache backtest thuần CHIA SẺ xuyên mọi GPEngine dựng trong phiên này.
             eval_cache=self._eval_cache,
+            # B1: nhóm field ưu tiên của epoch hiện tại (None = toàn bộ field, epoch 0 hoặc
+            # không có field_groups).
+            fields_override=fields_override,
         )
         pool: Any = self._repo.load_pool() or None
         # GPEngine.run() -> GPRunResult; Protocol _RunsGP đòi _GPRunResultLike với
@@ -990,6 +1035,12 @@ class CombinerIdeaSource:
     def set_gp_budget_exhausted(self, flag: bool) -> None:
         if hasattr(self._fallback, "set_gp_budget_exhausted"):
             self._fallback.set_gp_budget_exhausted(flag)
+
+    def reseed_epoch(self) -> None:
+        """B1: uỷ quyền xuống fallback, cùng pattern set_saturated_families/
+        set_gp_budget_exhausted (xem CuratedIdeaSource.reseed_epoch)."""
+        if hasattr(self._fallback, "reseed_epoch"):
+            self._fallback.reseed_epoch()
 
     def _score_fn(self, pool):
         def score(expr: str):
@@ -1195,9 +1246,33 @@ def build_closed_loop(
     # mới bị `seen` ở run() chặn — không còn dấu vết audit.
     avoided_hashes: "set[str] | None" = compute_avoided_hashes(repo, _dedup_key)
 
+    # dataset_of_fields (nếu repo có — MiniBrainRepository) phục vụ CẢ combo cùng-dataset của
+    # NearMissVariantSource (dưới) LẪN xoay nhóm field ưu tiên theo epoch reseed (B1) — lấy
+    # sớm để dùng chung, tránh định nghĩa trùng. Chữ ký thật (MiniBrainRepository.
+    # dataset_of_fields) nhận `set[str]` field_ids, trả {field_id: dataset_id} (field không có
+    # trong catalog hoặc dataset_id NULL thì vắng mặt trong map).
+    _ds_fn = getattr(repo, "dataset_of_fields", None)
+    # B1: nhóm field theo dataset cho xoay epoch (ưu tiên originality — dataset ÍT field lên
+    # trước, proxy "ít dùng"). repo không có dataset_of_fields (test giả) hoặc data không có
+    # field_names() -> None, không xoay (mọi epoch dùng toàn bộ field như cũ).
+    field_groups: "tuple[tuple[str, ...], ...] | None" = None
+    if callable(_ds_fn) and hasattr(data, "field_names"):
+        try:
+            _mapping = _ds_fn(set(data.field_names()))  # {field: dataset}
+            _by_ds: dict[str, list[str]] = {}
+            for f, ds in _mapping.items():
+                _by_ds.setdefault(ds or "khac", []).append(f)
+            if len(_by_ds) >= 2:
+                # dataset ÍT field trước (proxy "ít dùng"), pv lớn xuống cuối
+                field_groups = tuple(
+                    tuple(sorted(fs)) for _, fs in sorted(_by_ds.items(), key=lambda kv: len(kv[1]))
+                )
+        except Exception:
+            field_groups = None
+
     idea_source: object = GPIdeaSource(
         data, repo, config, registry, pop_size=pop_size, n_generations=n_generations,
-        base_seed=base_seed, top_k=top_k, max_corr=max_corr,
+        base_seed=base_seed, top_k=top_k, max_corr=max_corr, field_groups=field_groups,
     )
     # Thử core price/volume ĐÃ KIỂM CHỨNG (Brain ~1.5+) TRƯỚC, rồi mới tới GP random — hạt
     # giống mạnh vào pipeline sớm để LocalTuner tune quanh -> chạm alpha đạt chuẩn nộp nhanh.
@@ -1226,8 +1301,9 @@ def build_closed_loop(
     # (Sharpe [0.6, 1.0)) thay vì nhảy thẳng về GP. Lọc avoid-hashes cùng không gian _dedup_key.
     # dataset_of_fields (nếu repo có — MiniBrainRepository) bật thêm combo CÙNG-DATASET:
     # ghép cặp near-miss chung dataset thành rank(add(a,b)) (bài học KP9Aw3lj 2026-07-16:
-    # combo 2 field order_flow_imb thắng Sharpe 1.03 vs biến thể đơn lẻ <=0.9).
-    _ds_fn = getattr(repo, "dataset_of_fields", None)
+    # combo 2 field order_flow_imb thắng Sharpe 1.03 vs biến thể đơn lẻ <=0.9). `_ds_fn` đã
+    # lấy sớm hơn (đầu hàm, cùng chỗ tính field_groups cho B1) — dùng lại, không định nghĩa
+    # trùng.
     idea_source = NearMissVariantSource(
         repo=repo, fallback=idea_source,
         dedup_key_fn=_dedup_key, avoided_hashes=avoided_hashes,
@@ -1293,6 +1369,19 @@ def build_closed_loop(
     def on_gp_budget_exhausted(flag: bool) -> None:
         idea_source.set_gp_budget_exhausted(flag)  # type: ignore[attr-defined]
 
+    # B1: khi batch rỗng (chưa chắc đã cạn tuyệt đối), ClosedLoop gọi callback này để mở epoch
+    # mới thay vì dừng ngay — seed mới (base_seed += 10_000) + xoay nhóm field ưu tiên
+    # (field_groups, nếu wiring dataset thành công ở trên) + MỞ LẠI ngân sách sim GP cho epoch
+    # mới, GIỮ NGUYÊN saturated_families/eval_cache (đã tiêm trực tiếp vào GPIdeaSource,
+    # reseed_epoch() không đụng tới). `idea_source` (wrapper ngoài cùng) LUÔN có reseed_epoch
+    # (ủy quyền xuống tận GPIdeaSource, cùng pattern on_gp_budget_exhausted ở trên) — gọi thẳng,
+    # không cần hasattr guard. Luôn trả True (composition root luôn nối được reseed_epoch thật;
+    # rỗng NGAY SAU epoch mới thì tự ClosedLoop.run() coi là cạn tuyệt đối, không cần callback
+    # tự báo False).
+    def on_epoch_reseed() -> bool:
+        idea_source.reseed_epoch()  # type: ignore[attr-defined]
+        return True
+
     # Yêu cầu 2026-07-18: cuối phiên ClosedLoop tự chấm PP-ready (cấu trúc + theme +
     # description) và in khối "⭐ PP SẴN SÀNG NỘP" — bọc select_power_pool_candidates
     # (module-level, chỉ cần session_factory, không cần client) tại composition root để
@@ -1315,4 +1404,5 @@ def build_closed_loop(
         on_family_closed=on_family_closed, max_gp_sims=max_gp_sims,
         pp_ready_fn=pp_ready_fn,
         on_gp_budget_exhausted=on_gp_budget_exhausted,
+        on_epoch_reseed=on_epoch_reseed,
     )

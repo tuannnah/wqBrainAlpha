@@ -104,6 +104,7 @@ class GPEngine:
         n_jobs: int = 1,
         saturated_families: "frozenset[str] | set[str]" = frozenset(),
         eval_cache: "dict[str, tuple] | None" = None,
+        fields_override: "tuple[str, ...] | None" = None,
     ) -> None:
         self.data = data
         self.repo = repo
@@ -127,6 +128,11 @@ class GPEngine:
         # data) bất biến trong phiên. Chủ sở hữu (GPIdeaSource) truyền dict CHIA SẺ xuyên nhiều
         # GPEngine/batch; None = tắt cache (mặc định, dùng cho test độc lập không quan tâm cache).
         self.eval_cache = eval_cache
+        # B1: nhóm field CỐ ĐỊNH cho epoch reseed (GPIdeaSource xoay dataset field ưu tiên
+        # mỗi epoch) — None = dùng toàn bộ field của data (hành vi cũ, mọi caller trước B1).
+        # PHẢI là tập con của data.field_names() — caller (composition root) lọc trước khi
+        # truyền; run() không tự kiểm tra lại.
+        self.fields_override = fields_override
 
     def _evaluate_individual(
         self, ind: Individual, pool_corr: PoolCorrelation,
@@ -366,7 +372,11 @@ class GPEngine:
 
         ``pool_corr`` được nạp lại từ DB ở đầu mỗi vòng (pool lớn dần khi có alpha pass)."""
         rng = np.random.default_rng(self.seed)
-        fields = tuple(sorted(self.data.field_names()))
+        fields = (
+            tuple(sorted(self.fields_override))
+            if self.fields_override
+            else tuple(sorted(self.data.field_names()))
+        )
         seed_cores = all_seed_cores(
             with_llm=self.with_llm_seeds,
             field_names=set(self.data.field_names()),

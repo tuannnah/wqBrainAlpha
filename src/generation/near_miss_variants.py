@@ -199,6 +199,13 @@ class NearMissVariantSource:
         if hasattr(self._fallback, "set_gp_budget_exhausted"):
             self._fallback.set_gp_budget_exhausted(flag)
 
+    def reseed_epoch(self) -> None:
+        """B1: uỷ quyền xuống fallback, cùng pattern set_saturated_families/
+        set_gp_budget_exhausted — NearMissVariantSource tự nó không có epoch/seed, việc
+        reseed thật xảy ra ở GPIdeaSource cuối chuỗi."""
+        if hasattr(self._fallback, "reseed_epoch"):
+            self._fallback.reseed_epoch()
+
     def next_batch(self):
         if self._served:
             return self._fallback.next_batch()

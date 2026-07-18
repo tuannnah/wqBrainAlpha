@@ -88,6 +88,22 @@ def _passed(expr: str) -> IdeaOutcome:
                        self_corr=0.3, sims_used=2, stop_reason="passed")
 
 
+def _chay_loop_voi_batches(
+    batches: list[list[ShortlistCandidate]], on_epoch_reseed=None,
+) -> ClosedLoopReport:
+    """Helper B1: dựng ClosedLoop với `_FakeIdeaSource(batches)` + repo in-memory riêng (không
+    cần fixture `repo` vì test reseed không quan tâm nội dung DB) — chỉ để kiểm semantics
+    dừng/reseed khi batch rỗng."""
+    engine = create_engine("sqlite:///:memory:", future=True)
+    init_db(engine)
+    sf = sessionmaker(bind=engine, future=True, expire_on_commit=False)
+    repo = MiniBrainRepository(sf)
+    src = _FakeIdeaSource(batches)
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo, on_epoch_reseed=on_epoch_reseed)
+    return loop.run()
+
+
 def test_run_persists_each_outcome_and_counts(repo) -> None:  # noqa: ANN001
     src = _FakeIdeaSource([[_cand("close"), _cand("open")]])
     refiner = _FakeRefiner({"close": _passed("close")})  # open -> failed mặc định
@@ -796,3 +812,13 @@ def test_report_khong_co_pp_ready_fn_khong_in_khoi_pp(repo) -> None:  # noqa: AN
     finally:
         logger.remove(sink_id)
     assert "PP SẴN SÀNG NỘP" not in "\n".join(msgs)
+
+
+def test_batch_rong_goi_reseed_roi_chay_tiep():
+    """Batch rỗng lần 1 -> on_epoch_reseed()=True -> loop gọi next_batch tiếp; rỗng ngay
+    sau reseed -> dừng no_more_ideas. gp_sims_used được reset (candidate gp lại được sim)."""
+    goi = []
+    # idea_source giả: lần 1 trả [], lần 2 trả [], (sau reseed thứ nhất vẫn rỗng -> dừng)
+    report = _chay_loop_voi_batches(batches=[[], []], on_epoch_reseed=lambda: goi.append(1) or True)
+    assert goi == [1]
+    assert report.stop_reason == "no_more_ideas"
