@@ -195,6 +195,10 @@ class NearMissVariantSource:
         if hasattr(self._fallback, "set_saturated_families"):
             self._fallback.set_saturated_families(fams)
 
+    def set_gp_budget_exhausted(self, flag: bool) -> None:
+        if hasattr(self._fallback, "set_gp_budget_exhausted"):
+            self._fallback.set_gp_budget_exhausted(flag)
+
     def next_batch(self):
         if self._served:
             return self._fallback.next_batch()

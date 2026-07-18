@@ -379,6 +379,35 @@ def test_chuoi_wrapper_lan_toa_loc_ho_dong_toi_gp(small_panel, repo) -> None:  #
     assert batch and all(classify_family(c.expr) != "pv_reversal" for c in batch)
 
 
+def test_gp_idea_source_bo_qua_tien_hoa_khi_budget_can(monkeypatch):
+    # GPIdeaSource với cờ bật: next_batch trả [] và KHÔNG dựng GPEngine
+    from src.app import closed_loop_adapters as m
+
+    goi_engine = []
+    monkeypatch.setattr(
+        m, "GPEngine",
+        lambda **kw: goi_engine.append(kw) or (_ for _ in ()).throw(AssertionError("không được dựng GPEngine")),
+    )
+    src = m.GPIdeaSource(data=None, repo=None, config=None, registry=None)
+    src.set_gp_budget_exhausted(True)
+    assert src.next_batch() == []
+    assert goi_engine == []
+    # Gọi lại False -> chạy bình thường (sẽ nổ AssertionError từ fake ở trên)
+    src.set_gp_budget_exhausted(False)
+    import pytest
+    with pytest.raises(AssertionError):
+        src.next_batch()
+
+
+def test_wrapper_uy_quyen_set_gp_budget_exhausted():
+    from src.app.closed_loop_adapters import CuratedIdeaSource, GPIdeaSource
+
+    gp = GPIdeaSource(data=None, repo=None, config=None, registry=None)
+    wrapper = CuratedIdeaSource(fallback=gp)
+    wrapper.set_gp_budget_exhausted(True)
+    assert gp._gp_budget_exhausted is True
+
+
 def test_build_closed_loop_on_family_closed_noi_toi_idea_source(small_panel, repo) -> None:  # noqa: ANN001
     """Task 4, verify (b): build_closed_loop phải nối on_family_closed -> idea_source (chuỗi
     generator THẬT), không chỉ tới idea_generator (LLM re-seed riêng, mặc định None). Gọi

@@ -190,6 +190,7 @@ class ClosedLoop:
         on_family_closed=None,
         max_gp_sims: int | None = 3,
         pp_ready_fn=None,
+        on_gp_budget_exhausted=None,
     ) -> None:
         self.idea_source = idea_source
         self.refiner = refiner
@@ -229,6 +230,12 @@ class ClosedLoop:
         # composition root (build_closed_loop) để pipeline KHÔNG import tầng submission (B1).
         # None -> bỏ qua khối (tương thích ngược).
         self.pp_ready_fn = pp_ready_fn
+        # A1: callback báo TRẦN NGÂN SÁCH SIM GP đã chạm (gp_sims_used >= max_gp_sims) —
+        # composition root (build_closed_loop) nối xuống GPIdeaSource.set_gp_budget_exhausted
+        # để nguồn GP BỎ HẲN tiến hoá (3–14 phút/batch) thay vì chạy xong rồi mới bị vứt ở gate
+        # gp_budget bên dưới. Gọi ĐÚNG MỘT LẦN với True trong run() (xem `gp_budget_da_bao`);
+        # None -> bỏ qua (tương thích ngược).
+        self.on_gp_budget_exhausted = on_gp_budget_exhausted
 
     def run(self) -> ClosedLoopReport:
         """Lặp: next_batch → mỗi ý tưởng refine_and_sim → record_brain_sim → đếm. Dừng khi
@@ -241,6 +248,9 @@ class ClosedLoop:
         # Task 3: đếm SỐ SIM Brain thật (cộng dồn outcome.sims_used) đã dùng bởi candidate
         # origin "gp" — cap ngân sách riêng cho GP, không đụng curated/alt_data/combiner.
         gp_sims_used = 0
+        # A1: cờ đã bắn on_gp_budget_exhausted(True) trong phiên này chưa — đảm bảo callback
+        # chỉ gọi ĐÚNG MỘT LẦN dù nhiều candidate GP sau đó vẫn rơi vào nhánh gp_budget.
+        gp_budget_da_bao = False
         # seen chứa DEDUP KEY (canonical fold Pha 1.2), không phải chuỗi thô. Nạp avoid-list
         # bền = UNION 3 tập (avoided_hashes ∪ avoided_hashes_original ∪ dedup(avoided_exprs))
         # qua `compute_avoided_hashes` — hàm DÙNG CHUNG với `build_closed_loop` (Finding #2
@@ -389,6 +399,12 @@ class ClosedLoop:
                         "tiên quota cho seed/combiner: {}",
                         ideas_tried + 1, self.max_gp_sims, _short(cand.expr),
                     )
+                    # A1: báo TRẦN ĐÃ CHẠM đúng 1 lần/phiên (composition root nối xuống
+                    # GPIdeaSource.set_gp_budget_exhausted -> next_batch bỏ hẳn tiến hoá GP
+                    # thay vì chạy xong rồi mới bị vứt ở đây).
+                    if not gp_budget_da_bao and self.on_gp_budget_exhausted is not None:
+                        gp_budget_da_bao = True
+                        self.on_gp_budget_exhausted(True)
                     outcome = IdeaOutcome(
                         expr=cand.expr, canonical_hash=key, passed=False, wq_alpha_id=None,
                         sharpe=None, fitness=None, turnover=None, self_corr=None,

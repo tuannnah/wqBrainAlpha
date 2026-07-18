@@ -711,6 +711,27 @@ def test_gp_budget_dem_theo_so_sim_khong_phai_so_candidate(repo) -> None:  # noq
     assert report.ideas_tried == 3          # gp3 vẫn có outcome gp_budget (được đếm)
 
 
+def test_on_gp_budget_exhausted_goi_dung_mot_lan(repo) -> None:  # noqa: ANN001
+    """A1: Khi gp_sims_used chạm max_gp_sims, callback bắn True đúng 1 lần dù nhiều candidate
+    GP sau đó cũng rơi vào nhánh gp_budget (không bắn lại mỗi lần chạm)."""
+    gp1, gp2, gp3 = _cand("gp1"), _cand("gp2"), _cand("gp3")
+    # 3 batch riêng biệt, mỗi batch 1 candidate origin "gp" -> gp1 dùng đúng 1 sim (chạm trần
+    # max_gp_sims=1 ngay); gp2, gp3 sau đó đều bị chặn ở nhánh gp_budget.
+    src = _FakeIdeaSource([[gp1], [gp2], [gp3]])
+    gp1_outcome = IdeaOutcome(
+        expr="gp1", canonical_hash="h_gp1", passed=False, wq_alpha_id=None, sharpe=None,
+        fitness=None, turnover=None, self_corr=None, sims_used=1, stop_reason="patience",
+    )
+    refiner = _FakeRefiner({"gp1": gp1_outcome})
+    goi: list[bool] = []
+    loop = ClosedLoop(
+        idea_source=src, refiner=refiner, repo=repo, max_gp_sims=1,
+        on_gp_budget_exhausted=lambda f: goi.append(f),
+    )
+    loop.run()
+    assert goi == [True]
+
+
 def test_report_in_khoi_pp_san_sang_nop(repo) -> None:  # noqa: ANN001
     """Yêu cầu 2026-07-18: cuối phiên tự chấm theme+description (pp_ready_fn inject từ
     composition root) và in khối "⭐ PP SẴN SÀNG NỘP" — id + lệnh nộp cho bản sẵn sàng,

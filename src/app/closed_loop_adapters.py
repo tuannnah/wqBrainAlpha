@@ -656,6 +656,10 @@ class CuratedIdeaSource:
         if hasattr(self._fallback, "set_saturated_families"):
             self._fallback.set_saturated_families(fams)
 
+    def set_gp_budget_exhausted(self, flag: bool) -> None:
+        if hasattr(self._fallback, "set_gp_budget_exhausted"):
+            self._fallback.set_gp_budget_exhausted(flag)
+
     def next_batch(self):
         if not self._served_curated:
             self._served_curated = True
@@ -774,6 +778,10 @@ class AltDataIdeaSource:
         if hasattr(self._fallback, "set_saturated_families"):
             self._fallback.set_saturated_families(fams)
 
+    def set_gp_budget_exhausted(self, flag: bool) -> None:
+        if hasattr(self._fallback, "set_gp_budget_exhausted"):
+            self._fallback.set_gp_budget_exhausted(flag)
+
     def _presim_batch(self, cores: list[str]) -> None:
         """Task 6: sim NHÓM `cores` (cắt trần `presim_cap` — xem docstring class, Finding #1)
         1 lần qua `simulate_many` (thay vì N lần tuần tự sau này trong `_sim_direct`), ghi kết
@@ -863,11 +871,20 @@ class GPIdeaSource:
         # Task 4: họ đã đóng (ClosedLoop báo qua on_family_closed) -> lọc bỏ candidate cùng họ
         # TRƯỚC khi trả, tránh sinh mãi pv_reversal rồi bị ClosedLoop loại sau (tốn ~2 phút/batch).
         self._saturated: set[str] = set()
+        # A1: ClosedLoop báo trần sim GP/phiên đã chạm -> next_batch bỏ hẳn tiến hoá (xem
+        # set_gp_budget_exhausted bên dưới).
+        self._gp_budget_exhausted = False
 
     def set_saturated_families(self, fams: "set[str] | frozenset[str]") -> None:
         """Nhận tập họ vừa đóng (ClosedLoop truyền TOÀN BỘ closed_families mỗi lần, tích luỹ
         dần) -> thay thế set hiện tại (không union thủ công vì nguồn đã là snapshot đầy đủ)."""
         self._saturated = set(fams)
+
+    def set_gp_budget_exhausted(self, flag: bool) -> None:
+        """A1: ClosedLoop báo trần sim GP/phiên đã chạm (True) — next_batch bỏ hẳn tiến hoá
+        (kết quả trước giờ vẫn bị vứt ở gate gp_budget, bỏ chạy = không mất gì, tiết kiệm
+        3–14 phút/batch). Epoch reseed (B1) gọi lại với False để mở lại."""
+        self._gp_budget_exhausted = flag
 
     def _run_one_batch(self) -> list[ShortlistCandidate]:
         seed = self.base_seed + self._batch
@@ -888,6 +905,10 @@ class GPIdeaSource:
         )
 
     def next_batch(self) -> list[ShortlistCandidate]:
+        # A1: trần ngân sách sim GP/phiên đã chạm -> bỏ hẳn tiến hoá (không dựng GPEngine),
+        # kết quả trước giờ vẫn bị ClosedLoop vứt ở gate gp_budget nên bỏ chạy không mất gì.
+        if self._gp_budget_exhausted:
+            return []
         # Một quần thể GP (1 seed) có thể tình cờ 0 ứng viên qua gate/decorrelate — đừng
         # vội kết luận "cạn ý tưởng" (no_more_ideas) chỉ vì 1 seed xui. Thử tới
         # max_empty_retries lô (seed khác nhau) rồi mới trả rỗng thật sự.
@@ -948,6 +969,10 @@ class CombinerIdeaSource:
         self._saturated = set(fams)
         if hasattr(self._fallback, "set_saturated_families"):
             self._fallback.set_saturated_families(fams)
+
+    def set_gp_budget_exhausted(self, flag: bool) -> None:
+        if hasattr(self._fallback, "set_gp_budget_exhausted"):
+            self._fallback.set_gp_budget_exhausted(flag)
 
     def _score_fn(self, pool):
         def score(expr: str):
@@ -1244,6 +1269,13 @@ def build_closed_loop(
         if idea_generator is not None and hasattr(idea_generator, "set_saturated_families"):
             idea_generator.set_saturated_families(fams)
 
+    # A1: nối tín hiệu "trần ngân sách sim GP đã chạm" -> chuỗi idea_source THẬT (mọi wrapper
+    # đều có set_gp_budget_exhausted, ủy quyền xuống tận GPIdeaSource, cùng pattern
+    # on_family_closed ở trên) — GPIdeaSource bỏ hẳn tiến hoá thay vì chạy xong 3–14 phút/batch
+    # rồi mới bị vứt ở gate gp_budget trong ClosedLoop.run().
+    def on_gp_budget_exhausted(flag: bool) -> None:
+        idea_source.set_gp_budget_exhausted(flag)  # type: ignore[attr-defined]
+
     # Yêu cầu 2026-07-18: cuối phiên ClosedLoop tự chấm PP-ready (cấu trúc + theme +
     # description) và in khối "⭐ PP SẴN SÀNG NỘP" — bọc select_power_pool_candidates
     # (module-level, chỉ cần session_factory, không cần client) tại composition root để
@@ -1265,4 +1297,5 @@ def build_closed_loop(
         family_fn=classify_family, max_per_family=max_per_family,
         on_family_closed=on_family_closed, max_gp_sims=max_gp_sims,
         pp_ready_fn=pp_ready_fn,
+        on_gp_budget_exhausted=on_gp_budget_exhausted,
     )
