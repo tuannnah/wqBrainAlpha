@@ -1,7 +1,16 @@
 # MiniBrain — Progress log
 
 ## Current state
-- **Phase [2026-07-18, Session 16]:** Engine vòng kín đã tối ưu TỐC ĐỘ + CHẤT LƯỢNG (8 task
+- **Phase [2026-07-18, Session 17]:** Đường nộp pure PP đã TỰ ĐỘNG HOÁ MÔ TẢ + AN TOÀN HƠN
+  (3 commit `54fa3f0`/`bb2603f`/`6716f76`, suite 1541 passed): (1) FRONTIER_HYPOTHESES 9
+  category + fallback mô tả trong selector — alpha frontier thiếu hypothesis hết bị skip
+  "thiếu mô tả" (LLdLVX0a Sharpe 1.08 nay READY); (2) fix parse strict→lenient khi trích
+  field; (3) gate POWER_POOL_CORRELATION chặn nộp alpha PP-corr>0.5 (le3L9Eex PP-corr 1.0
+  READY giả — nguy cơ đốt slot/ngày). **Next: USER quét QR login** rồi nộp 1 alpha hôm nay:
+  ứng viên LLdLVX0a (PP-corr 0.5088 — SÁT trần, rủi ro), biến thể V1 `omg7mGKE`
+  (INDUSTRY, Sharpe 1.00, PP-corr chưa đọc), V2 vector_neut đã sim xong phía Brain
+  (id chưa đọc được vì session hết hạn). le3L9Eex TUYỆT ĐỐI không nộp.
+- **Phase (trước) [2026-07-18, Session 16]:** Engine vòng kín đã tối ưu TỐC ĐỘ + CHẤT LƯỢNG (8 task
   A1-C2 merge main `38b4ade`, suite 1534 passed): GP tắt khi gp_budget cạn, lọc degenerate/họ-đóng
   trước backtest, cache backtest canonical_hash (entry gọn daily_pnl+metrics), retry 8→2, reseed
   epoch tự động (giữ họ đóng, max_gp_sims per-epoch), two-stage dataset sampling, hạ tầng song song
@@ -636,3 +645,44 @@
 - **Blockers / open risks:** ⚠️ B1-xoay-dataset/B2 hiện INERT production: `all_seed_cores` 82 seed ≥ pop 30 → init_population toàn seed không filler; panel live 6 field PV → `field_groups=None`. Bất biến đúng, không hại — nhưng lợi ích chỉ kích hoạt khi panel có field alt-data + có chỗ filler. Follow-up sau merge: tỉ lệ filler/pop + truyền field_groups vào mutation; trần max_epochs; nối n_jobs CLI kèm close()+BrokenProcessPool guard.
 - **Next step:** USER chạy menu 5 nghiệm thu live: (1) batch sau khi gp_budget cạn < 30 giây (trước 3–14 phút); (2) log `🔄 Epoch #1: reseed` khi cạn ý tưởng; (3) RAM ổn định phiên dài; (4) đừng kỳ vọng thấy xoay dataset (inert, xem trên). Local repo ahead origin/main 59 commit — chưa push (chờ user).
 - **Tests:** 1534 passed (+~40 test mới) + 1 fail psycopg CÓ SẴN. Parity 2-worker thật xanh trên main sau merge.
+
+### [2026-07-18] Session 17 — Đường nộp pure PP: tự dựng mô tả frontier + gate PP-correlation
+- **Phase:** Vận hành/cải thiện đường nộp. Goal user: đọc log gần đây, cải thiện tool, nộp 1 alpha.
+- **Chẩn đoán (log + DB 18/07):** Khối ⭐ luôn "0 ready/23 bỏ qua". Soi từng ứng viên: 21 lệch
+  theme (TOP3000/pv1 — đúng), NHƯNG 2 ứng viên KHỚP theme bị chặn chỉ vì "thiếu mô tả":
+  `LLdLVX0a` (ts_rank(−ts_mean(firm_vol_imbalance,5)),66), Sharpe 1.08, self-corr 0.246) và
+  `le3L9Eex` (rank(−BD−firm), Sharpe 1.03). Root cause: `alphas.hypothesis='{}'` trên MỌI alpha
+  đường sim-thẳng/near-miss — hypothesis 4 phần frontier chỉ nằm ở COMMENT trong code. Đọc
+  GET /alphas/{id}/check thật: LLdLVX0a **POWER_POOL_CORRELATION 0.5088 > trần 0.5** (WARNING,
+  sát nút); le3L9Eex **PP-corr = 1.0** (trùng toán học KP9Aw3lj đã nộp 16/07) — và gate cũ
+  của submit_power_pool CHỈ check self-corr (0.4931 < 0.5 → QUA) ⇒ `--no-dry-run` sẽ tự nộp
+  bản chắc chắn rejected, đốt slot 1 pure PP/ngày.
+- **Done (3 commit, TDD từng bước, suite 1541 passed + ruff sạch):**
+  - `54fa3f0` FRONTIER_HYPOTHESES: hypothesis cấu trúc TIẾNG ANH cho 9 category frontier +
+    `frontier_hypothesis(expr)`; selector Fallback 2 dựng mô tả khi thiếu hypothesis riêng
+    lẫn regular_desc. Test phủ kín category/độ dài/tra-theo-expr + fallback selector.
+  - `bb2603f` Fix lộ khi nghiệm thu DB thật: `_frontier_categories` dùng parse STRICT →
+    tiến trình `submit` (không import module đăng ký operator local) ném ParseError
+    'ts_rank' → fallback câm lặng. Đổi `parse_expression` lenient (trích field chỉ cần
+    cú pháp; FieldCollector có sẵn fallback op-ngoài-registry). Test: registry TRỐNG vẫn tra được.
+  - `6716f76` Gate POWER_POOL_CORRELATION trong submit_power_pool (đứng TRƯỚC self-corr/
+    PATCH/POST): `_power_pool_correlation` poll GET /alphas/{id}/check theo Retry-After
+    (budget 180s); >0.5 → skip nêu số; None (không đọc được) không chặn oan.
+  - Nghiệm thu DB thật: selector nay 2 READY (LLdLVX0a desc tự dựng + le3L9Eex) — le3L9Eex
+    sẽ bị gate PP-corr chặn lúc nộp thật (đúng thiết kế).
+  - **2 sim khử tương quan đã phóng** (script tay, không đụng DB): V1 cùng expr đổi neut
+    INDUSTRY → `omg7mGKE` Sharpe **1.00**/fit 0.28/TO 0.363 (PP-corr CHƯA đọc); V2
+    `vector_neut(ts_rank(−ts_mean(firm,5),66), rank(−(firm+BD)))` SECTOR — POST xong,
+    hoàn tất phía Brain nhưng CHƯA đọc được kết quả (session hết hạn giữa chừng).
+- **Decisions:** (1) Mô tả PP mức CATEGORY viết hướng TRUNG TÍNH (core cùng category có thể
+  follow/fade). (2) Gate PP-corr chặn theo GIÁ TRỊ >0.5 (docs + trần _PP_SELF_CORR_MAX),
+  không tin `result` (pre-submit mọi record PP đều WARNING kể cả 1.0). (3) KHÔNG nộp mù
+  LLdLVX0a (0.5088 sát trần) khi còn V1/V2 chưa đọc PP-corr.
+- **Blockers:** `.wq_session` HẾT HẠN (~22:29) — mọi bước còn lại cần USER quét QR
+  (`main.py login`): đọc kết quả V2 + PP-corr của omg7mGKE, rồi `submit --power-pool`
+  (dry-run → chọn bản PP-corr<0.5 Sharpe≥1.0 → `--no-dry-run`). Job submit 30'/vòng,
+  giờ cao điểm cần 3+ vòng. le3L9Eex KHÔNG nộp (PP-corr 1.0).
+- **Next step:** USER login QR → đọc V2/omg7mGKE → nộp 1 alpha pure PP hôm nay (quota 1/ngày,
+  theme "USA/D1 Power Pool July`26 2" hết hạn 26/07).
+- **Tests:** 1541 passed (+7 mới), 1 fail psycopg pre-existing deselect. 3 commit trên main
+  (ahead origin 62 commit — chưa push, chờ user).
