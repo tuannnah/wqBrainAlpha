@@ -80,7 +80,7 @@ sẽ được gắn thủ công trong `main.py` ở bước wiring).
 
 # DỰ ÁN A — Cấu trúc thư mục
 
-### Task A1: Chuyển DB SQLite vào `data/db/`
+### Task 1: Chuyển DB SQLite vào `data/db/`
 
 **Files:**
 - Modify: `src/storage/db.py`
@@ -233,7 +233,7 @@ git commit -m "refactor(db): chuyển DB SQLite mặc định vào data/db/"
 
 ---
 
-### Task A2: Quy ước `scripts/` vs `tools/` + chuyển `run_loop5.sh`
+### Task 2: Quy ước `scripts/` vs `tools/` + chuyển `run_loop5.sh`
 
 **Files:**
 - Create: `scripts/README.md`
@@ -286,7 +286,7 @@ git commit -m "docs(scripts): thêm quy ước scripts/ vs tools/, chuyển run_
 
 ---
 
-### Task A3: Gộp `docs/tailieu/review2026071{0,1}/` vào `old/` + sửa path trong code
+### Task 3: Gộp `docs/tailieu/review2026071{0,1}/` vào `old/` + sửa path trong code
 
 **Files:**
 - Modify: di chuyển 2 thư mục con
@@ -328,7 +328,7 @@ git commit -m "docs(tailieu): gộp review20260710/20260711 vào old/, sửa pat
 
 ---
 
-### Task A4: Đổi tên `docs/worldquantbrain/` → `docs/wq_scraped_docs/` + sửa tham chiếu sống
+### Task 4: Đổi tên `docs/worldquantbrain/` → `docs/wq_scraped_docs/` + sửa tham chiếu sống
 
 **Files:**
 - Modify: di chuyển thư mục
@@ -438,15 +438,16 @@ Mỗi task dùng chung khuôn "Common Header" ở đầu tài liệu này.
 
 ---
 
-### Task B1: `src/app/cli/common.py`
+### Task 5: `src/app/cli/common.py`
 
 **Files:**
 - Create: `src/app/cli/__init__.py` (rỗng)
 - Create: `src/app/cli/common.py`
 - Modify: `main.py`
 - Test: `tests/test_auto_command.py`, `tests/test_marathon_command.py` (chỉ sửa dòng
-  monkeypatch liên quan tới các tên chuyển sang `common.py` — xử lý đầy đủ ở Task B7/B10 khi
-  `simulate`/`research`/`marathon` thật sự chuyển; ở task này CHƯA cần sửa 2 file test đó).
+  monkeypatch liên quan tới các tên chuyển sang `common.py` — xử lý đầy đủ ở Task 8 (simulate),
+  Task 14 (research), Task 16 (marathon) khi các lệnh đó thật sự chuyển; ở task này CHƯA cần
+  sửa 2 file test đó).
 
 **Interfaces:**
 - Produces: `src.app.cli.common._make_client() -> WQBrainClient`,
@@ -477,7 +478,7 @@ khối một lần.)
 
 Xoá từ dòng `def _make_client(` (không có decorator `@app.command`, nó là helper thường)
 tới hết thân `_portfolio_config_from_opts`. Giữ nguyên `login()` phía trên (nó gọi
-`_make_client()` — sẽ sửa ở Task B2) và `generate()` phía dưới.
+`_make_client()` — sẽ sửa ở Task 6) và `generate()` phía dưới.
 
 - [ ] **Step 4: Chạy `ruff check --fix src/app/cli/common.py`**
 
@@ -521,7 +522,7 @@ git commit -m "refactor(cli): tách helper dùng chung (_make_client, _cached_sy
 
 ---
 
-### Task B2: `src/app/cli/auth.py`
+### Task 6: `src/app/cli/auth.py`
 
 **Files:**
 - Create: `src/app/cli/auth.py`
@@ -551,7 +552,7 @@ Common Header (docstring: `"""Lệnh đăng nhập WQ Brain."""`) +
 `from src.app.cli.common import _make_client` + dán nguyên văn `prompt_credentials` và
 `login` (bỏ `@app.command()` phía trên `login`), sửa lời gọi `_make_client()` bên trong
 `login` thành `_make_client()` (giữ nguyên tên vì đã import trực tiếp, KHÔNG cần tiền tố
-`cli_common.` ở đây — khác với Task B1 vốn chỉ tạm thời dùng tiền tố trong `main.py`).
+`cli_common.` ở đây — khác với Task 5 vốn chỉ tạm thời dùng tiền tố trong `main.py`).
 
 - [ ] **Step 4: Xoá `prompt_credentials` + `login` (kèm `@app.command()`) khỏi `main.py`**
 
@@ -590,7 +591,7 @@ git commit -m "refactor(cli): tách lệnh login sang src/app/cli/auth.py"
 
 ---
 
-### Task B3: `src/app/cli/fields.py`
+### Task 7: `src/app/cli/fields.py`
 
 **Files:**
 - Create: `src/app/cli/fields.py`
@@ -642,7 +643,7 @@ git commit -m "refactor(cli): tách lệnh fields/operators sang src/app/cli/fie
 
 ---
 
-### Task B4: `src/app/cli/simulate.py`
+### Task 8: `src/app/cli/simulate.py`
 
 **Files:**
 - Create: `src/app/cli/simulate.py`
@@ -703,7 +704,7 @@ app.command("sweep-config")(cli_simulate.sweep_config)
 
 Run: `pytest tests/test_auto_command.py -v`
 Expected: PASS toàn bộ file (bao gồm 2 test chưa sửa, vẫn dùng `main.research` — sẽ đổi ở
-Task B10).
+Task 14).
 
 - [ ] **Step 8: Chạy toàn bộ suite + `python main.py --help`**
 
@@ -716,7 +717,7 @@ git commit -m "refactor(cli): tách lệnh simulate/sweep-config sang src/app/cl
 
 ---
 
-### Task B5: `src/app/cli/generate.py`
+### Task 9: `src/app/cli/generate.py`
 
 **Files:**
 - Create: `src/app/cli/generate.py`
@@ -757,7 +758,7 @@ git commit -m "refactor(cli): tách lệnh generate/score-one sang src/app/cli/g
 
 ---
 
-### Task B6: `src/app/cli/submit.py`
+### Task 10: `src/app/cli/submit.py`
 
 **Files:**
 - Create: `src/app/cli/submit.py`
@@ -797,7 +798,7 @@ git commit -m "refactor(cli): tách lệnh submit sang src/app/cli/submit.py"
 
 ---
 
-### Task B7: `src/app/cli/report.py`
+### Task 11: `src/app/cli/report.py`
 
 **Files:**
 - Create: `src/app/cli/report.py`
@@ -810,7 +811,7 @@ git commit -m "refactor(cli): tách lệnh submit sang src/app/cli/submit.py"
 
 Common Header (docstring: `"""Lệnh báo cáo: top alpha, originality, genius report."""`) +
 dán nguyên văn `top`, `originality`, `genius_report_cmd` (bỏ decorator; `submit` nằm xen
-giữa `originality` và `genius_report_cmd` trong `main.py` gốc nhưng đã chuyển ở Task B6 nên
+giữa `originality` và `genius_report_cmd` trong `main.py` gốc nhưng đã chuyển ở Task 10 nên
 giờ `originality` và `genius_report_cmd` liền kề nhau).
 
 - [ ] **Step 2: Xoá `top`, `originality`, `genius_report_cmd` khỏi `main.py`**
@@ -839,7 +840,7 @@ git commit -m "refactor(cli): tách lệnh top/originality/genius-report sang sr
 
 ---
 
-### Task B8: `src/app/cli/migrate.py`
+### Task 12: `src/app/cli/migrate.py`
 
 **Files:**
 - Create: `src/app/cli/migrate.py`
@@ -881,7 +882,7 @@ git commit -m "refactor(cli): tách lệnh migrate-sqlite/calibrate sang src/app
 
 ---
 
-### Task B9: `src/app/cli/llm.py`
+### Task 13: `src/app/cli/llm.py`
 
 **Files:**
 - Create: `src/app/cli/llm.py`
@@ -948,7 +949,7 @@ git commit -m "refactor(cli): tách lệnh LLM (deepseek/llm-generate/llm-ideas)
 
 ---
 
-### Task B10: `src/app/cli/research.py`
+### Task 14: `src/app/cli/research.py`
 
 **Files:**
 - Create: `src/app/cli/research.py`
@@ -995,7 +996,7 @@ import src.app.cli.research as main
 `test_wiring_theme_ap_top1000_cho_hom_nay_trong_lich` không đụng gì (không dùng `main`).
 
 `import main` ở đầu file: giữ lại (vẫn cần cho
-`test_simulate_command_truyen_day_du_sim_config` đã xong ở Task B4 dùng `cli_simulate`
+`test_simulate_command_truyen_day_du_sim_config` đã xong ở Task 8 dùng `cli_simulate`
 riêng — kiểm tra `import main` còn được dùng chỗ nào khác trong file này; nếu không còn
 dùng, xoá dòng `import main`).
 
@@ -1051,7 +1052,7 @@ git commit -m "refactor(cli): tách lệnh research sang src/app/cli/research.py
 
 ---
 
-### Task B11: `src/app/cli/closed_loop.py`
+### Task 15: `src/app/cli/closed_loop.py`
 
 **Files:**
 - Create: `src/app/cli/closed_loop.py`
@@ -1129,7 +1130,7 @@ git commit -m "refactor(cli): tách lệnh closed-loop sang src/app/cli/closed_l
 
 ---
 
-### Task B12: `src/app/cli/marathon.py`
+### Task 16: `src/app/cli/marathon.py`
 
 **Files:**
 - Create: `src/app/cli/marathon.py`
@@ -1201,7 +1202,7 @@ git commit -m "refactor(cli): tách lệnh marathon sang src/app/cli/marathon.py
 
 ---
 
-### Task B13: `src/app/menu.py`
+### Task 17: `src/app/menu.py`
 
 **Files:**
 - Create: `src/app/menu.py`
@@ -1283,7 +1284,7 @@ git commit -m "refactor(cli): tách menu tương tác sang src/app/menu.py"
 
 ---
 
-### Task B14: Dọn cuối `main.py` + xác nhận toàn cục
+### Task 18: Dọn cuối `main.py` + xác nhận toàn cục
 
 **Files:**
 - Modify: `main.py`
