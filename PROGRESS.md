@@ -1,15 +1,16 @@
 # MiniBrain — Progress log
 
 ## Current state
-- **Phase [2026-07-18, Session 17]:** Đường nộp pure PP đã TỰ ĐỘNG HOÁ MÔ TẢ + AN TOÀN HƠN
-  (3 commit `54fa3f0`/`bb2603f`/`6716f76`, suite 1541 passed): (1) FRONTIER_HYPOTHESES 9
-  category + fallback mô tả trong selector — alpha frontier thiếu hypothesis hết bị skip
-  "thiếu mô tả" (LLdLVX0a Sharpe 1.08 nay READY); (2) fix parse strict→lenient khi trích
-  field; (3) gate POWER_POOL_CORRELATION chặn nộp alpha PP-corr>0.5 (le3L9Eex PP-corr 1.0
-  READY giả — nguy cơ đốt slot/ngày). **Next: USER quét QR login** rồi nộp 1 alpha hôm nay:
-  ứng viên LLdLVX0a (PP-corr 0.5088 — SÁT trần, rủi ro), biến thể V1 `omg7mGKE`
-  (INDUSTRY, Sharpe 1.00, PP-corr chưa đọc), V2 vector_neut đã sim xong phía Brain
-  (id chưa đọc được vì session hết hạn). le3L9Eex TUYỆT ĐỐI không nộp.
+- **Phase [2026-07-18, Session 17]:** ✅ **ĐÃ NỘP alpha pure PP #3: `omg7mGKE`** (fade firm
+  option flow, ts_rank 66, TOP1000/INDUSTRY, Sharpe 1.00/PP-corr 0.4467 PASS — dateSubmitted
+  18/07 11:42 ET, stage OS, vòng poll ĐẦU không cần retry, tag PowerPoolSelected + DB row).
+  Tool cải thiện 5 commit (`54fa3f0`..`8250a0b`, suite 1543 passed): (1) FRONTIER_HYPOTHESES
+  9 category + fallback mô tả selector — alpha frontier thiếu hypothesis hết bị skip "thiếu
+  mô tả"; (2) fix parse strict→lenient khi trích field; (3) gate POWER_POOL_CORRELATION
+  chặn nộp PP-corr>0.5 (le3L9Eex PP-corr 1.0 = bản sao KP9Aw3lj — READY giả, TUYỆT ĐỐI
+  không nộp); (4) gom ~60 dòng log "core bão hoà" thành 1 dòng INFO. Bài học khử tương quan
+  cùng-dataset: đổi neut SECTOR→INDUSTRY giữ Sharpe (1.08→1.00) + hạ PP-corr (0.5088→0.4467);
+  vector_neut trừ thẳng tín hiệu đã nộp thì CHẾT (akE6jOXO −0.09). Ahead origin ~65 commit.
 - **Phase (trước) [2026-07-18, Session 16]:** Engine vòng kín đã tối ưu TỐC ĐỘ + CHẤT LƯỢNG (8 task
   A1-C2 merge main `38b4ade`, suite 1534 passed): GP tắt khi gp_budget cạn, lọc degenerate/họ-đóng
   trước backtest, cache backtest canonical_hash (entry gọn daily_pnl+metrics), retry 8→2, reseed
@@ -686,3 +687,23 @@
   theme "USA/D1 Power Pool July`26 2" hết hạn 26/07).
 - **Tests:** 1541 passed (+7 mới), 1 fail psycopg pre-existing deselect. 3 commit trên main
   (ahead origin 62 commit — chưa push, chờ user).
+
+### [2026-07-18] Session 17 (kết) — ✅ omg7mGKE ĐÃ NỘP (pure Power Pool #3) + gom log
+- **Diễn biến sau blocker QR:** ~22:39 session `.wq_session` sống lại (user login/refresh) →
+  đọc được kết quả 2 sim biến thể: V1 `omg7mGKE` (đổi neut INDUSTRY) Sharpe 1.00,
+  **PP-corr 0.4467 PASS** (<0.5), self-corr 0.2127, 2Y 2.35, mọi HT test PASS, khớp theme;
+  V2 vector_neut `akE6jOXO` Sharpe **−0.09** — trừ thẳng tín hiệu đã nộp là hết alpha (firm
+  flow chính LÀ tín hiệu). LLdLVX0a 0.5088 hiện WARNING trong khi omg7mGKE 0.4467 hiện PASS
+  → xác nhận WARNING trên record PP-corr nghĩa là VƯỢT trần thật.
+- **Nộp:** script tay theo đúng đường tool (set_properties mô tả 1200 ký tự viết riêng cho
+  firm-only + ts_rank → `SubmissionManager.submit`): POST 22:42, **submitted ngay vòng poll
+  đầu** (~29', detail "ok — xác nhận sau khi job record biến mất", đúng giao thức 404-rỗng),
+  `dateSubmitted 2026-07-18T11:42:34-04:00, stage OS`, tag wqtool+PowerPoolSelected, DB có
+  2 row properties_set/submitted. GET /users/self/alphas cần bỏ `hidden` + truyền params
+  dict (500 nếu query-string tay).
+- **Gom log (yêu cầu user, commit `8250a0b`):** `_drop_saturated_cores` chung Curated+AltData
+  — 1 dòng INFO tóm tắt số core bão hoà thay ~60 dòng lặp mỗi batch; chi tiết xuống DEBUG.
+  TDD 2 test (sink loguru). Suite 1543 passed.
+- **Next step:** mai chạy menu-5 (log đã gọn) → `submit --power-pool` (selector + 2 gate mới
+  tự lo); theme PP hết hạn 26/07 — cập nhật CALENDAR khi có announcement mới. Cân nhắc push
+  ~65 commit lên origin.
