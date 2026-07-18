@@ -62,6 +62,18 @@ def engine_fixture_voi_saturated(small_panel, repo, cfg) -> GPEngine:  # noqa: A
     )
 
 
+@pytest.fixture
+def engine_fixture_voi_cache(small_panel, repo, cfg):  # noqa: ANN001
+    """GPEngine + dict cache rỗng truyền vào ``eval_cache`` — dùng cho test A3 (cache backtest
+    thuần theo canonical_hash). Trả tuple ``(engine, cache)`` để test kiểm tra cả nội dung cache."""
+    cache: "dict[str, tuple]" = {}
+    engine = GPEngine(
+        data=small_panel, repo=repo, config=cfg, registry=default_registry(),
+        pop_size=2, n_generations=0, seed=42, eval_cache=cache,
+    )
+    return engine, cache
+
+
 def _pool_corr_rong() -> PoolCorrelation:
     """PoolCorrelation rỗng (không có alpha nào trong pool) — đủ dùng cho test chỉ quan tâm
     hành vi lọc trước-backtest, không cần self-corr thật."""
@@ -124,6 +136,50 @@ def test_evaluate_individual_error_status_for_scalar_root(small_panel, repo, cfg
     assert reasons  # phải có lý do (không tham chiếu field nào -> fields_ok=False, v.v.)
     if status in {"invalid", "error"}:
         assert fv is None
+
+
+def test_eval_cache_hit_khong_backtest_lai(engine_fixture_voi_cache, monkeypatch) -> None:  # noqa: ANN001
+    """Cùng canonical_hash lần 2: Backtester.run không được gọi lại, kết quả giống hệt."""
+    import src.gp.engine as eng_mod
+
+    engine, cache = engine_fixture_voi_cache  # GPEngine(eval_cache=cache), data giả nhiều field
+    i1 = Individual(expr=parse("ts_mean(subtract(close, ts_delay(close, 1)), 10)"))
+    fv1, st1, rs1, bt1 = engine._evaluate_individual(i1, _pool_corr_rong())
+    assert len(cache) == 1
+    assert bt1 is not None  # eval phải thành công để test cache "ok" có ý nghĩa
+
+    so_lan = {"n": 0}
+    that = eng_mod.Backtester.run
+    monkeypatch.setattr(
+        eng_mod.Backtester, "run",
+        lambda self, w, d: so_lan.__setitem__("n", so_lan["n"] + 1) or that(self, w, d),
+    )
+    i2 = Individual(expr=parse("ts_mean(subtract(close, ts_delay(close, 1)), 10)"))
+    fv2, st2, rs2, bt2 = engine._evaluate_individual(i2, _pool_corr_rong())
+    assert so_lan["n"] == 0
+    assert st2 == st1
+    np.testing.assert_array_equal(bt2.daily_pnl, bt1.daily_pnl)
+
+
+def test_eval_cache_error_khong_luu_bt_va_khong_mutate(engine_fixture_voi_cache) -> None:  # noqa: ANN001
+    """Cây tham chiếu field không tồn tại (``open`` không có trong ``small_panel``) -> eval
+    ném ``KeyError`` -> status ``'error'``, cache lưu ``('error', reasons)``; lần 2 hit cache
+    trả list MỚI (copy) để caller sửa list trả về không làm hỏng entry cache nội bộ."""
+    engine, cache = engine_fixture_voi_cache
+    ind1 = Individual(expr=parse("ts_mean(open, 5)"))
+    fv1, st1, rs1, bt1 = engine._evaluate_individual(ind1, _pool_corr_rong())
+    assert st1 == "error"
+    assert bt1 is None
+    assert fv1 is None
+    assert len(cache) == 1
+    rs1.append("mutated bởi caller")  # caller sửa list trả về...
+
+    ind2 = Individual(expr=parse("ts_mean(open, 5)"))
+    fv2, st2, rs2, bt2 = engine._evaluate_individual(ind2, _pool_corr_rong())
+    assert st2 == "error"
+    assert bt2 is None
+    assert "mutated bởi caller" not in rs2  # ...không được rò vào cache nội bộ
+    assert len(cache) == 1  # vẫn 1 entry — không ghi đè/nhân đôi khi cache hit
 
 
 def test_engine_runs_pop4_gen1_persists_evaluations(small_panel, repo, cfg) -> None:  # noqa: ANN001

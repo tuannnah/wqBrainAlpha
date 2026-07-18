@@ -874,6 +874,10 @@ class GPIdeaSource:
         # A1: ClosedLoop báo trần sim GP/phiên đã chạm -> next_batch bỏ hẳn tiến hoá (xem
         # set_gp_budget_exhausted bên dưới).
         self._gp_budget_exhausted = False
+        # A3: cache in-memory cấp phiên (canonical_hash -> kết quả eval THUẦN), CHIA SẺ xuyên
+        # mọi GPEngine dựng ở _run_one_batch -> biểu thức trùng giữa các seed/batch không bị
+        # backtest lại từ đầu. Cap 5000 entry tránh phình bộ nhớ vô hạn trong phiên dài.
+        self._eval_cache: "dict[str, tuple]" = {}
 
     def set_saturated_families(self, fams: "set[str] | frozenset[str]") -> None:
         """Nhận tập họ vừa đóng (ClosedLoop truyền TOÀN BỘ closed_families mỗi lần, tích luỹ
@@ -890,6 +894,10 @@ class GPIdeaSource:
         seed = self.base_seed + self._batch
         seed_offset = self._batch * self.pop_size
         self._batch += 1
+        # A3: cache đã phình quá cỡ -> clear để tránh phình vô hạn trong phiên dài (đủ để cache
+        # hit trong đa số cửa sổ batch gần nhau, không cần bền vững cả phiên).
+        if len(self._eval_cache) > 5000:
+            self._eval_cache.clear()
         engine = GPEngine(
             data=self._data, repo=self._repo, config=self._config, registry=self._registry,
             pop_size=self.pop_size, n_generations=self.n_generations, seed=seed,
@@ -897,6 +905,8 @@ class GPIdeaSource:
             # A2: truyền họ đã đóng xuống GPEngine -> lọc TRƯỚC backtest trong GP thay vì chỉ
             # lọc SAU sinh ở next_batch() (defense in depth — lọc sau vẫn giữ nguyên bên dưới).
             saturated_families=self._saturated,
+            # A3: cache backtest thuần CHIA SẺ xuyên mọi GPEngine dựng trong phiên này.
+            eval_cache=self._eval_cache,
         )
         pool: Any = self._repo.load_pool() or None
         # GPEngine.run() -> GPRunResult; Protocol _RunsGP đòi _GPRunResultLike với

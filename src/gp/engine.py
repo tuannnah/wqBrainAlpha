@@ -103,6 +103,7 @@ class GPEngine:
         with_llm_seeds: bool = False,
         n_jobs: int = 1,
         saturated_families: "frozenset[str] | set[str]" = frozenset(),
+        eval_cache: "dict[str, tuple] | None" = None,
     ) -> None:
         self.data = data
         self.repo = repo
@@ -121,6 +122,11 @@ class GPEngine:
         # A2: họ nhân tố ClosedLoop đã đóng (0 pass sau max_per_family) — cá thể thuộc họ này
         # bị chặn TRƯỚC backtest trong _evaluate_population (xem gate A2 ở đó).
         self.saturated_families = frozenset(saturated_families)
+        # A3: cache in-memory cấp phiên (canonical_hash -> ("ok", bt, metrics) | ("error",
+        # fail_reasons)) cho phần THUẦN eval/backtest/metrics — hàm xác định của (expr, config,
+        # data) bất biến trong phiên. Chủ sở hữu (GPIdeaSource) truyền dict CHIA SẺ xuyên nhiều
+        # GPEngine/batch; None = tắt cache (mặc định, dùng cho test độc lập không quan tâm cache).
+        self.eval_cache = eval_cache
 
     def _evaluate_individual(
         self, ind: Individual, pool_corr: PoolCorrelation,
@@ -145,24 +151,52 @@ class GPEngine:
         Lưu ý: ``Evaluator`` hiện gói lỗi parse-time vào exception runtime nên không có nhánh
         ``'invalid'`` riêng ở đây; ``'invalid'`` để dành cho cây sai cấu trúc registry (nếu
         tầng eval phân biệt sau này). ``SubexprCache`` tạo MỚI mỗi cá thể — tránh chia sẻ
-        state cache giữa các lần eval khác nhau (B6)."""
-        try:
-            ctx = EvalContext(data=self.data, registry=self.registry, cache=SubexprCache())
-            evaluator = Evaluator(ctx)
-            signal = evaluator.evaluate(ind.expr)
-        except Exception as exc:  # noqa: BLE001 — engine phải sống sót mọi lỗi cây
-            return None, "error", [f"eval: {type(exc).__name__}: {exc}"], None
+        state cache giữa các lần eval khác nhau (B6).
 
-        try:
-            weights = PortfolioBuilder().build(signal, self.config, self.data)
-            bt = Backtester().run(weights, self.data)
-        except Exception as exc:  # noqa: BLE001
-            return None, "error", [f"backtest: {type(exc).__name__}: {exc}"], None
+        A3 (cache xuyên batch): phần THUẦN (eval AST → build danh mục → backtest → metrics)
+        là hàm xác định của ``(expr, config, data)`` — bất biến trong một phiên chạy — nên
+        được cache theo ``canonical_hash`` (``self.eval_cache``, dict CHIA SẺ do
+        ``GPIdeaSource`` truyền vào xuyên nhiều ``GPEngine``/batch). Phần phụ thuộc pool
+        (gate/pool_rho/fitness ở dưới) LUÔN tính lại tươi vì pool lớn dần trong phiên."""
+        ch = ind.expr.accept(CanonicalHasher())
+        cached = self.eval_cache.get(ch) if self.eval_cache is not None else None
+        if cached is not None and cached[0] == "error":
+            # Copy list để caller sửa list trả về không làm hỏng entry cache nội bộ.
+            return None, "error", list(cached[1]), None
+        if cached is not None:
+            _tag, bt, metrics = cached
+        else:
+            try:
+                ctx = EvalContext(data=self.data, registry=self.registry, cache=SubexprCache())
+                evaluator = Evaluator(ctx)
+                signal = evaluator.evaluate(ind.expr)
+            except Exception as exc:  # noqa: BLE001 — engine phải sống sót mọi lỗi cây
+                reasons = [f"eval: {type(exc).__name__}: {exc}"]
+                # Lưu BẢN SAO vào cache — nếu lưu thẳng ``reasons`` (cùng object trả cho
+                # caller) thì caller mutate list trả về sẽ rò ngược vào entry cache nội bộ.
+                if self.eval_cache is not None:
+                    self.eval_cache[ch] = ("error", list(reasons))
+                return None, "error", reasons, None
 
-        try:
-            metrics = MetricsCalculator().compute(bt, self.data)
-        except Exception as exc:  # noqa: BLE001
-            return None, "error", [f"metrics: {type(exc).__name__}: {exc}"], None
+            try:
+                weights = PortfolioBuilder().build(signal, self.config, self.data)
+                bt = Backtester().run(weights, self.data)
+            except Exception as exc:  # noqa: BLE001
+                reasons = [f"backtest: {type(exc).__name__}: {exc}"]
+                if self.eval_cache is not None:
+                    self.eval_cache[ch] = ("error", list(reasons))
+                return None, "error", reasons, None
+
+            try:
+                metrics = MetricsCalculator().compute(bt, self.data)
+            except Exception as exc:  # noqa: BLE001
+                reasons = [f"metrics: {type(exc).__name__}: {exc}"]
+                if self.eval_cache is not None:
+                    self.eval_cache[ch] = ("error", list(reasons))
+                return None, "error", reasons, None
+
+            if self.eval_cache is not None:
+                self.eval_cache[ch] = ("ok", bt, metrics)
 
         depth = ind.expr.accept(DepthVisitor())
         fields = ind.expr.accept(FieldCollector(self.registry))
