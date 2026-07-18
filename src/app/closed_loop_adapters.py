@@ -678,14 +678,10 @@ class CuratedIdeaSource:
             empty = np.zeros(0, dtype=np.float64)
             dates = np.zeros(0, dtype="datetime64[ns]")
             cores = [e for e in self._cores if classify_family(e) not in self._saturated]
-            if self._avoided_hashes is not None and self._dedup_key_fn is not None:
-                kept: list[str] = []
-                for e in cores:
-                    if self._dedup_key_fn(e) in self._avoided_hashes:
-                        logger.info("core đã sim & bão hoà, bỏ phục vụ lại: {!r}", e)
-                        continue
-                    kept.append(e)
-                cores = kept
+            cores = _drop_saturated_cores(
+                cores, dedup_key_fn=self._dedup_key_fn,
+                avoided_hashes=self._avoided_hashes, label="Curated",
+            )
             if cores:
                 return [
                     ShortlistCandidate(
@@ -697,6 +693,35 @@ class CuratedIdeaSource:
             # thẳng xuống fallback thay vì trả rỗng (rỗng ở đây KHÔNG có nghĩa "cạn ý tưởng").
             return self._fallback.next_batch()
         return self._fallback.next_batch()
+
+
+def _drop_saturated_cores(
+    cores: "list[str]",
+    *,
+    dedup_key_fn,
+    avoided_hashes,
+    label: str,
+) -> "list[str]":
+    """Lọc bỏ core đã sim & bão hoà (dedup_key nằm trong avoided_hashes cross-session).
+
+    Log 1 dòng INFO tóm tắt SỐ LƯỢNG thay vì 1 dòng/core — kho seed trực tiếp đã cạn sau
+    nhiều phiên nên mỗi lần khởi động dội ~60 dòng lặp lại (phàn nàn user 2026-07-18);
+    chi tiết từng core hạ xuống DEBUG. avoided_hashes/dedup_key_fn None -> pass-through
+    (tương thích đường chưa inject)."""
+    if avoided_hashes is None or dedup_key_fn is None:
+        return list(cores)
+    kept: list[str] = []
+    skipped: list[str] = []
+    for e in cores:
+        (skipped if dedup_key_fn(e) in avoided_hashes else kept).append(e)
+    if skipped:
+        logger.info(
+            "{}: bỏ {} core đã sim & bão hoà, không phục vụ lại (chi tiết ở mức DEBUG).",
+            label, len(skipped),
+        )
+        for e in skipped:
+            logger.debug("{}: core bão hoà: {!r}", label, e)
+    return kept
 
 
 def _filter_known_fields(
@@ -843,14 +868,10 @@ class AltDataIdeaSource:
             empty = np.zeros(0, dtype=np.float64)
             dates = np.zeros(0, dtype="datetime64[ns]")
             cores = [e for e in self._cores if classify_family(e) not in self._saturated]
-            if self._avoided_hashes is not None and self._dedup_key_fn is not None:
-                kept: list[str] = []
-                for e in cores:
-                    if self._dedup_key_fn(e) in self._avoided_hashes:
-                        logger.info("core alt-data đã sim & bão hoà, bỏ phục vụ lại: {!r}", e)
-                        continue
-                    kept.append(e)
-                cores = kept
+            cores = _drop_saturated_cores(
+                cores, dedup_key_fn=self._dedup_key_fn,
+                avoided_hashes=self._avoided_hashes, label="AltData",
+            )
             if cores:
                 self._presim_batch(cores)
                 return [

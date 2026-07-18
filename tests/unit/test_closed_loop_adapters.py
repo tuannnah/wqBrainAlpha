@@ -1123,3 +1123,52 @@ def test_reseed_epoch_xoay_field_groups(monkeypatch):
     src.reseed_epoch()               # epoch 1: nhóm groups[1 % 2]
     src.next_batch()
     assert nhan[-1] == ("volume", "vwap")
+
+
+def test_drop_saturated_cores_gom_log_thanh_1_dong_info():
+    """Yêu cầu user 2026-07-18: mỗi lần khởi động menu-5 dội ~60 dòng INFO 'core ... đã sim
+    & bão hoà, bỏ phục vụ lại' (1 dòng/core, lặp mỗi batch). Gom thành 1 dòng INFO tóm tắt
+    số lượng; chi tiết từng core hạ xuống DEBUG."""
+    from loguru import logger
+
+    from src.app.closed_loop_adapters import _drop_saturated_cores
+
+    msgs: list[str] = []
+    sink_id = logger.add(msgs.append, level="INFO", format="{message}")
+    try:
+        kept = _drop_saturated_cores(
+            ["a(close)", "b(close)", "c(close)"],
+            dedup_key_fn=lambda e: e,
+            avoided_hashes={"a(close)", "c(close)"},
+            label="AltData",
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert kept == ["b(close)"]
+    bao_hoa = [m for m in msgs if "bão hoà" in m]
+    assert len(bao_hoa) == 1  # đúng 1 dòng tóm tắt, không dội theo từng core
+    assert "2" in bao_hoa[0] and "AltData" in bao_hoa[0]
+
+
+def test_drop_saturated_cores_khong_skip_thi_im_lang_va_none_pass_through():
+    """Không có core bão hoà -> không log dòng nào; avoided_hashes/dedup_key_fn None ->
+    pass-through nguyên vẹn (tương thích đường chưa inject)."""
+    from loguru import logger
+
+    from src.app.closed_loop_adapters import _drop_saturated_cores
+
+    msgs: list[str] = []
+    sink_id = logger.add(msgs.append, level="INFO", format="{message}")
+    try:
+        kept = _drop_saturated_cores(
+            ["a(close)"], dedup_key_fn=lambda e: e, avoided_hashes=set(), label="X"
+        )
+        kept_none = _drop_saturated_cores(
+            ["a(close)"], dedup_key_fn=None, avoided_hashes=None, label="X"
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert kept == ["a(close)"] and kept_none == ["a(close)"]
+    assert not [m for m in msgs if "bão hoà" in m]
