@@ -187,6 +187,7 @@ def test_submit_power_pool_nop_that_set_desc_truoc_roi_submit():
         session.close()
 
     client = FakeClient()
+    client.queue_get(_check_resp(0.2))  # gate PP-correlation: qua
     client.queue_patch(FakeResponse(200))  # set_properties description
     client.queue_post(FakeResponse(201))  # POST /submit
     client.queue_get(FakeResponse(200, json_data={"is": {"checks": []}}, text="non-empty"))
@@ -264,6 +265,68 @@ def test_submit_power_pool_thieu_hypothesis_khong_nop_va_neu_ro_ly_do():
     assert result is None
     assert "mô tả" in cand.skip_reason
     assert client.calls == []
+
+
+def _check_resp(pp_corr):
+    """Response GET /alphas/{id}/check với record POWER_POOL_CORRELATION."""
+    return FakeResponse(200, json_data={"is": {"checks": [
+        {"name": "POWER_POOL_CORRELATION", "result": "WARNING",
+         "value": pp_corr, "limit": 0.5},
+    ]}}, text="non-empty")
+
+
+def test_submit_power_pool_chan_pp_correlation_vuot_tran():
+    """Bằng chứng live 2026-07-18: le3L9Eex self-corr 0.4931 (<0.5, qua gate cũ) nhưng
+    POWER_POOL_CORRELATION = 1.0 — nộp là chắc chắn rejected, đốt slot 1 pure PP/ngày.
+    PP-corr (vs pool Power Pool, GET /alphas/{id}/check) KHÁC self-corr (vs alpha OS):
+    phải gate riêng TRƯỚC khi set description/POST submit."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    session = sf()
+    try:
+        _seed_fields(session)
+        _add_sim(session, "a1", "PP1", PP_EXPR, 1.71, 0.61, ["LOW_FITNESS"],
+                 hypothesis=HYPO, status="passed")
+        session.commit()
+    finally:
+        session.close()
+
+    client = FakeClient()
+    client.queue_get(_check_resp(0.9))  # PP-corr vượt trần 0.5
+    outcomes = _mgr(sf, client).submit_power_pool(
+        dry_run=False, on_date=ON_DATE, calendar=CALENDAR
+    )
+    cand, result = outcomes[0]
+    assert result is None
+    assert "PP-corr" in cand.skip_reason
+    assert all(c[0] == "GET" for c in client.calls)  # không PATCH/POST gì cả
+
+
+def test_submit_power_pool_pp_correlation_duoi_tran_van_nop():
+    """PP-corr dưới trần -> luồng nộp giữ nguyên (PATCH description rồi POST submit)."""
+    engine = init_db(_engine())
+    sf = make_session_factory(engine)
+    session = sf()
+    try:
+        _seed_fields(session)
+        _add_sim(session, "a1", "PP1", PP_EXPR, 1.71, 0.61, ["LOW_FITNESS"],
+                 hypothesis=HYPO, status="passed")
+        session.commit()
+    finally:
+        session.close()
+
+    client = FakeClient()
+    client.queue_get(_check_resp(0.2))  # gate PP-corr: qua
+    client.queue_patch(FakeResponse(200))  # set_properties description
+    client.queue_post(FakeResponse(201))  # POST /submit
+    client.queue_get(FakeResponse(200, json_data={"is": {"checks": []}}, text="non-empty"))
+    client.queue_get(FakeResponse(200, json_data={"dateSubmitted": "2026-07-15T00:00:00Z"}))
+
+    outcomes = _mgr(sf, client).submit_power_pool(
+        dry_run=False, on_date=ON_DATE, calendar=CALENDAR
+    )
+    cand, result = outcomes[0]
+    assert result is not None and result.status == "submitted"
 
 
 def test_select_power_pool_fallback_mo_ta_tu_frontier_hypothesis():

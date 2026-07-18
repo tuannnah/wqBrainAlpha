@@ -374,6 +374,17 @@ class SubmissionManager:
             if dry_run or cand.skip_reason or n_submitted >= pp_quota:
                 outcomes.append((cand, None))
                 continue
+            # Gate PP-correlation TRƯỚC self-corr/PATCH/POST: PP-corr (vs pool Power Pool,
+            # record POWER_POOL_CORRELATION của GET /alphas/{id}/check) KHÁC self-corr
+            # (vs alpha OS đã nộp). Bằng chứng live 2026-07-18: le3L9Eex self-corr 0.4931
+            # qua gate cũ nhưng PP-corr = 1.0 (trùng KP9Aw3lj) — nộp là chắc chắn rejected.
+            pp_corr = self._power_pool_correlation(cand.wq_alpha_id)
+            if pp_corr is not None and pp_corr > _PP_SELF_CORR_MAX:
+                cand.skip_reason = (
+                    f"PP-corr {pp_corr:.3f} > {_PP_SELF_CORR_MAX} (POWER_POOL_CORRELATION)"
+                )
+                outcomes.append((cand, None))
+                continue
             corr = self.correlation.max_self_correlation(cand.wq_alpha_id)
             if corr > _PP_SELF_CORR_MAX:
                 cand.skip_reason = (
@@ -389,6 +400,40 @@ class SubmissionManager:
                 n_submitted += 1
             outcomes.append((cand, result))
         return outcomes
+
+    # Ngân sách poll GET /alphas/{id}/check (giây) — WQ tính bất đồng bộ, 200 body rỗng
+    # khi chưa xong (cùng giao thức /correlations/self); check thường sẵn sau vài giây
+    # vì đã tính lúc sim.
+    PP_CHECK_POLL_TIMEOUT = 180.0
+
+    def _power_pool_correlation(self, wq_alpha_id: str) -> float | None:
+        """Giá trị record POWER_POOL_CORRELATION từ GET /alphas/{id}/check (poll body rỗng
+        theo Retry-After). None = không đọc được (lỗi mạng/timeout/không có record) — KHÔNG
+        chặn oan, để Brain phán lúc submit; chỉ chặn khi có SỐ vượt trần."""
+        deadline = self._time() + self.PP_CHECK_POLL_TIMEOUT
+        while True:
+            try:
+                resp = self.client.get(f"/alphas/{wq_alpha_id}/check")
+            except Exception:  # noqa: BLE001 - gate best-effort, không làm sập luồng nộp
+                return None
+            if resp.status_code == 200 and (resp.text or "").strip():
+                try:
+                    checks = (resp.json().get("is") or {}).get("checks") or []
+                except (ValueError, AttributeError):
+                    return None
+                for c in checks:
+                    if c.get("name") == "POWER_POOL_CORRELATION":
+                        value = c.get("value")
+                        return float(value) if value is not None else None
+                return None
+            if resp.status_code not in (200,) or self._time() >= deadline:
+                return None
+            retry = resp.headers.get("Retry-After", self.SUBMIT_POLL_DEFAULT_RETRY)
+            try:
+                wait = float(retry)
+            except (TypeError, ValueError):
+                wait = self.SUBMIT_POLL_DEFAULT_RETRY
+            self._sleep(min(wait, self.SUBMIT_POLL_MAX_RETRY))
 
     # ------------------------------------------------------------------ submit
     def submit(self, wq_alpha_id: str) -> SubmissionResult:
