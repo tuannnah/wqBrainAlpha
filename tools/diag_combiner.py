@@ -19,7 +19,7 @@ sai lệch giữa diag và thật là chính lý do Task 1 phải viết lại k
 (depth/gate/not_better/greedy_empty), không cần đoán.
 
 KHÔNG login, KHÔNG sim Brain, KHÔNG sửa file nào trong `src/`. Config (region/universe/
-delay/neutralization/decay/truncation) dựng Y HỆT `main.py::_run_closed_loop_session`.
+delay/neutralization/decay/truncation) dựng Y HỆT `src/app/cli/closed_loop.py::_run_closed_loop_session`.
 
 Chạy: ./venv/Scripts/python.exe tools/diag_combiner.py
 Ghi báo cáo: APPEND vào cuối `logs/diag_combiner_<YYYYMMDD>.md` (không đụng nội dung đã có
@@ -40,15 +40,20 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Console Windows mặc định cp1252 không in được tiếng Việt — ép UTF-8 (errors="replace"
+# để không bao giờ crash vì encoding khi chạy dưới console/pipe lạ).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import src.operators_local  # noqa: E402,F401  nạp 27 operator local vào registry TRƯỚC parse/eval
 
 from config.settings import settings  # noqa: E402
 from config.thresholds import COMBINER_MAX_COMPONENT_DEPTH, COMBINER_MIN_BRAIN_SHARPE  # noqa: E402
-from main import (  # noqa: E402  tái dùng đúng cách main.py dựng config, không tự chế lại
-    _find_market_data_dir,
-    _local_neutralization,
-    _portfolio_config_from_opts,
-)
+# Tái dùng đúng các hàm dựng config của app thật, không tự chế lại. Trước ở main.py,
+# đã dời về src/app/* trong đợt tái cấu trúc CLI (f40e1a8/cf2294c) — import theo nhà mới.
+from src.app.cli.closed_loop import _local_neutralization  # noqa: E402
+from src.app.cli.common import _portfolio_config_from_opts  # noqa: E402
+from src.app.menu import _find_market_data_dir  # noqa: E402
 from src.backtest.gate import local_usable  # noqa: E402
 from src.data.adapters.parquet_source import ParquetSource  # noqa: E402
 from src.generation.combiner import SubSignal  # noqa: E402

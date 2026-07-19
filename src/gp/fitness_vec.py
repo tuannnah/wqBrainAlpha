@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from config.thresholds import TURNOVER_BAND
+from config.thresholds import MAX_DEPTH, TURNOVER_BAND
 from src.backtest.metrics_local import AlphaMetrics
 
 _COMPLEXITY_NORM = 50.0  # chuẩn hóa node-count thô; không phải threshold submission
@@ -53,18 +53,28 @@ def _turnover_penalty(turnover: float) -> float:
 def from_metrics(
     m: AlphaMetrics,
     complexity: int,
+    depth: int,
     pool_corr: float,
     pop_corr: float,
     n_trials: int,
 ) -> FitnessVector:
     """Dựng FitnessVector từ AlphaMetrics (Phase 4) + corr đã tính sẵn (Phase 6 / quần thể
-    hiện tại) + số node (Phase 1 ComplexityVisitor) + số lần thử (cho deflation)."""
+    hiện tại) + số node (Phase 1 ComplexityVisitor) + độ sâu (Phase 1 DepthVisitor) + số
+    lần thử (cho deflation).
+
+    (T2.3) ``complexity_penalty = max(complexity/_COMPLEXITY_NORM, depth/MAX_DEPTH)`` —
+    phương án GỘP (không tăng thêm chiều Pareto, giữ nguyên 6 chiều FitnessVector): trước
+    Task 2, penalty này THUẦN đếm node nên một cây CHUỖI sâu (vd ts_delay lồng 7 tầng) nhưng
+    chỉ ~7 node bị phạt gần như KHÔNG ĐÁNG KỂ dù rất dễ overfit/không thể combiner ghép
+    (combiner cần depth nông, xem T1/T2.1/T2.2) — lấy max với depth/MAX_DEPTH buộc cây càng
+    SÂU càng bị phạt nặng bất kể số node, bổ khuyết đúng lỗ hổng đó mà không cần thêm chiều
+    tối ưu hóa mới (tránh đổi hành vi Pareto quá mạnh khi chưa A/B — xem task-2-brief.md)."""
     per_year_min = min(m.per_year_sharpe.values()) if m.per_year_sharpe else 0.0
     return FitnessVector(
         sharpe_deflated=deflated_sharpe(m.sharpe, n_trials),
         per_year_min_sharpe=per_year_min,
         turnover_penalty=_turnover_penalty(m.turnover),
-        complexity_penalty=complexity / _COMPLEXITY_NORM,
+        complexity_penalty=max(complexity / _COMPLEXITY_NORM, depth / MAX_DEPTH),
         pool_corr_penalty=pool_corr,
         pop_corr_penalty=pop_corr,
     )

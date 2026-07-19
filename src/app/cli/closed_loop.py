@@ -113,6 +113,14 @@ def _run_closed_loop_session(
     # bịa). Catalog rỗng (chưa `wq load-fields`) -> None để KHÔNG lọc oan (an toàn hơn là lọc
     # sạch mọi core khi chưa có dữ liệu để so).
     _known_fields = set(_catalog_fields) if _catalog_fields else None
+    # WS3 T3.3 (cardinal rule #1): nạp bằng chứng verify LIVE mới nhất (logs/verified_*.json,
+    # ghi bởi tools/verify_frontier_fields.py / tools/verify_datasets.py) — build_closed_loop
+    # KHÔNG tự đọc file (giữ hàm test được), composition root (đây) đọc rồi truyền tường minh.
+    # Không có file nào (chưa chạy tool verify) -> None -> build_closed_loop fail-open, không
+    # lọc oan (đúng quyết định T3.3: thiếu bằng chứng không nên chặn seed thật).
+    from src.generation.field_verification import load_latest_verified_fields
+
+    _verified_fields = load_latest_verified_fields(Path("logs"))
     try:
         data = ParquetSource(market_data_dir).load("1900-01-01", "2999-12-31", universe)
     except (FileNotFoundError, AssertionError, OSError) as exc:
@@ -205,6 +213,7 @@ def _run_closed_loop_session(
             refiner=refiner, include_alt_data=include_alt_data, alpha_logger=_alpha_logger,
             include_combiner=include_combiner, session_summary=_summary,
             known_fields=_known_fields, max_gp_sims=max_gp_sims,
+            verified_fields=_verified_fields,
         )
 
     console.print(f"[cyan]Bắt đầu vòng kín (base_seed={seed}, Ctrl+C để dừng)…[/cyan]")

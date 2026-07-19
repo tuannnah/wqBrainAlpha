@@ -10,17 +10,92 @@ injected qua Protocol structural; việc dựng cụ thể nằm ở `main.py`/a
 
 from __future__ import annotations
 
+import math
 import time
+from collections import deque
 from dataclasses import dataclass, replace
 from typing import Protocol
 
 import numpy as np
 from loguru import logger
 
-from config.thresholds import SELF_CORR_MAX
+from config.thresholds import FRONTIER_MIN_FRACTION, FRONTIER_SATURATION_K, SELF_CORR_MAX
 from src.calibration.stats import spearman
 from src.pipeline.shortlist import ShortlistCandidate
 from src.storage.repository import MiniBrainRepository
+
+# WS3 T3.1/T3.2 (.superpowers/sdd/20260719/task-3-brief.md): 2 nhãn family THUẦN price/volume
+# theo đúng từ vựng `classify_family` (src/reporting/diagnostics.py) — lặp lại CHUỖI HẰNG (không
+# import module đó) để giữ B1: module này KHÔNG phụ thuộc cụ thể vào tầng phân loại family, chỉ
+# nhận family đã suy sẵn qua `family_fn` injected (như mọi nơi khác trong file này). "pv_reversal"
+# và "momentum" là 2 family DUY NHẤT mà `classify_family` suy được CHỈ TỪ field close/open/high/
+# low/volume/vwap trong panel local 6-field — đây chính xác là tập family "bão hoà vì panel local
+# nghèo field" mà T3.1 muốn đảm bảo không chiếm trọn batch.
+_PV_FAMILY_LABELS: frozenset[str] = frozenset({"pv_reversal", "momentum"})
+
+
+def compute_frontier_topup(total: int, non_pv: int, min_fraction: float, available: int) -> int:
+    """T3.1: số candidate CẦN rút từ `frontier_reserve` để batch (kích thước `total`, đã có
+    `non_pv` candidate non-PV) đạt tỉ lệ non-PV tối thiểu `min_fraction` SAU KHI bổ sung, giới
+    hạn bởi `available` (KHÔNG chặn batch khi reserve không đủ — thiếu thì dùng hết những gì
+    có, trả về đúng `available`).
+
+    Suy từ (non_pv + k) / (total + k) >= min_fraction (min_fraction < 1)
+        => k >= (min_fraction*total - non_pv) / (1 - min_fraction).
+    Batch rỗng/min_fraction<=0/đã đạt sàn sẵn -> 0 (không cần bổ sung gì)."""
+    if total <= 0 or min_fraction <= 0.0 or non_pv >= min_fraction * total:
+        return 0
+    needed = total if min_fraction >= 1.0 else math.ceil(
+        (min_fraction * total - non_pv) / (1.0 - min_fraction)
+    )
+    return max(0, min(needed, available))
+
+
+def compute_family_pool_share(families: list[str]) -> dict[str, float]:
+    """T3.2: tỉ lệ mỗi family trong `families` (mỗi phần tử = family đã classify sẵn của 1
+    alpha trong pool hiện tại). Rỗng -> {} (không family nào bão hoà theo nghĩa nào cả)."""
+    if not families:
+        return {}
+    counts: dict[str, int] = {}
+    for f in families:
+        counts[f] = counts.get(f, 0) + 1
+    total = len(families)
+    return {f: n / total for f, n in counts.items()}
+
+
+def rotate_reserve_by_saturation(
+    reserve: "deque[ShortlistCandidate]", family_fn, family_share: dict[str, float],
+    threshold: float,
+) -> None:
+    """T3.2: đẩy candidate trong `reserve` có family chiếm > `threshold` trong pool (theo
+    `family_share`, từ `compute_family_pool_share`) xuống CUỐI hàng đợi — giữ nguyên thứ tự
+    tương đối trong từng nhóm (giữ/đẩy), KHÔNG xoá candidate nào (chỉ hạ ưu tiên, tránh tiếp
+    tục đào family đã bão hoà; family còn 1 cơ hội khi các family khác cạn trước)."""
+    if not reserve:
+        return
+    keep: list[ShortlistCandidate] = []
+    demote: list[ShortlistCandidate] = []
+    for cand in reserve:
+        share = family_share.get(family_fn(cand.expr), 0.0)
+        (demote if share > threshold else keep).append(cand)
+    reserve.clear()
+    reserve.extend(keep)
+    reserve.extend(demote)
+
+
+def _read_pool_exprs(repo: object) -> list[str]:
+    """T3.2: đọc expr các alpha ĐÃ PASS trong pool hiện tại — "pool" theo nghĩa self-corr/
+    submission của dự án (alpha đã pass mới thật sự cạnh tranh vị trí trong pool). Guard
+    getattr+callable: repo fake/cũ thiếu `load_brain_sims` vẫn chạy được, coi như pool rỗng
+    (tương thích ngược, cùng pattern `submit_ready_alphas` ở `_report` trong `run()`)."""
+    fn = getattr(repo, "load_brain_sims", None)
+    if not callable(fn):
+        return []
+    try:
+        rows = fn()
+    except Exception:  # noqa: BLE001 - đọc pool là phụ, không được phá vòng kín chính
+        return []
+    return [r.expr_string for r in rows if getattr(r, "status", None) == "passed"]
 
 
 def _short(expr: str, n: int = 70) -> str:
@@ -192,6 +267,8 @@ class ClosedLoop:
         pp_ready_fn=None,
         on_gp_budget_exhausted=None,
         on_epoch_reseed=None,
+        frontier_reserve: "list[ShortlistCandidate] | None" = None,
+        frontier_presim_fn=None,
     ) -> None:
         self.idea_source = idea_source
         self.refiner = refiner
@@ -244,6 +321,22 @@ class ClosedLoop:
         # GPIdeaSource.reseed_epoch(). None -> bỏ qua (tương thích ngược, dừng ngay khi rỗng
         # như hành vi trước B1).
         self.on_epoch_reseed = on_epoch_reseed
+        # WS3 T3.1/T3.2: hàng đợi seed non-PV (frontier/alt-data/fundamental/hypothesis) CHƯA
+        # được đi thẳng `_sim_direct` trong phiên — build_closed_loop nạp một lần từ direct_
+        # cores (đã lọc known_fields/avoided_hashes/verified_fields tại nguồn). Rút dần mỗi
+        # batch (T3.1: bổ sung cho đủ sàn FRONTIER_MIN_FRACTION) thay vì dồn hết vào 1 batch
+        # đầu rồi cạn — đúng vấn đề T3.1 muốn sửa (PROGRESS Session 16). deque để popleft() O(1).
+        self.frontier_reserve: "deque[ShortlistCandidate]" = deque(frontier_reserve or [])
+        # Review Important #2 (T3, 2026-07-19): callable (list[str]) -> None — gọi với danh
+        # sách expr THÔ sắp được lộ ra khỏi `frontier_reserve` (dùng nốt khi cạn / bổ sung
+        # topup), TRƯỚC khi refiner tự sim tuần tự từng cái. Composition root (build_closed_
+        # loop) bind sẵn `presim_batch_into_cache` (Task 6, DÙNG CHUNG với `AltDataIdeaSource`,
+        # không nhân đôi logic) với simulator/sim_config/presim_cache thật — kết quả ghi vào
+        # CÙNG `presim_cache` mà `LocalTunerRefiner._sim_direct` đọc lại (khoá = expr thô),
+        # khôi phục lợi ích multi-sim (round-trip) đã mất khi T3.1 tách frontier/fundamental/
+        # hypothesis ra khỏi `AltDataIdeaSource`. None (mặc định) -> bỏ qua, refiner tự sim
+        # tuần tự đơn như hiện tại (tương thích ngược, KHÔNG BẮT BUỘC composition root nối).
+        self.frontier_presim_fn = frontier_presim_fn
 
     def run(self) -> ClosedLoopReport:
         """Lặp: next_batch → mỗi ý tưởng refine_and_sim → record_brain_sim → đếm. Dừng khi
@@ -372,6 +465,48 @@ class ClosedLoop:
             _gen_t0 = time.perf_counter()
             batch = self.idea_source.next_batch()
             gen_batch_ms = (time.perf_counter() - _gen_t0) * 1000.0
+            # Sửa Important MỚI (re-review T3, vòng 2): T3.2 (xoay reserve theo bão hoà pool)
+            # PHẢI chạy TRƯỚC bất kỳ nhánh nào bên dưới PEEK `frontier_reserve` để build batch
+            # (dùng nốt khi cạn / bổ sung topup) — nếu rotate mutate deque SAU khi đã peek,
+            # snapshot `batch` giữ thứ tự CŨ trong khi `popleft()` trễ ở for-loop rút theo VỊ
+            # TRÍ trên deque đã bị xoay: lệch khỏi `cand` đang xử lý -> candidate ĐÃ refine vẫn
+            # có thể còn trong reserve (tồn tại kép) VÀ candidate CHƯA xử lý bị pop nhầm, mất
+            # vĩnh viễn không log (đúng lớp lỗi Important #1 vừa sửa, tái phát qua đường khác).
+            # Rotate 1 LẦN DUY NHẤT ở đây, TRƯỚC mọi peek — cả 2 nhánh dưới nhìn CÙNG một thứ
+            # tự ổn định, và deque KHÔNG bị mutate lại nữa cho tới khi for-loop tự popleft().
+            if self.frontier_reserve and self.family_fn is not None:
+                pool_exprs = _read_pool_exprs(self.repo)
+                if pool_exprs:
+                    family_share = compute_family_pool_share(
+                        [self.family_fn(e) for e in pool_exprs]
+                    )
+                    rotate_reserve_by_saturation(
+                        self.frontier_reserve, self.family_fn, family_share,
+                        FRONTIER_SATURATION_K,
+                    )
+            # Sửa Important #1 (review T3, 2026-07-19): CHỈ PEEK (không pop) candidate lấy từ
+            # `frontier_reserve` ở cả 2 nhánh dưới (dùng nốt khi cạn / bổ sung topup) —
+            # `pending_from_reserve` đếm số phần tử Ở CUỐI `batch` còn "nợ" một popleft() thật
+            # sự. Việc rút THẬT khỏi hàng đợi chỉ xảy ra trong for-loop bên dưới, ĐÚNG lúc
+            # candidate đã qua gate `max_ideas` (chắc chắn sẽ được xử lý tiếp) — tránh mất
+            # trắng, không log, không dấu vết khi max_ideas chạm NGAY giữa lúc đang rút (trước
+            # fix: `batch = list(reserve); reserve.clear()` xoá NGAY LẬP TỨC, để rồi for-loop
+            # mới phát hiện đã hết ngân sách và trả về mà chưa từng xử lý candidate đó).
+            pending_from_reserve = 0
+            used_drain_khi_can = False
+            if not batch and self.frontier_reserve:
+                # T3.1: idea_source cạn NHƯNG hàng đợi non-PV còn — dùng NỐT thay vì dừng
+                # ngay/reseed (đúng "không chặn batch": còn gì thì dùng hết, kể cả khi idea_
+                # source chính đã hết ý tưởng của riêng nó). PEEK toàn bộ — xem comment trên.
+                batch = list(self.frontier_reserve)
+                pending_from_reserve = len(batch)
+                used_drain_khi_can = True
+                if self.frontier_presim_fn is not None:
+                    self.frontier_presim_fn([c.expr for c in batch])
+                logger.info(
+                    "🌐 idea_source cạn — dùng nốt {} candidate non-PV còn lại trong reserve.",
+                    len(batch),
+                )
             if not batch:
                 # B1: batch rỗng chưa chắc đã cạn tuyệt đối — thử mở epoch mới (seed mới +
                 # xoay dataset field ưu tiên) MỘT LẦN; rỗng NGAY SAU reseed đó (vua_reseed vẫn
@@ -396,14 +531,50 @@ class ClosedLoop:
                 logger.info("Cạn ý tưởng (batch rỗng) — dừng vòng kín.")
                 return _report("no_more_ideas")
             vua_reseed = False
+            # WS3 T3.1: sàn quota đa dạng mỗi batch — CHỈ áp dụng khi có cả reserve LẪN
+            # family_fn (không biết family thì không thể phân biệt PV/non-PV, thà bỏ qua còn
+            # hơn đoán sai và tiêu hao reserve vô ích). T3.2 (xoay theo bão hoà) đã chạy Ở TRÊN
+            # (đầu vòng lặp, TRƯỚC nhánh "dùng nốt") — KHÔNG rotate lại ở đây (xem comment
+            # "Sửa Important MỚI" ở đầu vòng lặp: rotate 2 lần trong cùng 1 batch sẽ lại làm
+            # lệch snapshot batch đã peek TRƯỚC nếu nhánh "dùng nốt" đã chạy).
+            if self.frontier_reserve and self.family_fn is not None:
+                # T3.1: chỉ topup khi nhánh "dùng nốt" (đã lấy TOÀN BỘ reserve) chưa chạy —
+                # tránh cộng dồn 2 nguồn cùng lúc.
+                if not used_drain_khi_can:
+                    non_pv = sum(
+                        1 for c in batch if self.family_fn(c.expr) not in _PV_FAMILY_LABELS
+                    )
+                    topup = compute_frontier_topup(
+                        len(batch), non_pv, FRONTIER_MIN_FRACTION, len(self.frontier_reserve),
+                    )
+                    if topup > 0:
+                        # PEEK (không pop) — xem comment "Sửa Important #1" ở đầu vòng lặp.
+                        added = list(self.frontier_reserve)[:topup]
+                        if self.frontier_presim_fn is not None:
+                            self.frontier_presim_fn([c.expr for c in added])
+                        batch = list(batch) + added
+                        pending_from_reserve += topup
+                        logger.info(
+                            "🌐 Sàn quota đa dạng: bổ sung {} candidate non-PV từ reserve "
+                            "(sẽ rút thật khi tới lượt xử lý).", topup,
+                        )
             # Chi phí sinh (GP/decorrelate) là của CẢ batch; phân bổ đều cho mỗi ứng viên để
             # điền gen_ms (refiner không biết chi phí này). Xấp xỉ đủ tốt cho funnel timing.
             gen_ms_each = gen_batch_ms / len(batch)
             logger.info("📦 Batch: {} ứng viên qua sàng lọc/decorrelate.", len(batch))
-            for cand in batch:
+            # Vị trí (chỉ số) TỪ ĐÂU trong `batch` là candidate "nợ" một popleft() thật sự —
+            # luôn nằm ở ĐUÔI batch (nhánh dùng-nốt/topup ở trên luôn APPEND vào cuối).
+            _reserve_start_idx = len(batch) - pending_from_reserve
+            for _idx, cand in enumerate(batch):
                 if self.max_ideas is not None and ideas_tried >= self.max_ideas:
                     logger.info("Đạt trần max_ideas={} — dừng.", self.max_ideas)
                     return _report("no_more_ideas")
+                if pending_from_reserve > 0 and _idx >= _reserve_start_idx:
+                    # Đã qua gate max_ideas ở trên -> XÁC NHẬN candidate này sẽ được xử lý
+                    # tiếp (dedup/family-đóng có thể vẫn loại nó, nhưng đó là tiêu thụ CÓ CHỦ
+                    # Ý + có log, khác hẳn mất trắng vì cắt ngang) -> rút THẬT khỏi hàng đợi
+                    # bây giờ (không rút sớm hơn — đó chính là bug Important #1).
+                    self.frontier_reserve.popleft()
                 key = self.dedup_key_fn(cand.expr)
                 if key in seen:
                     logger.info("↩︎ Bỏ ý tưởng trùng phiên/avoid-list: {}", _short(cand.expr))

@@ -10,7 +10,7 @@ import logging
 
 import numpy as np
 
-from config.thresholds import MAX_NODES
+from config.thresholds import MAX_DEPTH, MAX_NODES
 from src.gp.individual import Individual
 from src.lang.ast import Call, Constant, Field, Node
 from src.lang.registry import ArgKind, OperatorRegistry
@@ -221,10 +221,28 @@ def init_population(
     max_depth: int,
     seed_offset: int = 0,
     *,
+    seed_max_depth: int = MAX_DEPTH,
     field_groups: "tuple[tuple[str, ...], ...] | None" = None,
 ) -> list[Individual]:
     """Quần thể ban đầu: ưu tiên seed kinh nghiệm, lấp đầy phần còn lại bằng ramped
-    half-and-half. Seed/cây vượt max_depth bị loại + log warning (không crash).
+    half-and-half. Seed/cây vượt ngân sách bị loại + log warning (không crash).
+
+    (Fix review T2.2, WS2 task-2-brief.md) HAI TRẦN ĐỘ SÂU TÁCH BIỆT, KHÔNG dùng chung
+    ``max_depth``:
+
+    - ``max_depth``: trần cây SINH ngẫu nhiên (filler qua ``ramped_half_and_half`` bên
+      dưới khi seed hợp lệ không đủ lấp ``population_size``) — mặc định caller thật
+      (``GPEngine``) truyền ``GP_MAX_CORE_DEPTH`` (4) để filler luôn combinable.
+    - ``seed_max_depth`` (keyword-only, mặc định ``MAX_DEPTH`` = 7): trần lọc
+      ``valid_seeds`` — ngân sách RỘNG như TRƯỚC Task 2, vì seed là tri thức người viết
+      (seed thủ công/frontier/alt-data), ĐÃ qua kiểm định kinh tế, không phải cây sinh
+      ngẫu nhiên cần ép nông để tránh overfit. Seed sâu (5-7) vẫn được nạp vào quần thể;
+      việc chọn lọc "seed nào đáng giữ tới cuối" giao cho NSGA-II (T2.3, depth đã vào
+      parsimony) + ``_select_best_combinable`` (T2.1) ở tầng engine, KHÔNG chặn cứng
+      ngay từ lúc khởi tạo. Trước fix này, ``valid_seeds`` dùng chung ``max_depth`` với
+      filler nên khi ``GPEngine`` đổi default sang ``GP_MAX_CORE_DEPTH=4`` (T2.2), ~38%
+      seed thủ công (đa số seed frontier/alt-data depth 5-6) bị lọc rớt OAN ngay từ vòng
+      khởi tạo — ngoài phạm vi T2.2 gốc (chỉ scope SINH/BIẾN DỊ, không phải seed nạp vào).
 
     ``seed_offset`` chọn lô seed nào được dùng khi số seed hợp lệ nhiều hơn
     ``population_size`` (xoay vòng qua ``_rotating_slice`` thay vì luôn cố định
@@ -233,10 +251,12 @@ def init_population(
 
     ``field_groups`` (B2, keyword-only, mặc định None): truyền xuống ``ramped_half_and_half``
     cho phần filler ngẫu nhiên — two-stage sampling khi có, None giữ nguyên hành vi cũ."""
-    valid_seeds = [t for t in seed_cores if DepthVisitor().visit(t) <= max_depth]
+    valid_seeds = [t for t in seed_cores if DepthVisitor().visit(t) <= seed_max_depth]
     dropped = len(seed_cores) - len(valid_seeds)
     if dropped:
-        logger.warning("init_population: bỏ qua %d seed vượt max_depth=%d", dropped, max_depth)
+        logger.warning(
+            "init_population: bỏ qua %d seed vượt seed_max_depth=%d", dropped, seed_max_depth,
+        )
 
     if len(valid_seeds) >= population_size:
         chosen = _rotating_slice(valid_seeds, seed_offset, population_size)

@@ -21,8 +21,10 @@ import numpy as np
 
 from config.thresholds import SELF_CORR_MAX
 from src.calibration.loader import BrainRecord
-from src.calibration.report import CalibrationReport
+from src.calibration.report import CalibrationReport, FamilyCalibration
 from src.calibration.stats import spearman
+from src.reporting.diagnostics import classify_family
+from src.scoring.metrics import submit_score
 
 if TYPE_CHECKING:
     from src.data.market_panel import MarketData
@@ -49,10 +51,17 @@ class CalibrationHarness:
     def run(self, brain_records: list[BrainRecord]) -> CalibrationReport:
         local_sharpes: list[float] = []
         local_fitnesses: list[float] = []
+        local_submit_scores: list[float] = []
         brain_sharpes: list[float] = []
         brain_fitnesses: list[float] = []
+        brain_submit_scores: list[float] = []
         corr_pairs: list[tuple[float, float]] = []
         year_sums: dict[int, list[float]] = {}
+        # (T4.2) Gom theo họ nhân tố (classify_family) để tính ρ + hệ số local->Brain RIÊNG
+        # từng họ — chỉ báo cáo, KHÔNG tự wire vào gate (xem calibrated_floor(family=...)).
+        family_local: dict[str, list[float]] = {}
+        family_brain: dict[str, list[float]] = {}
+        family_ratios: dict[str, list[float]] = {}
 
         for record in brain_records:
             score = self._scorer(record.expr_string)
@@ -60,14 +69,29 @@ class CalibrationHarness:
                 continue
             local_sharpes.append(score.sharpe)
             local_fitnesses.append(score.fitness)
-            brain_sharpes.append(record.brain_sharpe if record.brain_sharpe is not None else math.nan)
+            # local luôn có sharpe/fitness thật (LocalScore không Optional) -> công thức thuần
+            # an toàn, không cần bọc None-safe như phía Brain.
+            local_submit_scores.append(submit_score(score.sharpe, score.fitness))
+            brain_sharpe_or_nan = (
+                record.brain_sharpe if record.brain_sharpe is not None else math.nan
+            )
+            brain_sharpes.append(brain_sharpe_or_nan)
             brain_fitnesses.append(
                 record.brain_fitness if record.brain_fitness is not None else math.nan
+            )
+            brain_submit_scores.append(
+                _submit_score_or_nan(record.brain_sharpe, record.brain_fitness)
             )
             if score.self_corr is not None and record.brain_self_corr is not None:
                 corr_pairs.append((score.self_corr, record.brain_self_corr))
             for year, value in score.per_year_sharpe.items():
                 year_sums.setdefault(year, []).append(value)
+
+            family = classify_family(record.expr_string)
+            family_local.setdefault(family, []).append(score.sharpe)
+            family_brain.setdefault(family, []).append(brain_sharpe_or_nan)
+            if record.brain_sharpe is not None and score.sharpe != 0.0:
+                family_ratios.setdefault(family, []).append(record.brain_sharpe / score.sharpe)
 
         # n = số record local re-score được (scorer != None). Record có brain_sharpe=None
         # vẫn đếm vào n nhưng bị spearman() loại (pairwise-complete) khi tính rho — n và cỡ
@@ -76,6 +100,7 @@ class CalibrationHarness:
         if n == 0:
             return CalibrationReport(
                 n=0, spearman_sharpe=math.nan, spearman_fitness=math.nan,
+                spearman_submit_score=math.nan,
                 self_corr_agreement=math.nan, decile_hit_rate=math.nan, by_year={},
             )
 
@@ -84,6 +109,10 @@ class CalibrationHarness:
         )
         rho_fitness = spearman(
             np.array(local_fitnesses, dtype=np.float64), np.array(brain_fitnesses, dtype=np.float64)
+        )
+        rho_submit_score = spearman(
+            np.array(local_submit_scores, dtype=np.float64),
+            np.array(brain_submit_scores, dtype=np.float64),
         )
 
         if corr_pairs:
@@ -98,12 +127,53 @@ class CalibrationHarness:
 
         decile_hit_rate = _decile_hit_rate(local_sharpes, brain_sharpes)
         by_year = {year: float(np.mean(values)) for year, values in year_sums.items()}
+        by_family = _build_by_family(family_local, family_brain, family_ratios)
 
         return CalibrationReport(
             n=n, spearman_sharpe=rho_sharpe, spearman_fitness=rho_fitness,
+            spearman_submit_score=rho_submit_score,
             self_corr_agreement=self_corr_agreement, decile_hit_rate=decile_hit_rate,
-            by_year=by_year,
+            by_year=by_year, by_family=by_family,
         )
+
+
+def _submit_score_or_nan(sharpe: float | None, fitness: float | None) -> float:
+    """Điểm-nộp Brain, None-safe (T4.1): trả NaN nếu THIẾU sharpe HOẶC fitness thay vì đưa
+    None/NaN thẳng vào `submit_score` (Python `min(x, nan)` phụ thuộc THỨ TỰ tham số — vd
+    `min(5.0, nan) == 5.0`, âm thầm nuốt mất NaN thay vì lan truyền). Check tường minh ở đây
+    đảm bảo cặp thiếu dữ liệu luôn bị `spearman()` loại khỏi mẫu (pairwise-complete), không lẫn
+    một số bịa vào rho."""
+    if sharpe is None or fitness is None:
+        return math.nan
+    return submit_score(sharpe, fitness)
+
+
+def _build_by_family(
+    family_local: dict[str, list[float]],
+    family_brain: dict[str, list[float]],
+    family_ratios: dict[str, list[float]],
+) -> dict[str, FamilyCalibration]:
+    """Dựng `FamilyCalibration` mỗi họ (T4.2): ρ Sharpe riêng họ (spearman() tự loại cặp NaN
+    khi brain_sharpe thiếu) + hệ số local->Brain ước lượng = MEDIAN(brain_sharpe/local_sharpe)
+    trên các cặp có cả hai phía hữu hạn và local_sharpe != 0 (median thay mean: bền hơn trước
+    outlier — chỉ vài chục mẫu mỗi họ nên 1 tỉ lệ dị thường có thể kéo lệch mean nhiều).
+
+    GIỚI HẠN CHƯA XỬ LÝ (review T4, Minor #1): điều kiện lọc hiện tại chỉ chặn local_sharpe
+    == 0.0 tuyệt đối — local_sharpe RẤT GẦN 0 (vd 0.001) vẫn lọt qua và có thể làm ratio
+    bùng nổ (chia cho số cực nhỏ). Đây KHÔNG phải bug khi đọc số ratio bất thường trên CLI —
+    là giới hạn CHƯA lọc epsilon, cố ý để lại vì chưa có dữ liệu thật (menu-5) để chọn ngưỡng
+    |local_sharpe| > epsilon hợp lý (đoán số sẽ chỉ che triệu chứng, không giải quyết gốc)."""
+    result: dict[str, FamilyCalibration] = {}
+    for family, locals_ in family_local.items():
+        brains = family_brain[family]
+        rho = spearman(np.array(locals_, dtype=np.float64), np.array(brains, dtype=np.float64))
+        ratios = family_ratios.get(family, [])
+        ratio_estimate = float(np.median(ratios)) if ratios else math.nan
+        result[family] = FamilyCalibration(
+            family=family, n=len(locals_), spearman_sharpe=rho,
+            local_to_brain_ratio=ratio_estimate,
+        )
+    return result
 
 
 def _decile_hit_rate(local: list[float], brain: list[float]) -> float:

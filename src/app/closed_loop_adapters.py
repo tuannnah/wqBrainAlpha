@@ -20,8 +20,6 @@ from config.thresholds import (
     COMBINER_MIN_BRAIN_SHARPE,
     DEGENERATE_SHARPE,
     DEGENERATE_TURNOVER,
-    SUBMIT_FITNESS_REF,
-    SUBMIT_SHARPE_REF,
     calibrated_floor,
 )
 from src.backtest.gate import local_usable
@@ -31,6 +29,7 @@ from src.generation.alt_data_seeds import (
     neutralization_for_expr,
     pp_neutralization_for_expr,
 )
+from src.generation.field_verification import filter_seeds_by_verified_fields
 from src.generation.frontier_seeds import FRONTIER_CORES
 from src.generation.near_miss_variants import NearMissVariantSource
 from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
@@ -58,6 +57,7 @@ from src.pipeline.combine_stage import combine_stage
 from src.pipeline.runner import _score_one_full, generate_many
 from src.pipeline.shortlist import ShortlistCandidate
 from src.scoring.filter import passes as _default_filter
+from src.scoring.metrics import submit_score as _submit_score_formula
 from src.scoring.vector import score_vector as _score_vector
 from src.simulation.simulator import AuthExpiredError, QuotaExceededError
 
@@ -144,14 +144,55 @@ def _neutralization_for(expr: str, pp_allowed: frozenset[str], registry: Any) ->
     return neutralization_for_expr(expr, registry)
 
 
+def presim_batch_into_cache(
+    cores: list[str], *, simulator: Any, sim_config: Any,
+    presim_cache: "dict[str, Any] | None", registry: Any,
+    pp_allowed_neutralizations: frozenset[str] = frozenset(),
+    presim_cap: int | None = None, label: str = "AltData",
+) -> None:
+    """(Task 6, trích từ `AltDataIdeaSource._presim_batch` — review Important #2 T3: DÙNG
+    CHUNG cho cả batch alt-data đầu phiên LẪN mỗi lần `ClosedLoop` rút k candidate từ
+    `frontier_reserve`, WS3 T3.1) Sim NHÓM `cores` (cắt trần `presim_cap`) 1 lần qua
+    `simulator.simulate_many` thay vì N lần tuần tự sau này trong `_sim_direct`, ghi kết quả
+    vào `presim_cache` (khoá = expr thô — cùng khoá `_sim_direct` dùng để tra lại thay vì sim
+    lần 2). CHỈ chạy khi đủ cấu hình (simulator/sim_config/cache không None) VÀ nhóm sau khi
+    cắt trần còn ≥2 core (khớp giới hạn API multi-sim). LỖI BẤT KỲ (multi-sim hỏng, mất mạng,
+    quota cạn...) -> log warning, KHÔNG cache gì — `_sim_direct` tự sim tuần tự từng core như
+    hành vi CŨ (an toàn, không chết phiên)."""
+    if simulator is None or sim_config is None or presim_cache is None:
+        return
+    batch_cores = cores if presim_cap is None else cores[:presim_cap]
+    if len(batch_cores) < 2:
+        return
+    jobs = [
+        (expr, sim_config.with_overrides(
+            neutralization=_neutralization_for(expr, pp_allowed_neutralizations, registry)
+        ).to_settings())
+        for expr in batch_cores
+    ]
+    try:
+        results = simulator.simulate_many(jobs)
+    except Exception as exc:  # noqa: BLE001 - fallback cố ý bắt rộng, xem docstring.
+        logger.warning(
+            "{}: multi-sim batch lỗi ({}) — fallback sim tuần tự từng core.", label, exc,
+        )
+        return
+    for expr, result in zip(batch_cores, results):
+        presim_cache[expr] = result
+
+
 def _submit_score(sharpe: float | None, fitness: float | None) -> float:
     """Điểm-nộp (cùng công thức combine_stage._submit_score, Task 2 Fix 4):
     min(sharpe/SUBMIT_SHARPE_REF, fitness/SUBMIT_FITNESS_REF) — đo một kết quả sim tiến GẦN
     NGƯỠNG NỘP thật tới đâu trên CẢ HAI trục. sharpe/fitness None (sim lỗi/presim) -> -inf,
-    không bao giờ được chọn làm 'tốt nhất' khi còn ứng viên có số liệu thật."""
+    không bao giờ được chọn làm 'tốt nhất' khi còn ứng viên có số liệu thật.
+
+    (T4.1) Công thức thuần chuyển sang `src.scoring.metrics.submit_score` (dùng chung, không
+    chép lần 3) — hàm này chỉ còn xử lý fallback -inf khi thiếu dữ liệu (khác None-safe -> NaN
+    của calibration harness vì đây là dùng để RANKING chọn 'tốt nhất', không phải đo tương quan)."""
     if sharpe is None or fitness is None:
         return float("-inf")
-    return min(sharpe / SUBMIT_SHARPE_REF, fitness / SUBMIT_FITNESS_REF)
+    return _submit_score_formula(sharpe, fitness)
 
 
 class RefinementLoopRefiner:
@@ -824,41 +865,15 @@ class AltDataIdeaSource:
             self._fallback.reseed_epoch()
 
     def _presim_batch(self, cores: list[str]) -> None:
-        """Task 6: sim NHÓM `cores` (cắt trần `presim_cap` — xem docstring class, Finding #1)
-        1 lần qua `simulate_many` (thay vì N lần tuần tự sau này trong `_sim_direct`), ghi kết
-        quả vào `self._presim_cache` (khoá = expr thô — cùng khoá `_sim_direct` dùng để tra
-        lại). CHỈ chạy khi đủ cấu hình (simulator/sim_config/cache) VÀ nhóm sau khi cắt trần
-        còn ≥2 core (khớp giới hạn API: mảng multi-sim cần ≥2 phần tử — 1 core thì tự
-        `_sim_direct` sim đường đơn như cũ, khỏi tốn thêm 1 lần round-trip vô ích).
-
-        LỖI BẤT KỲ (multi-sim hỏng, mất mạng, quota cạn...) -> log warning, KHÔNG cache gì —
-        `_sim_direct` sẽ tự sim tuần tự từng core như hành vi CŨ (an toàn, không chết phiên;
-        quota cạn thật vẫn được `_sim_direct` phát hiện + báo QuotaExhausted đúng như trước,
-        chỉ trễ hơn 1 nhịp vì phải chạm Brain lại ở đường đơn)."""
-        if self._simulator is None or self._sim_config is None or self._presim_cache is None:
-            return
-        # Finding #1: chỉ sim trước tối đa `presim_cap` core (= max_ideas phiên) — sim vượt
-        # trần sẽ bị ClosedLoop vứt kết quả (không _finalize/avoided_hashes) rồi PHIÊN SAU sim
-        # lại, lãng phí quota lặp. Core bị cắt vẫn nằm trong batch yield (không mất).
-        batch_cores = cores if self._presim_cap is None else cores[: self._presim_cap]
-        if len(batch_cores) < 2:
-            return
-        jobs = [
-            (expr, self._sim_config.with_overrides(
-                neutralization=_neutralization_for(expr, self._pp_allowed_neutralizations, self._registry)
-            ).to_settings())
-            for expr in batch_cores
-        ]
-        try:
-            results = self._simulator.simulate_many(jobs)
-        except Exception as exc:  # noqa: BLE001 - fallback cố ý bắt rộng, xem docstring.
-            logger.warning(
-                "AltDataIdeaSource: multi-sim batch lỗi ({}) — fallback sim tuần tự từng core.",
-                exc,
-            )
-            return
-        for expr, result in zip(batch_cores, results):
-            self._presim_cache[expr] = result
+        """Task 6 (Finding #1: cắt trần `presim_cap`, xem docstring class) — nay UỶ QUYỀN cho
+        `presim_batch_into_cache` module-level (review Important #2 T3: trích ra để dùng
+        CHUNG với `ClosedLoop` khi rút candidate từ `frontier_reserve`, không nhân đôi logic)."""
+        presim_batch_into_cache(
+            cores, simulator=self._simulator, sim_config=self._sim_config,
+            presim_cache=self._presim_cache, registry=self._registry,
+            pp_allowed_neutralizations=self._pp_allowed_neutralizations,
+            presim_cap=self._presim_cap, label="AltData",
+        )
 
     def next_batch(self):
         if not self._served:
@@ -1264,6 +1279,7 @@ def build_closed_loop(
     idea_generator: object | None = None, include_hypothesis: bool = True,
     known_fields: "frozenset[str] | set[str] | None" = None,
     max_gp_sims: int | None = 3, include_frontier: bool = True,
+    verified_fields: "frozenset[str] | None" = None,
 ) -> "ClosedLoop":
     """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
     bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
@@ -1279,7 +1295,15 @@ def build_closed_loop(
     `max_gp_sims`: trần sim Brain THẬT/phiên riêng cho candidate origin "gp" (Task 3) — GP là
     nguồn nhiễu (2 phiên gần nhất đốt ~10 sim ra toàn Sharpe ≤0.31, calibration ρ=0.308 không
     đủ tin để lọc trước). Mặc định 3; ưu tiên quota còn lại cho curated/alt_data/combiner
-    (không bị cap này). None = không cap (tương thích ngược)."""
+    (không bị cap này). None = không cap (tương thích ngược).
+
+    `verified_fields` (WS3 T3.3, cardinal rule #1): tập field ĐÃ verify LIVE (vd từ
+    `src.generation.field_verification.load_latest_verified_fields(Path("logs"))`, do CLI/
+    main.py load rồi truyền vào — build_closed_loop KHÔNG tự đọc file, giữ hàm test được).
+    Core alt-data/frontier/fundamental/hypothesis dùng field KHÔNG nằm trong tập này bị loại
+    TRƯỚC khi tới AltDataIdeaSource/frontier_reserve (không bao giờ chạm sim), kèm log WARNING.
+    None (mặc định) -> FAIL-OPEN, không lọc gì (tương thích ngược, khớp quyết định T3.3: thiếu
+    bằng chứng verify không nên chặn oan seed thật)."""
     from src.pipeline.closed_loop import CalibrationTracker, ClosedLoop, compute_avoided_hashes
 
     # Dedup key = canonical hash đã fold scale dương (Pha 1.2). Định nghĩa TRƯỚC khi dựng
@@ -1351,6 +1375,24 @@ def build_closed_loop(
     if hasattr(refiner, "presim_cache"):
         _presim_cache = {}
         refiner.presim_cache = _presim_cache  # type: ignore[attr-defined]
+
+    # Review Important #2 (T3, 2026-07-19): khôi phục lợi ích multi-sim (Task 6) cho candidate
+    # rút từ `frontier_reserve` — T3.1 tách frontier/fundamental/hypothesis khỏi AltDataIdeaSource
+    # (mất presim CẢ NHÓM qua simulate_many, luôn sim tuần tự đơn qua _sim_direct). Bind CÙNG
+    # simulator/sim_config/pp_allowed_neutralizations/_presim_cache mà AltDataIdeaSource dùng ở
+    # dưới (không đảo ngược ai sở hữu chúng) -> ClosedLoop gọi closure này mỗi lần rút k candidate
+    # từ reserve (dùng nốt khi cạn / bổ sung topup), presim_batch_into_cache tự no-op an toàn khi
+    # thiếu simulator/sim_config/presim_cache (refiner LLM không có presim_cache) hoặc < 2 core.
+    def _frontier_presim_fn(exprs: list[str]) -> None:
+        presim_batch_into_cache(
+            exprs, simulator=getattr(refiner, "simulator", None),
+            sim_config=getattr(refiner, "sim_config", None),
+            presim_cache=_presim_cache,
+            pp_allowed_neutralizations=getattr(refiner, "pp_allowed_neutralizations", frozenset()),
+            registry=registry if registry is not None else default_registry(),
+            presim_cap=max_ideas, label="FrontierReserve",
+        )
+
     # Near-miss variant expander (bằng chứng log 2026-07-16: 389 core alt-data bão hoà sau
     # 1 sim/core -> vòng kín rơi về GP nhiễu best Sharpe 0.68 suốt ~6h): chen GIỮA alt-data
     # và curated/GP — khi kho core cạn, sinh biến thể window/wrapper quanh near-miss Brain-sim
@@ -1367,11 +1409,18 @@ def build_closed_loop(
     )
     # Alt-data đặt NGOÀI CÙNG -> phục vụ ở batch đầu (trước cả curated PV) để phiên ngắn/
     # --max-ideas nhỏ vẫn chạm alt-data (đòn bẩy độ mới), không bị PV core nuốt hết quota.
-    # Alt-data + fundamental: field ngoài panel local -> refiner sim thẳng Brain. GỘP cores vào
-    # MỘT batch đầu (không bọc lồng nhiều tầng) để phiên ngắn (--max-ideas nhỏ) chạm cả hai họ
-    # mới cùng lúc (IMPROVEMENT_SPEC §2.1: thoát cụm PV/VWAP bão hòa bằng nhiều họ orthogonal).
-    direct_cores: tuple[str, ...] = _gather_direct_cores(
-        include_alt_data, include_fundamental, include_hypothesis, include_frontier,
+    # CHỈ alt-data "thật" (option8/socialmedia8...) đi đường AltDataIdeaSource (giữ nguyên cơ
+    # chế multi-sim theo batch, Task 6) — fundamental/hypothesis/frontier tách ra `frontier_
+    # pool_cores` bên dưới, nạp vào `ClosedLoop.frontier_reserve` (WS3 T3.1) thay vì dồn hết
+    # vào CÙNG một batch đầu rồi cạn: trước T3.1, alt_data+fundamental+hypothesis+frontier
+    # GỘP vào một `direct_cores` duy nhất, AltDataIdeaSource dump TOÀN BỘ ở batch #1 rồi mọi
+    # batch SAU đó (GP/curated) toàn pv_reversal suốt phần còn lại phiên (PROGRESS Session 16)
+    # — đây chính là vấn đề T3.1 sửa: rút DẦN từ reserve mỗi batch thay vì dump 1 lần.
+    direct_cores: tuple[str, ...] = _gather_direct_cores(include_alt_data, False, False, False)
+    # WS3 T3.3 (cardinal rule #1): loại core dùng field CHƯA verify LIVE trước khi tới
+    # AltDataIdeaSource — verified_fields=None (không bằng chứng) -> fail-open, không lọc gì.
+    direct_cores = filter_seeds_by_verified_fields(
+        direct_cores, verified_fields, registry if registry is not None else default_registry(),
     )
     if direct_cores:
         idea_source = AltDataIdeaSource(
@@ -1387,6 +1436,44 @@ def build_closed_loop(
             # sim lại -> lãng phí quota lặp). None = không trần (phiên không giới hạn).
             presim_cap=max_ideas,
         )
+    # WS3 T3.1: frontier/fundamental/hypothesis (field NGOÀI panel local, cùng đi thẳng
+    # `_sim_direct` như alt-data qua `local_usable(...)==False`) — lọc verified_fields rồi
+    # known_fields (cùng guard RC1/RC2 dùng cho AltDataIdeaSource) rồi avoided_hashes (không
+    # nạp lại core đã Brain-sim phiên trước) TRƯỚC khi đóng gói thành `ShortlistCandidate` cho
+    # `ClosedLoop.frontier_reserve` — origin="alt_data" để refiner nhận diện + route giống hệt
+    # alt-data thật. THỨ TỰ verified_fields TRƯỚC known_fields khớp đúng thứ tự hiệu lực của
+    # nhánh `direct_cores` (alt-data thật) ở trên: verified_fields lọc TRƯỚC (build_closed_loop,
+    # ngay khi vừa gom cores) rồi known_fields lọc SAU (bên trong constructor AltDataIdeaSource)
+    # — Minor #3 review: 2 nhánh trước đây áp 2 filter NGƯỢC thứ tự nhau (không đổi kết quả vì
+    # cả hai đều là lọc-giao độc lập, nhưng gây khó đọc/không nhất quán khi review).
+    _registry_for_reserve = registry if registry is not None else default_registry()
+    frontier_pool_cores: tuple[str, ...] = _gather_direct_cores(
+        False, include_fundamental, include_hypothesis, include_frontier,
+    )
+    frontier_pool_cores = filter_seeds_by_verified_fields(
+        frontier_pool_cores, verified_fields, _registry_for_reserve,
+    )
+    frontier_pool_cores = _filter_known_fields(
+        frontier_pool_cores, known_fields, _registry_for_reserve,
+    )
+    frontier_pool_cores = tuple(
+        _drop_saturated_cores(
+            list(frontier_pool_cores), dedup_key_fn=_dedup_key,
+            avoided_hashes=avoided_hashes, label="FrontierReserve",
+        )
+    )
+    frontier_reserve: list[ShortlistCandidate] = []
+    if frontier_pool_cores:
+        import numpy as _np
+
+        _empty_pnl = _np.zeros(0, dtype=_np.float64)
+        _empty_dates = _np.zeros(0, dtype="datetime64[ns]")
+        frontier_reserve = [
+            ShortlistCandidate(
+                expr=e, metrics=None, pnl=_empty_pnl, dates=_empty_dates, origin="alt_data",
+            )
+            for e in frontier_pool_cores
+        ]
     # Combiner bọc NGOÀI CÙNG: nối tiếp mỗi batch (sau curated/alt-data) bằng alpha ghép từ
     # chính tín hiệu con batch đó + kho DB -> tự động chạy sau mỗi run (spec 2026-07-09).
     if include_combiner:
@@ -1461,4 +1548,6 @@ def build_closed_loop(
         pp_ready_fn=pp_ready_fn,
         on_gp_budget_exhausted=on_gp_budget_exhausted,
         on_epoch_reseed=on_epoch_reseed,
+        frontier_reserve=frontier_reserve,
+        frontier_presim_fn=_frontier_presim_fn,
     )

@@ -283,8 +283,10 @@ def test_build_closed_loop_noi_on_family_closed_toi_generator(small_panel, repo)
 
 
 def test_build_closed_loop_fundamental_mac_dinh(small_panel, repo) -> None:  # noqa: ANN001
-    """Pha 2.1: fundamental cores có mặt trong batch đầu khi include_fundamental (mặc định True).
-    Field fundamental ngoài panel local -> refiner sim thẳng Brain (như alt-data)."""
+    """Pha 2.1: fundamental cores có mặt (mặc định include_fundamental=True). Field fundamental
+    ngoài panel local -> refiner sim thẳng Brain (như alt-data). WS3 T3.1: fundamental/
+    hypothesis/frontier nay nạp vào `ClosedLoop.frontier_reserve` (rút DẦN mỗi batch qua sàn
+    quota đa dạng) thay vì dump hết vào batch đầu của `idea_source` như trước T3.1."""
     from src.app.closed_loop_adapters import build_closed_loop
     from src.backtest.config import Neutralization, PortfolioConfig
     from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
@@ -301,7 +303,7 @@ def test_build_closed_loop_fundamental_mac_dinh(small_panel, repo) -> None:  # n
                              registry=default_registry(), loop=_NoopLoop(),
                              pop_size=6, n_generations=0, top_k=3, max_ideas=2,
                              curated_seeds=False)  # KHÔNG truyền include_fundamental
-    exprs = [c.expr for c in loop.idea_source.next_batch()]
+    exprs = [c.expr for c in loop.frontier_reserve]
     for core in FUNDAMENTAL_CORES:
         assert core in exprs
 
@@ -432,7 +434,10 @@ def test_build_closed_loop_on_family_closed_noi_toi_idea_source(small_panel, rep
         def run_from_seed(self, expression, on_progress=None):
             return type("R", (), {"best_candidate": None})()
 
-    # Tắt hết wrapper khác -> idea_source CHÍNH LÀ GPIdeaSource, kiểm tra trực diện dây nối.
+    # Tắt hết wrapper KHÁC NearMissVariantSource (luôn bọc không điều kiện, xem build_closed_
+    # loop) -> idea_source = NearMissVariantSource(fallback=GPIdeaSource); NearMissVariantSource
+    # tự nó chỉ ỦY QUYỀN set_saturated_families xuống fallback (không giữ `_saturated` riêng)
+    # nên kiểm tra dây nối qua `_fallback` (GPIdeaSource, nơi thật sự lọc theo họ đóng).
     loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
                              registry=default_registry(), loop=_NoopLoop(),
                              pop_size=6, n_generations=0, top_k=3, max_ideas=2,
@@ -442,7 +447,7 @@ def test_build_closed_loop_on_family_closed_noi_toi_idea_source(small_panel, rep
     assert loop.on_family_closed is not None
 
     loop.on_family_closed({"pv_reversal"})
-    assert loop.idea_source._saturated == {"pv_reversal"}
+    assert loop.idea_source._fallback._saturated == {"pv_reversal"}
 
     def _fake_generate_many(**_kw):
         return [
@@ -566,8 +571,9 @@ def test_alt_data_idea_source_known_fields_none_khong_loc() -> None:
 
 
 def test_build_closed_loop_known_fields_loc_core_thieu_field(small_panel, repo) -> None:  # noqa: ANN001
-    """build_closed_loop(known_fields=...) phải thread xuống AltDataIdeaSource: core hypothesis
-    tham chiếu field không nằm trong catalog cache KHÔNG BAO GIỜ được idea_source phục vụ."""
+    """build_closed_loop(known_fields=...) phải thread xuống nguồn seed: core hypothesis tham
+    chiếu field không nằm trong catalog cache KHÔNG BAO GIỜ được phục vụ. WS3 T3.1: hypothesis
+    (fundamental/frontier tắt ở test này) nay nạp vào `ClosedLoop.frontier_reserve`."""
     from src.app.closed_loop_adapters import build_closed_loop
     from src.backtest.config import Neutralization, PortfolioConfig
     from src.generation.hypothesis_seeds import HYPOTHESIS_CORES
@@ -589,7 +595,7 @@ def test_build_closed_loop_known_fields_loc_core_thieu_field(small_panel, repo) 
                              curated_seeds=False, include_alt_data=False,
                              include_fundamental=False, include_combiner=False,
                              known_fields=known)
-    exprs = [c.expr for c in loop.idea_source.next_batch()]
+    exprs = [c.expr for c in loop.frontier_reserve]
     # Core value_quality (chỉ dùng field đã verify live) PHẢI có mặt.
     value_quality_core = [e for e in HYPOTHESIS_CORES if "sales_growth" in e][0]
     assert value_quality_core in exprs
@@ -597,6 +603,62 @@ def test_build_closed_loop_known_fields_loc_core_thieu_field(small_panel, repo) 
     for core in HYPOTHESIS_CORES:
         if core != value_quality_core:
             assert core not in exprs
+
+
+def test_build_closed_loop_verified_fields_loc_seed_chua_verify_live(small_panel, repo) -> None:  # noqa: ANN001
+    """WS3 T3.3: build_closed_loop(verified_fields=...) phải lọc seed dùng field CHƯA có trong
+    bằng chứng verify LIVE — cùng cơ chế `known_fields` nhưng nguồn sự thật khác (JSON verify
+    thay vì catalog cache). value_quality (operating_income/assets/sales_growth) được coi là
+    ĐÃ verify; các core hypothesis khác (anl4_*/days_to_cover/shares_short) thì KHÔNG."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.generation.hypothesis_seeds import HYPOTHESIS_CORES
+    from src.lang.registry import default_registry
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    verified = frozenset({"operating_income", "assets", "sales_growth", "close", "volume"})
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2,
+                             curated_seeds=False, include_alt_data=False,
+                             include_fundamental=False, include_combiner=False,
+                             verified_fields=verified)
+    exprs = [c.expr for c in loop.frontier_reserve]
+    value_quality_core = [e for e in HYPOTHESIS_CORES if "sales_growth" in e][0]
+    assert value_quality_core in exprs
+    for core in HYPOTHESIS_CORES:
+        if core != value_quality_core:
+            assert core not in exprs
+
+
+def test_build_closed_loop_verified_fields_none_khong_loc_gi(small_panel, repo) -> None:  # noqa: ANN001
+    """verified_fields=None (mặc định, không truyền) -> FAIL-OPEN, không lọc gì — tương thích
+    ngược với mọi test/khách gọi hiện có chưa biết tới tham số này."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
+    from src.lang.registry import default_registry
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2,
+                             curated_seeds=False)
+    exprs = [c.expr for c in loop.frontier_reserve]
+    for core in FUNDAMENTAL_CORES:
+        assert core in exprs
 
 
 # --- Task 5: mini-sweep cho đường sim-thẳng alt-data (flip dấu + biến thể decay) ---
@@ -972,6 +1034,163 @@ def test_build_closed_loop_noi_simulate_many_xuong_alt_data_source(small_panel, 
     outcome = refiner.refine_and_sim(batch[0])
     assert sim.single_calls == 0
     assert outcome.wq_alpha_id == "wq-0"
+
+
+# --- Important #2 (review T3, 2026-07-19): `presim_batch_into_cache` trích từ
+# `AltDataIdeaSource._presim_batch` để DÙNG CHUNG với `ClosedLoop` khi rút candidate từ
+# `frontier_reserve` (WS3 T3.1) — kiểm trực tiếp module-level, độc lập AltDataIdeaSource. ------
+
+
+def _fake_multi_sim():
+    from src.simulation.simulator import SimulationResult
+
+    class _Sim:
+        def __init__(self) -> None:
+            self.multi_calls: list[list] = []
+
+        def simulate_many(self, jobs):
+            self.multi_calls.append(list(jobs))
+            return [
+                SimulationResult(expression=e, alpha_id=f"wq-{i}", status="passed", sharpe=1.0)
+                for i, (e, _s) in enumerate(jobs)
+            ]
+
+    return _Sim()
+
+
+def test_presim_batch_into_cache_ghi_ket_qua_qua_simulate_many() -> None:
+    from src.app.closed_loop_adapters import presim_batch_into_cache
+    from src.lang.registry import default_registry
+    from src.simulation.config import SimConfig
+
+    sim = _fake_multi_sim()
+    cache: dict = {}
+    presim_batch_into_cache(
+        ["rank(close)", "rank(volume)"], simulator=sim, sim_config=SimConfig.default(),
+        presim_cache=cache, registry=default_registry(),
+    )
+    assert len(sim.multi_calls) == 1
+    assert len(sim.multi_calls[0]) == 2
+    assert set(cache.keys()) == {"rank(close)", "rank(volume)"}
+    assert cache["rank(close)"].alpha_id == "wq-0"
+
+
+def test_presim_batch_into_cache_duoi_2_core_khong_goi_simulate_many() -> None:
+    """< 2 core (khớp giới hạn API multi-sim) -> no-op, KHÔNG gọi simulate_many."""
+    from src.app.closed_loop_adapters import presim_batch_into_cache
+    from src.lang.registry import default_registry
+    from src.simulation.config import SimConfig
+
+    sim = _fake_multi_sim()
+    cache: dict = {}
+    presim_batch_into_cache(
+        ["rank(close)"], simulator=sim, sim_config=SimConfig.default(),
+        presim_cache=cache, registry=default_registry(),
+    )
+    assert sim.multi_calls == []
+    assert cache == {}
+
+
+def test_presim_batch_into_cache_thieu_cau_hinh_khong_lam_gi() -> None:
+    """simulator/sim_config/presim_cache thiếu 1 trong 3 -> no-op an toàn (không raise)."""
+    from src.app.closed_loop_adapters import presim_batch_into_cache
+    from src.lang.registry import default_registry
+    from src.simulation.config import SimConfig
+
+    sim = _fake_multi_sim()
+    presim_batch_into_cache(
+        ["rank(close)", "rank(volume)"], simulator=None, sim_config=SimConfig.default(),
+        presim_cache={}, registry=default_registry(),
+    )
+    presim_batch_into_cache(
+        ["rank(close)", "rank(volume)"], simulator=sim, sim_config=None,
+        presim_cache={}, registry=default_registry(),
+    )
+    presim_batch_into_cache(
+        ["rank(close)", "rank(volume)"], simulator=sim, sim_config=SimConfig.default(),
+        presim_cache=None, registry=default_registry(),
+    )
+    assert sim.multi_calls == []  # không nhánh nào gọi tới simulate_many
+
+
+def test_presim_batch_into_cache_loi_simulate_many_khong_cache_gi() -> None:
+    """simulate_many ném lỗi -> log warning, KHÔNG cache gì (refiner tự sim tuần tự sau)."""
+    from src.app.closed_loop_adapters import presim_batch_into_cache
+    from src.lang.registry import default_registry
+    from src.simulation.config import SimConfig
+
+    class _BoomSim:
+        def simulate_many(self, jobs):
+            raise RuntimeError("mat mang")
+
+    cache: dict = {}
+    presim_batch_into_cache(
+        ["rank(close)", "rank(volume)"], simulator=_BoomSim(), sim_config=SimConfig.default(),
+        presim_cache=cache, registry=default_registry(),
+    )
+    assert cache == {}
+
+
+def test_presim_batch_into_cache_cat_tran_presim_cap() -> None:
+    """presim_cap cắt trần TRƯỚC khi gọi simulate_many — chỉ presim_cap core đầu được sim."""
+    from src.app.closed_loop_adapters import presim_batch_into_cache
+    from src.lang.registry import default_registry
+    from src.simulation.config import SimConfig
+
+    sim = _fake_multi_sim()
+    cache: dict = {}
+    presim_batch_into_cache(
+        ["rank(close)", "rank(volume)", "rank(open)"], simulator=sim,
+        sim_config=SimConfig.default(), presim_cache=cache, registry=default_registry(),
+        presim_cap=2,
+    )
+    assert len(sim.multi_calls[0]) == 2
+    assert set(cache.keys()) == {"rank(close)", "rank(volume)"}
+
+
+def test_build_closed_loop_noi_frontier_presim_fn_xuong_closed_loop(small_panel, repo) -> None:  # noqa: ANN001
+    """Important #2 (review T3): build_closed_loop phải gắn `loop.frontier_presim_fn` — gọi nó
+    với 1 nhóm expr fundamental phải presim CẢ NHÓM qua simulate_many + ghi vào ĐÚNG presim_
+    cache mà refiner.presim_cache trỏ tới (cùng dict, không phải bản sao)."""
+    from src.app.closed_loop_adapters import LocalTunerRefiner, build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
+    from src.lang.registry import default_registry
+    from src.simulation.config import SimConfig
+
+    class _AlphaRepo:
+        def save_alpha(self, *a, **k):
+            return "a1"
+
+        def save_simulation(self, *a, **k):
+            return None
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+    sim = _fake_multi_sim()
+    refiner = LocalTunerRefiner(
+        simulator=sim, repo=_AlphaRepo(), data=small_panel,
+        local_config=cfg, sim_config=SimConfig.default(),
+    )
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=10,
+                             curated_seeds=False, include_alt_data=False,
+                             include_hypothesis=False, include_frontier=False,
+                             include_combiner=False, refiner=refiner)
+
+    assert callable(loop.frontier_presim_fn)
+    cores = list(FUNDAMENTAL_CORES[:2])
+    loop.frontier_presim_fn(cores)
+    assert len(sim.multi_calls) == 1
+    assert len(sim.multi_calls[0]) == 2
+    # presim_cache ghi vào ĐÚNG dict mà refiner._sim_direct sẽ đọc lại (cùng object, không copy).
+    assert set(refiner.presim_cache.keys()) == set(cores)
 
 
 def test_build_closed_loop_wire_near_miss_variant_source(small_panel, repo) -> None:  # noqa: ANN001

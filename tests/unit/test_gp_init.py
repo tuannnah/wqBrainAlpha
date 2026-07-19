@@ -234,3 +234,114 @@ def test_field_groups_none_giu_hanh_vi_cu():
     cu = [_random_leaf(rng1, f).name for _ in range(50)]
     moi = [_random_leaf(rng2, f, field_groups=None).name for _ in range(50)]
     assert cu == moi
+
+
+# --- T2.2: khóa hành vi với GP_MAX_CORE_DEPTH (trần core GP mới, xem config/thresholds.py) ---
+#
+# XÁC MINH (không phải RED->GREEN mới): random_tree/_bounded_random_tree/ramped_half_and_half
+# CẤU TRÚC ĐÃ đảm bảo depth <= tham số truyền vào (đệ quy giảm dần đúng 1 mỗi tầng, không
+# bao giờ vượt) từ trước Task 2 -- không có lỗi nào ở init.py cần sửa cho T2.2. Trần bị lỏng
+# TRƯỚC Task 2 nằm ở GIÁ TRỊ mặc định truyền VÀO các hàm này (GPEngine.max_depth mặc định = 7
+# = MAX_DEPTH, xem T2.2 ở engine.py/variation.py), KHÔNG phải ở init.py. Test dưới đây khóa
+# (regression-lock) hành vi ĐÚNG đã có, buộc tường minh vào hằng số GP_MAX_CORE_DEPTH thay vì
+# số 4 rời rạc — nếu ai đó nới GP_MAX_CORE_DEPTH mà quên nối dây, test này vẫn phản ánh đúng
+# giá trị mới (không phải hardcode).
+def test_ramped_half_and_half_ton_trong_gp_max_core_depth_khi_duoc_truyen():
+    from config.thresholds import GP_MAX_CORE_DEPTH
+
+    rng = np.random.default_rng(15)
+    registry = default_registry()
+    trees = ramped_half_and_half(
+        registry, rng, n=20, min_depth=1, max_depth=GP_MAX_CORE_DEPTH, fields=_FIELDS,
+    )
+    assert all(DepthVisitor().visit(t) <= GP_MAX_CORE_DEPTH for t in trees)
+
+
+def test_init_population_ton_trong_gp_max_core_depth_khi_duoc_truyen():
+    from config.thresholds import GP_MAX_CORE_DEPTH
+
+    rng = np.random.default_rng(16)
+    registry = default_registry()
+    pop = init_population(
+        registry, rng, population_size=15, seed_cores=[], fields=_FIELDS,
+        max_depth=GP_MAX_CORE_DEPTH,
+    )
+    assert all(ind.depth() <= GP_MAX_CORE_DEPTH for ind in pop)
+
+
+# --- Fix review T2.2 (Important): GP_MAX_CORE_DEPTH KHÔNG được lan sang bộ lọc seed thủ
+# công -- seed (tri thức người viết, đã qua kiểm) phải giữ ngân sách RỘNG như trước Task 2
+# (MAX_DEPTH=7); chỉ cây SINH ngẫu nhiên (filler)/BIẾN DỊ mới bị ép về GP_MAX_CORE_DEPTH=4.
+# `max_depth` truyền cho `init_population` giờ CHỈ áp cho filler; `seed_max_depth` (tham số
+# mới, mặc định MAX_DEPTH) áp riêng cho lọc `valid_seeds`.
+
+
+def _nested_call(op: str, n: int, field: str = "close"):  # noqa: ANN201
+    """Cây ``op`` lồng n lớp quanh ``Field(field)`` -> depth = n + 1 (n=0 -> leaf, depth 1)."""
+    node = Field(field)
+    for _ in range(n):
+        node = Call(op=op, args=(node,))
+    return node
+
+
+def test_init_population_giu_seed_sau_du_vuot_gp_max_core_depth_nhung_trong_max_depth():
+    """(Fix review T2.2) Seed depth 6 (> GP_MAX_CORE_DEPTH=4, nhưng <= MAX_DEPTH=7) PHẢI
+    được GIỮ trong population khi ``max_depth=GP_MAX_CORE_DEPTH`` (trần filler) — seed dùng
+    ``seed_max_depth`` mặc định (MAX_DEPTH) để lọc, KHÔNG dùng chung ``max_depth`` với filler
+    như trước fix (đó là bug: seed sâu hợp lệ bị lọc rớt oan)."""
+    from config.thresholds import GP_MAX_CORE_DEPTH
+
+    seed_sau = _nested_call("rank", 5)  # depth 6
+    rng = np.random.default_rng(20)
+    registry = default_registry()
+    pop = init_population(
+        registry, rng, population_size=10, seed_cores=[seed_sau], fields=_FIELDS,
+        max_depth=GP_MAX_CORE_DEPTH,
+    )
+    assert any(ind.expr == seed_sau for ind in pop)  # seed sâu KHÔNG bị lọc rớt
+
+
+def test_init_population_filler_van_ton_trong_max_depth_du_seed_sau_hon():
+    """Song song với test trên: seed sâu được giữ, nhưng FILLER (lấp chỗ trống) vẫn phải
+    tôn trọng ``max_depth=GP_MAX_CORE_DEPTH`` -- tách seed khỏi filler không được nới trần
+    filler theo seed."""
+    from config.thresholds import GP_MAX_CORE_DEPTH
+
+    seed_sau = _nested_call("rank", 5)  # depth 6, 1 seed duy nhất
+    rng = np.random.default_rng(21)
+    registry = default_registry()
+    pop = init_population(
+        registry, rng, population_size=10, seed_cores=[seed_sau], fields=_FIELDS,
+        max_depth=GP_MAX_CORE_DEPTH,
+    )
+    filler = [ind for ind in pop if ind.expr != seed_sau]
+    assert len(filler) == 9
+    assert all(ind.depth() <= GP_MAX_CORE_DEPTH for ind in filler)
+
+
+def test_init_population_seed_max_depth_tuong_minh_van_loc_seed_qua_sau():
+    """Truyền ``seed_max_depth`` tường minh nhỏ hơn depth thật của seed -> seed đó vẫn bị
+    loại (hành vi lọc theo ngân sách vẫn hoạt động, chỉ tách khỏi ``max_depth`` filler)."""
+    seed_qua_sau = _nested_call("rank", 7)  # depth 8, vượt cả MAX_DEPTH=7
+    rng = np.random.default_rng(22)
+    registry = default_registry()
+    pop = init_population(
+        registry, rng, population_size=5, seed_cores=[seed_qua_sau], fields=_FIELDS,
+        max_depth=4, seed_max_depth=6,
+    )
+    assert all(ind.expr != seed_qua_sau for ind in pop)
+
+
+def test_init_population_seed_max_depth_mac_dinh_la_max_depth_hang_so():
+    """Không truyền ``seed_max_depth`` -> mặc định dùng hằng số ``MAX_DEPTH`` (7, ngân sách
+    RỘNG trước Task 2), KHÔNG phải ``max_depth`` (trần filler) truyền vào."""
+    from config.thresholds import GP_MAX_CORE_DEPTH, MAX_DEPTH
+
+    seed_o_bien = _nested_call("rank", MAX_DEPTH - 1)  # depth == MAX_DEPTH đúng biên
+    rng = np.random.default_rng(23)
+    registry = default_registry()
+    pop = init_population(
+        registry, rng, population_size=5, seed_cores=[seed_o_bien], fields=_FIELDS,
+        max_depth=GP_MAX_CORE_DEPTH,
+    )
+    assert any(ind.expr == seed_o_bien for ind in pop)

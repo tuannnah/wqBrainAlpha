@@ -14,6 +14,7 @@ from src.generation.combiner import (
     CombinedAlpha,
     SubSignal,
     build_combined_expression,
+    component_depth_cap,
     select_decorrelated_combos,
 )
 from src.lang.parser import parse
@@ -105,6 +106,26 @@ def test_pool_rong_hoac_mot_phan_tu_khong_combo():
     assert select_decorrelated_combos(one, tau=0.3, n_min=2, n_max=4, max_combos=5) == []
 
 
+def test_uu_tien_combinability_khong_phai_fitness_tho():
+    """T1.1: 1 tín hiệu depth=6 điểm CAO NHẤT (monster GP) vs 2 tín hiệu depth=2 điểm vừa
+    -- combo phải chọn 2 tín hiệu NÔNG, monster KHÔNG được chọn dù điểm cao nhất (đúng kịch
+    bản khiến greedy cũ luôn chọn nhầm biểu thức chết trần làm seed)."""
+    rng = _rng()
+    monster = _sig(
+        "rank(ts_rank(ts_mean(ts_std_dev(ts_delta(close, 1), 5), 5), 5))",  # depth 6
+        rng.normal(size=200), 100.0,
+    )
+    a = _sig("ts_delta(close, 5)", rng.normal(size=200), 0.6)   # depth 2
+    b = _sig("ts_delta(close, 10)", rng.normal(size=200), 0.5)  # depth 2
+
+    combos = select_decorrelated_combos([monster, a, b], tau=0.9, n_min=2, n_max=2, max_combos=5)
+
+    assert len(combos) >= 1
+    exprs = [s.expr for s in combos[0]]
+    assert monster.expr not in exprs             # monster KHÔNG được chọn dù điểm cao nhất
+    assert set(exprs) == {a.expr, b.expr}         # combo chỉ gồm 2 tín hiệu nông
+
+
 def test_nhieu_combo_khong_trung_seed():
     rng = _rng()
     # 4 tín hiệu đôi một độc lập -> combo1 lấy 4; hết ứng viên -> chỉ 1 combo.
@@ -115,6 +136,37 @@ def test_nhieu_combo_khong_trung_seed():
     assert len(combos) == 2
     seeds = {combos[0][0].expr, combos[1][0].expr}
     assert len(seeds) == 2
+
+
+def test_uu_tien_tin_hieu_da_chuan_hoa_cung_bucket_do_sau():
+    """T1.3: cùng bucket độ sâu (đều depth <= cap mặc định) -- bản gốc đã rank() được xếp
+    TRƯỚC bản thô dù điểm THẤP hơn, vì _standardize bỏ qua bọc rank() cho nó -> tiết kiệm
+    đúng 1 tầng độ sâu khi build."""
+    rng = _rng()
+    standardized = _sig("rank(ts_delta(close, 5))", rng.normal(size=200), 0.4)   # đã chuẩn hóa, điểm thấp
+    raw = _sig("ts_delta(volume, 5)", rng.normal(size=200), 0.9)                 # điểm cao hơn, CHƯA chuẩn hóa
+
+    combos = select_decorrelated_combos(
+        [standardized, raw], tau=0.9, n_min=2, n_max=2, max_combos=1,
+    )
+
+    assert [s.expr for s in combos[0]] == [standardized.expr, raw.expr]
+
+
+# ------------------------- component_depth_cap (T1.2) -------------------------
+
+def test_component_depth_cap_suy_dung_theo_n():
+    # N=4 -> ceil(log2(4))=2 tầng add + 1 rank = 3 -> cap = 7-3 = 4 (khớp hằng số cũ
+    # COMBINER_MAX_COMPONENT_DEPTH).
+    assert component_depth_cap(4) == 4
+    # N=3 -> ceil(log2(3))=2 (cùng số tầng add như N=4) -> cap vẫn 4.
+    assert component_depth_cap(3) == 4
+    # N=2 -> ceil(log2(2))=1 -> cap nới ra 5.
+    assert component_depth_cap(2) == 5
+    # N=1 -> không cần cây add, chỉ 1 tầng rank -> cap = max_depth-1.
+    assert component_depth_cap(1) == 6
+    # max_depth tùy biến vẫn theo đúng công thức (không hardcode 7).
+    assert component_depth_cap(4, max_depth=10) == 7
 
 
 # ------------------------- build_combined_expression -------------------------
@@ -135,6 +187,18 @@ def test_ghep_tin_hieu_nong_rank_add():
     assert "rank(" in res.expr
     assert _depth(res.expr) <= 7
     parse(res.expr)  # phải parse được
+
+
+def test_ts_rank_van_bi_boc_rank_khong_giong_rank_zscore():
+    """Review Important #1 (fix sau review task-1-report.md): ts_rank là time-series rank
+    riêng từng mã (OpCategory.TIME_SERIES), KHÔNG cross-sectional như rank/zscore -- component
+    gốc ts_rank VẪN phải bị bọc thêm rank() khi build (không được bỏ qua như rank/zscore),
+    nếu không combo sẽ cộng trực tiếp giá trị KHÔNG so sánh được giữa các mã, phá bất biến
+    'chuẩn hóa cross-sectional trọng số đều' của module."""
+    exprs = ["ts_rank(close, 20)", "ts_delta(volume, 5)"]
+    res = build_combined_expression(exprs, max_depth=7)
+    assert res is not None
+    assert "rank(ts_rank(close, 20))" in res.expr  # PHẢI bọc thêm rank(), không bỏ qua
 
 
 def test_fold_can_bang_bon_tin_hieu():

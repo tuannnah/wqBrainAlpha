@@ -822,3 +822,316 @@ def test_batch_rong_goi_reseed_roi_chay_tiep():
     report = _chay_loop_voi_batches(batches=[[], []], on_epoch_reseed=lambda: goi.append(1) or True)
     assert goi == [1]
     assert report.stop_reason == "no_more_ideas"
+
+
+# --- WS3 T3.1 — sàn quota đa dạng mỗi batch (phá family lock-in PV-reversal bão hoà) ---
+# GP local chỉ có panel PV 6 field -> mọi ý tưởng hội tụ về pv_reversal; seed frontier/alt-
+# data/fundamental/hypothesis (đi thẳng _sim_direct) phải được đảm bảo ≥ FRONTIER_MIN_FRACTION
+# slot mỗi batch qua `frontier_reserve` (xem .superpowers/sdd/20260719/task-3-brief.md).
+
+
+def test_compute_frontier_topup_batch_toan_pv_can_bo_sung() -> None:
+    from src.pipeline.closed_loop import compute_frontier_topup
+
+    k = compute_frontier_topup(total=10, non_pv=0, min_fraction=0.3, available=10)
+    assert k > 0
+    assert k / (10 + k) >= 0.3 - 1e-9
+
+
+def test_compute_frontier_topup_da_dat_san_khong_bo_sung() -> None:
+    from src.pipeline.closed_loop import compute_frontier_topup
+
+    assert compute_frontier_topup(total=10, non_pv=5, min_fraction=0.3, available=10) == 0
+
+
+def test_compute_frontier_topup_reserve_khong_du_khong_chan_batch() -> None:
+    """available < số cần -> trả đúng available (dùng hết những gì có, không chặn batch)."""
+    from src.pipeline.closed_loop import compute_frontier_topup
+
+    assert compute_frontier_topup(total=10, non_pv=0, min_fraction=0.3, available=1) == 1
+
+
+def test_compute_frontier_topup_batch_rong_tra_0() -> None:
+    from src.pipeline.closed_loop import compute_frontier_topup
+
+    assert compute_frontier_topup(total=0, non_pv=0, min_fraction=0.3, available=5) == 0
+
+
+def test_closed_loop_frontier_floor_bo_sung_non_pv_khi_batch_toan_pv(repo) -> None:  # noqa: ANN001
+    """Batch 7 candidate PV (family 'pv_reversal') + reserve 5 candidate non-PV ('fundamental')
+    -> sau khi bổ sung, >= 30% ứng viên ĐƯỢC REFINE thuộc non-PV."""
+    pv_cands = [_cand(f"pv{i}") for i in range(7)]
+    src = _FakeIdeaSource([pv_cands])
+    reserve = [_cand(f"nonpv{i}", origin="alt_data") for i in range(5)]
+
+    def family_fn(expr: str) -> str:
+        return "fundamental" if expr.startswith("nonpv") else "pv_reversal"
+
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=family_fn, frontier_reserve=reserve)
+    loop.run()
+    non_pv_refined = sum(1 for e in refiner.calls if e.startswith("nonpv"))
+    assert non_pv_refined > 0
+    assert non_pv_refined / len(refiner.calls) >= 0.3 - 1e-9
+
+
+def test_closed_loop_frontier_floor_khong_chan_batch_khi_reserve_rong(repo) -> None:  # noqa: ANN001
+    """reserve rỗng -> batch toàn PV vẫn refine bình thường, không bị chặn/treo.
+    max_gp_sims=None: cô lập khỏi cap ngân sách GP (Task 3), không liên quan tới T3.1."""
+    pv_cands = [_cand(f"pv{i}") for i in range(4)]
+    src = _FakeIdeaSource([pv_cands])
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=lambda e: "pv_reversal", frontier_reserve=[],
+                      max_gp_sims=None)
+    report = loop.run()
+    assert refiner.calls == ["pv0", "pv1", "pv2", "pv3"]
+    assert report.ideas_tried == 4
+
+
+def test_closed_loop_frontier_floor_bo_qua_khi_khong_co_family_fn(repo) -> None:  # noqa: ANN001
+    """Không có family_fn -> không phân biệt được PV/non-PV -> floor KHÔNG áp dụng (an toàn,
+    thà bỏ qua còn hơn đoán sai); reserve không bị tiêu thụ oan. idea_source VÔ HẠN (không bao
+    giờ trả batch rỗng) + max_ideas=1 để dừng NGAY sau ứng viên đầu, cô lập khỏi nhánh KHÁC của
+    T3.1 "dùng nốt reserve khi idea_source cạn" (không phải cái test này muốn kiểm)."""
+
+    class _Infinite:
+        def __init__(self) -> None:
+            self.i = 0
+
+        def next_batch(self) -> list[ShortlistCandidate]:
+            self.i += 1
+            return [_cand(f"pv{self.i}")]
+
+    reserve = [_cand("nonpv0", origin="alt_data")]
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=_Infinite(), refiner=refiner, repo=repo,
+                      frontier_reserve=reserve, max_ideas=1)
+    loop.run()
+    assert refiner.calls == ["pv1"]
+    assert len(loop.frontier_reserve) == 1  # reserve giữ nguyên, không bị rút oan
+
+
+def test_closed_loop_frontier_reserve_dung_not_khi_idea_source_can(repo) -> None:  # noqa: ANN001
+    """idea_source cạn (batch rỗng) nhưng frontier_reserve còn -> dùng nốt thay vì dừng ngay."""
+    src = _FakeIdeaSource([])
+    reserve = [_cand("nonpv0", origin="alt_data"), _cand("nonpv1", origin="alt_data")]
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=lambda e: "fundamental", frontier_reserve=reserve)
+    report = loop.run()
+    assert sorted(refiner.calls) == ["nonpv0", "nonpv1"]
+    assert report.stop_reason == "no_more_ideas"
+
+
+
+# --- WS3 T3.2 — xoay seed theo độ bão hoà pool (saturation-aware) ---
+
+
+def test_compute_family_pool_share() -> None:
+    from src.pipeline.closed_loop import compute_family_pool_share
+
+    share = compute_family_pool_share(["pv_reversal", "pv_reversal", "fundamental"])
+    assert share["pv_reversal"] == pytest.approx(2 / 3)
+    assert share["fundamental"] == pytest.approx(1 / 3)
+
+
+def test_compute_family_pool_share_rong() -> None:
+    from src.pipeline.closed_loop import compute_family_pool_share
+
+    assert compute_family_pool_share([]) == {}
+
+
+def test_rotate_reserve_by_saturation_day_family_bao_hoa_xuong_cuoi() -> None:
+    from collections import deque
+
+    from src.pipeline.closed_loop import rotate_reserve_by_saturation
+
+    reserve = deque([_cand("pv_a"), _cand("fund_b"), _cand("pv_c")])
+
+    def family_fn(expr: str) -> str:
+        return "pv_reversal" if expr.startswith("pv") else "fundamental"
+
+    rotate_reserve_by_saturation(reserve, family_fn, {"pv_reversal": 0.6}, threshold=0.5)
+    assert [c.expr for c in reserve] == ["fund_b", "pv_a", "pv_c"]
+
+
+def test_rotate_reserve_by_saturation_khong_xoa_gi(repo) -> None:  # noqa: ANN001
+    """Không family nào vượt threshold -> thứ tự giữ nguyên, không mất phần tử nào."""
+    from collections import deque
+
+    from src.pipeline.closed_loop import rotate_reserve_by_saturation
+
+    reserve = deque([_cand("a"), _cand("b")])
+    rotate_reserve_by_saturation(reserve, lambda e: "x", {"x": 0.2}, threshold=0.5)
+    assert [c.expr for c in reserve] == ["a", "b"]
+
+
+def test_closed_loop_seed_rotation_uu_tien_family_it_trong_pool(repo) -> None:  # noqa: ANN001
+    """T3.2: pool (DB) đã có 2 alpha PASSED cùng family 'pv_reversal' (100% pool, > K=0.5) ->
+    reserve seed cùng family bị đẩy xuống cuối -> khi floor chỉ đủ chỗ cho 1 slot, seed family
+    KHÁC (ít bão hoà hơn) được rút TRƯỚC."""
+    repo.record_brain_sim("h1", "rank(close)", wq_alpha_id="W1", region="USA",
+                          universe="TOP3000", sharpe=2.0, fitness=1.5, turnover=0.3,
+                          self_corr=0.1, status="passed")
+    repo.record_brain_sim("h2", "rank(volume)", wq_alpha_id="W2", region="USA",
+                          universe="TOP3000", sharpe=2.0, fitness=1.5, turnover=0.3,
+                          self_corr=0.1, status="passed")
+
+    src = _FakeIdeaSource([[_cand("pv0")]])
+    reserve = [_cand("pv_seed", origin="alt_data"), _cand("fund_seed", origin="alt_data")]
+
+    def family_fn(expr: str) -> str:
+        if expr in ("rank(close)", "rank(volume)", "pv0", "pv_seed"):
+            return "pv_reversal"
+        return "fundamental"
+
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=family_fn, frontier_reserve=reserve, max_ideas=2)
+    loop.run()
+    assert refiner.calls == ["pv0", "fund_seed"]
+    # Important #1 (review T3): pv_seed KHÔNG được refine (max_ideas=2 đã chạm) NHƯNG cũng
+    # KHÔNG được mất — vẫn còn nguyên trong frontier_reserve cho batch/phiên sau.
+    assert [c.expr for c in loop.frontier_reserve] == ["pv_seed"]
+
+
+# --- Important #1 (review T3.1/T3.2, 2026-07-19): max_ideas cắt ĐÚNG lúc reserve đang được
+# rút (topup hoặc "dùng nốt khi idea_source cạn") không được làm MẤT item — item chưa kịp xử
+# lý phải còn nguyên trong frontier_reserve, không bị pop trước khi for-loop XÁC NHẬN sẽ xử lý
+# (trước fix: `batch = list(self.frontier_reserve); self.frontier_reserve.clear()` xoá NGAY,
+# rồi for-loop mới check max_ideas -> mất trắng, không log, không dấu vết).
+
+
+def test_closed_loop_frontier_reserve_khong_mat_khi_max_ideas_cat_ngang(repo) -> None:  # noqa: ANN001
+    """Batch đầu toàn PV (topup rút 1 non-PV) đúng bằng max_ideas=2 -> vòng batch KẾ (idea_
+    source đã cạn) rơi vào nhánh "dùng nốt reserve" nhưng max_ideas đã chạm NGAY candidate đầu
+    -> candidate đó (nonpv1) phải CÒN NGUYÊN trong frontier_reserve, không mất."""
+    src = _FakeIdeaSource([[_cand("pv0")]])
+    reserve = [_cand("nonpv0", origin="alt_data"), _cand("nonpv1", origin="alt_data")]
+    refiner = _FakeRefiner({})
+
+    def family_fn(expr: str) -> str:
+        return "fundamental" if expr.startswith("nonpv") else "pv_reversal"
+
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=family_fn, frontier_reserve=reserve, max_ideas=2)
+    loop.run()
+    assert refiner.calls == ["pv0", "nonpv0"]
+    assert [c.expr for c in loop.frontier_reserve] == ["nonpv1"]
+
+
+# --- Important #2 (review T3, 2026-07-19): khôi phục lợi ích multi-sim (Task 6) cho candidate
+# rút từ frontier_reserve — ClosedLoop gọi `frontier_presim_fn` (injected, composition root bind
+# `presim_batch_into_cache`) với đúng danh sách expr THÔ sắp lộ ra khỏi reserve, TRƯỚC khi
+# refiner tự sim tuần tự từng cái. Test ở đây CHỈ kiểm hợp đồng gọi callback đúng lúc/đúng
+# tham số — hàm `presim_batch_into_cache` thật (simulate_many + ghi presim_cache) đã có test
+# riêng trong tests/unit/test_closed_loop_adapters.py (trích từ AltDataIdeaSource, Task 6).
+
+
+def test_closed_loop_goi_frontier_presim_fn_khi_topup(repo) -> None:  # noqa: ANN001
+    """Batch toàn PV -> topup rút non-PV từ reserve -> frontier_presim_fn được gọi với ĐÚNG
+    expr sắp thêm vào batch, TRƯỚC khi refiner xử lý chúng."""
+    pv_cands = [_cand(f"pv{i}") for i in range(7)]
+    src = _FakeIdeaSource([pv_cands])
+    reserve = [_cand(f"nonpv{i}", origin="alt_data") for i in range(3)]
+    presim_calls: list[list[str]] = []
+
+    def family_fn(expr: str) -> str:
+        return "fundamental" if expr.startswith("nonpv") else "pv_reversal"
+
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=family_fn, frontier_reserve=reserve,
+                      frontier_presim_fn=presim_calls.append)
+    loop.run()
+    assert presim_calls  # đã gọi ít nhất 1 lần
+    presimmed = [e for call in presim_calls for e in call]
+    assert presimmed  # có expr THẬT được presim
+    # Mọi expr được presim đều thật sự nằm trong danh sách refiner đã xử lý sau đó (không presim
+    # "khống" thứ không bao giờ được dùng tới).
+    assert set(presimmed) <= set(refiner.calls)
+
+
+def test_closed_loop_goi_frontier_presim_fn_khi_dung_not_reserve(repo) -> None:  # noqa: ANN001
+    """idea_source cạn ngay -> nhánh "dùng nốt reserve" cũng phải gọi frontier_presim_fn với
+    TOÀN BỘ candidate sắp lộ ra (không chỉ nhánh topup)."""
+    src = _FakeIdeaSource([])
+    reserve = [_cand("nonpv0", origin="alt_data"), _cand("nonpv1", origin="alt_data")]
+    presim_calls: list[list[str]] = []
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=lambda e: "fundamental", frontier_reserve=reserve,
+                      frontier_presim_fn=presim_calls.append)
+    loop.run()
+    assert presim_calls == [["nonpv0", "nonpv1"]]
+
+
+def test_closed_loop_khong_goi_frontier_presim_fn_khi_none(repo) -> None:  # noqa: ANN001
+    """frontier_presim_fn=None (mặc định) -> không có gì để gọi, không raise — tương thích
+    ngược với mọi composition root chưa nối tính năng này."""
+    pv_cands = [_cand(f"pv{i}") for i in range(4)]
+    src = _FakeIdeaSource([pv_cands])
+    reserve = [_cand("nonpv0", origin="alt_data")]
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=lambda e: "fundamental" if e.startswith("nonpv") else "pv_reversal",
+                      frontier_reserve=reserve, max_gp_sims=None)
+    report = loop.run()
+    assert isinstance(report, ClosedLoopReport)
+
+
+# --- Important MỚI (re-review T3, vòng 2): rotate_reserve_by_saturation mutate deque SAU KHI
+# nhánh "dùng nốt" đã peek `batch` (snapshot thứ tự CŨ) -> popleft() trễ trong for-loop rút
+# theo VỊ TRÍ trên deque đã bị xoay -> lệch khỏi `cand` đang xử lý: candidate ĐÃ refine có thể
+# vẫn còn trong reserve (tồn tại kép) VÀ candidate CHƯA xử lý có thể bị pop nhầm, mất vĩnh viễn
+# không log. Test hiện có không bắt được vì repo luôn rỗng (_read_pool_exprs() -> [] -> rotate
+# không bao giờ chạy). Tái hiện: repo CÓ 2 bản ghi passed cùng family (>FRONTIER_SATURATION_K)
+# để rotate THẬT SỰ đổi thứ tự, + nhánh "dùng nốt" (idea_source rỗng ngay từ đầu) + max_ideas
+# cắt giữa batch.
+
+
+def test_closed_loop_rotate_khong_lam_lech_pop_o_nhanh_dung_not(repo) -> None:  # noqa: ANN001
+    """Pool đã bão hoà family 'pv_reversal' (2 bản ghi passed, 100% > K=0.5) -> rotate đẩy
+    pv_a, pv_b xuống cuối, fund_c lên đầu. Nhánh "dùng nốt" (idea_source rỗng ngay) + max_ideas
+    =2 cắt giữa batch (3 phần tử) -> không candidate nào được mất hoặc tồn tại kép giữa
+    refiner.calls và frontier_reserve."""
+    repo.record_brain_sim("h1", "rank(close)", wq_alpha_id="W1", region="USA",
+                          universe="TOP3000", sharpe=2.0, fitness=1.5, turnover=0.3,
+                          self_corr=0.1, status="passed")
+    repo.record_brain_sim("h2", "rank(volume)", wq_alpha_id="W2", region="USA",
+                          universe="TOP3000", sharpe=2.0, fitness=1.5, turnover=0.3,
+                          self_corr=0.1, status="passed")
+
+    src = _FakeIdeaSource([])  # idea_source rỗng ngay -> nhánh "dùng nốt" kích hoạt từ batch 1
+    reserve = [
+        _cand("pv_a", origin="alt_data"), _cand("pv_b", origin="alt_data"),
+        _cand("fund_c", origin="alt_data"),
+    ]
+
+    def family_fn(expr: str) -> str:
+        if expr in ("rank(close)", "rank(volume)", "pv_a", "pv_b"):
+            return "pv_reversal"
+        return "fundamental"
+
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=family_fn, frontier_reserve=reserve, max_ideas=2)
+    loop.run()
+
+    processed = set(refiner.calls)
+    remaining = {c.expr for c in loop.frontier_reserve}
+    # Bất biến bắt buộc (mọi cách fix hợp lệ đều phải thoả, không phụ thuộc thứ tự cụ thể):
+    # (a) không mất item nào — hợp của đã-xử-lý và còn-lại phải đủ cả 3.
+    assert processed | remaining == {"pv_a", "pv_b", "fund_c"}
+    # (b) không tồn tại kép — 1 item không thể vừa đã xử lý vừa còn nằm trong reserve.
+    assert processed & remaining == set()
+    # (c) đúng 2 candidate được xử lý (khớp max_ideas=2), đúng 1 còn lại trong reserve.
+    assert len(refiner.calls) == 2
+    assert len(loop.frontier_reserve) == 1
+    # Hành vi CHÍNH XÁC mong đợi sau fix (rotate chạy TRƯỚC khi peek batch "dùng nốt"): batch
+    # được xây từ thứ tự ĐÃ ROTATE (fund_c lên đầu vì family orthogonal, pv_a/pv_b xuống cuối)
+    # -> xử lý fund_c, pv_a trước; pv_b còn lại.
+    assert refiner.calls == ["fund_c", "pv_a"]
+    assert [c.expr for c in loop.frontier_reserve] == ["pv_b"]

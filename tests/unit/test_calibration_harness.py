@@ -108,5 +108,120 @@ def test_empty_records_returns_report_with_n_zero() -> None:
     assert report.n == 0
     assert math.isnan(report.spearman_sharpe)
     assert math.isnan(report.spearman_fitness)
+    assert math.isnan(report.spearman_submit_score)
     assert math.isnan(report.self_corr_agreement)
     assert report.by_year == {}
+
+
+def test_spearman_submit_score_bat_duoc_lech_ma_spearman_sharpe_bo_lo() -> None:
+    # T4.1: brain sharpe VÀ fitness đều tăng dần đều (_records(): fitness = sharpe*0.8) ->
+    # brain submit_score cũng tăng dần đều. Local khớp Y HỆT brain ở sharpe (rho_sharpe=1.0)
+    # NHƯNG alpha 5 có fitness local SẬP xuống 0.1 (vd overfit turnover cao làm fitness tệ dù
+    # sharpe cao) -> submit_score (min sharpe/REF, fitness/REF) của alpha 5 sập theo trong khi
+    # sharpe thô không phản ánh gì -> spearman_submit_score PHẢI khác (thấp hơn) spearman_sharpe.
+    records = _records()
+
+    def fake_scorer(expr: str) -> LocalScore | None:
+        i = int(expr[1:])
+        fitness = 0.1 if i == 5 else float(i) * 0.8
+        return LocalScore(sharpe=float(i), fitness=fitness, self_corr=None, per_year_sharpe={})
+
+    report = CalibrationHarness(scorer=fake_scorer).run(records)
+    assert report.spearman_sharpe == pytest.approx(1.0)
+    assert report.spearman_submit_score < report.spearman_sharpe
+
+
+def test_spearman_submit_score_hoan_hao_khi_local_khop_brain_ca_hai_truc() -> None:
+    # Local khớp y hệt cả sharpe lẫn fitness Brain -> submit_score local == submit_score
+    # Brain từng cặp -> rho = 1.0 (không chỉ rho_sharpe).
+    records = _records()
+
+    def fake_scorer(expr: str) -> LocalScore | None:
+        i = int(expr[1:])
+        return LocalScore(
+            sharpe=float(i), fitness=float(i) * 0.8, self_corr=None, per_year_sharpe={},
+        )
+
+    report = CalibrationHarness(scorer=fake_scorer).run(records)
+    assert report.spearman_submit_score == pytest.approx(1.0)
+
+
+def _family_records() -> list[BrainRecord]:
+    # 3 record họ pv_reversal (expr chứa "vwap") + 2 record họ news_social (expr chứa "news").
+    # Brain pv_reversal = local * 1.5 CHÍNH XÁC (test local_to_brain_ratio median); brain
+    # news_social ĐẢO NGƯỢC so với local (test rho riêng họ khác hẳn rho tổng/họ kia).
+    return [
+        BrainRecord(
+            expr_string="ts_rank(vwap, 5)", brain_sharpe=1.5, brain_fitness=1.2,
+            brain_turnover=0.3, brain_self_corr=None,
+        ),
+        BrainRecord(
+            expr_string="ts_delta(vwap, 3)", brain_sharpe=3.0, brain_fitness=2.4,
+            brain_turnover=0.3, brain_self_corr=None,
+        ),
+        BrainRecord(
+            expr_string="rank(open) - vwap", brain_sharpe=4.5, brain_fitness=3.6,
+            brain_turnover=0.3, brain_self_corr=None,
+        ),
+        BrainRecord(
+            expr_string="ts_decay_linear(news_sentiment, 5)", brain_sharpe=5.0, brain_fitness=4.0,
+            brain_turnover=0.3, brain_self_corr=None,
+        ),
+        BrainRecord(
+            expr_string="rank(news_buzz)", brain_sharpe=4.0, brain_fitness=3.2,
+            brain_turnover=0.3, brain_self_corr=None,
+        ),
+    ]
+
+
+_FAMILY_LOCAL_SHARPE = {
+    "ts_rank(vwap, 5)": 1.0,
+    "ts_delta(vwap, 3)": 2.0,
+    "rank(open) - vwap": 3.0,
+    "ts_decay_linear(news_sentiment, 5)": 4.0,  # brain=5.0 (đảo ngược so với news_buzz)
+    "rank(news_buzz)": 5.0,                      # brain=4.0
+}
+
+
+def test_by_family_tra_rho_va_he_so_rieng_moi_ho() -> None:
+    records = _family_records()
+
+    def fake_scorer(expr: str) -> LocalScore | None:
+        s = _FAMILY_LOCAL_SHARPE[expr]
+        return LocalScore(sharpe=s, fitness=s * 0.8, self_corr=None, per_year_sharpe={})
+
+    report = CalibrationHarness(scorer=fake_scorer).run(records)
+
+    assert set(report.by_family.keys()) == {"pv_reversal", "news_social"}
+
+    pv = report.by_family["pv_reversal"]
+    assert pv.n == 3
+    assert pv.spearman_sharpe == pytest.approx(1.0)
+    assert pv.local_to_brain_ratio == pytest.approx(1.5)  # brain = local * 1.5 chính xác
+
+    news = report.by_family["news_social"]
+    assert news.n == 2
+    assert news.spearman_sharpe == pytest.approx(-1.0)  # đảo ngược so với local trong họ này
+
+
+def test_spearman_submit_score_nan_khi_thieu_brain_sharpe_hoac_fitness() -> None:
+    # Record có brain_sharpe=None -> submit_score Brain không tính được (None-safe: trả NaN,
+    # KHÔNG dựa vào min() vốn lệ thuộc thứ tự tham số khi có NaN — loại khỏi mẫu rho thay vì
+    # âm thầm giữ lại một số bịa).
+    records = [
+        BrainRecord(
+            expr_string="e1", brain_sharpe=None, brain_fitness=0.5,
+            brain_turnover=0.3, brain_self_corr=None,
+        ),
+        BrainRecord(
+            expr_string="e2", brain_sharpe=1.0, brain_fitness=None,
+            brain_turnover=0.3, brain_self_corr=None,
+        ),
+    ]
+
+    def fake_scorer(expr: str) -> LocalScore | None:
+        return LocalScore(sharpe=1.0, fitness=1.0, self_corr=None, per_year_sharpe={})
+
+    report = CalibrationHarness(scorer=fake_scorer).run(records)
+    assert report.n == 2
+    assert math.isnan(report.spearman_submit_score)  # <2 cặp hợp lệ sau khi loại NaN

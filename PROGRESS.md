@@ -1,6 +1,23 @@
 # MiniBrain — Progress log
 
 ## Current state
+- **Phase [2026-07-20, Session 18]:** Nhánh `feature/alpha-gen-improve-0719` HOÀN TẤT plan
+  `docs/2026-07-19-alpha-gen-improvement-review.md` (WS1→WS4, 20 commit c5af827..0c0f1a4,
+  suite 1629 passed; SDD 4 task + review/fix từng task + final review opus: READY TO MERGE,
+  0 Critical). WS1 combiner combinability (sort depth-trước + `component_depth_cap(n_max)`
+  động + retry n_max 4→3→2 + log phân bố depth pool); WS2 GP nông (GP_MAX_CORE_DEPTH=4 cho
+  sinh/biến dị, seed giữ trần 7 — 175/175 seed; best_combinable; parsimony
+  max(node/50, depth/7)); WS3 phá lock-in PV (sàn FRONTIER_MIN_FRACTION=0.3 non-PV/batch,
+  rotate reserve theo bão hòa K=0.5 chạy TRƯỚC peek, verify field fail-open trong loop,
+  frontier_reserve có nhịp + nối lại presim multi-sim); WS4 calibration (ρ submit_score,
+  per-family + calibrated_floor(family=...) chưa wire gate, warnings n<30/ρ<0.5 — KHÔNG
+  ngưỡng nào đổi). **Follow-up đã chốt scope:** (1) `best_combinable` CHƯA có consumer —
+  T2.1 dừng ở chuẩn bị field, đòn bẩy thật là trần sinh 4; wire là task riêng. (2) T2.3 đổi
+  hành vi tiến hóa — A/B 1 phiên live (p90 depth + phân bố node) trước khi tinh chỉnh.
+  (3) `tools/diag_combiner.py` hỏng import TỪ TRƯỚC (refactor CLI) → nghiệm thu WS1 định
+  lượng (drop_stats depth) chờ sửa tool này. **Next: USER chạy menu-5 nghiệm thu live**
+  (≥1 combo lọt depth, ≥60% ý tưởng non-pv_reversal + ≥3 họ sim, `calibrate` in ρ
+  submit_score/per-family + cảnh báo). CHƯA merge/push — chờ user quyết.
 - **Phase [2026-07-18, Session 17]:** ✅ **ĐÃ NỘP alpha pure PP #3: `omg7mGKE`** (fade firm
   option flow, ts_rank 66, TOP1000/INDUSTRY, Sharpe 1.00/PP-corr 0.4467 PASS — dateSubmitted
   18/07 11:42 ET, stage OS, vòng poll ĐẦU không cần retry, tag PowerPoolSelected + DB row).
@@ -707,3 +724,31 @@
 - **Next step:** mai chạy menu-5 (log đã gọn) → `submit --power-pool` (selector + 2 gate mới
   tự lo); theme PP hết hạn 26/07 — cập nhật CALENDAR khi có announcement mới. Cân nhắc push
   ~65 commit lên origin.
+
+### [2026-07-20] Session 18 — Thực hiện plan cải thiện sinh alpha WS1-WS4 (SDD subagent)
+- **Phase:** Cải thiện engine sinh alpha theo `docs/2026-07-19-alpha-gen-improvement-review.md`.
+- **Done:** Cả 4 workstream trên nhánh `feature/alpha-gen-improve-0719` (20 commit
+  c5af827..0c0f1a4), quy trình subagent-driven: mỗi task 1 implementer + 1 reviewer + vòng
+  fix (T1: 1 Important; T2: 1 Important; T3: 2 Important + 1 Important vòng 2; T4: 1
+  Important) + final whole-branch review (opus) = READY TO MERGE, 0 Critical. Suite
+  1544 → 1629 passed (+85 test), 1 fail psycopg pre-existing.
+- **Decisions:** (a) T1.3: tách `_SORT_STANDARDIZED_OPS{rank,zscore,ts_rank}` (khóa sort)
+  khỏi `_STANDARDIZE_SKIP_OPS{rank,zscore}` (build) — ts_rank là TIME_SERIES, phải bọc
+  rank(); (b) T2.2: tách trần seed (7) khỏi trần sinh/biến dị (4) — seed là tri thức người
+  viết, chọn lọc để Pareto + best_combinable lo; (c) T2.3 chọn phương án GỘP
+  max(node/50, depth/7) giữ 6 chiều Pareto, để A/B live; (d) WS3 restructure Extra-justified:
+  frontier/fundamental/hypothesis rời AltDataIdeaSource sang `ClosedLoop.frontier_reserve`
+  có nhịp (kiến trúc cũ dồn hết vào batch #1), nối lại presim qua helper
+  `presim_batch_into_cache` delegation-only; rotate bão hòa chạy 1 lần ĐẦU vòng lặp trước
+  mọi peek (tránh popleft lệch sau xoay); (e) T4 giữ kỷ luật: chỉ THÊM trục đo/report,
+  không ngưỡng nào đổi, calibrated_floor(family=...) chỉ là hàm sẵn sàng (guard hệ số >0).
+- **In progress:** Không — code xong; nhánh chưa merge/push.
+- **Blockers / open risks:** ρ calibration vẫn 0.308 < 0.5 (chưa đổi gate là ĐÚNG kỷ luật);
+  T2.3 chưa A/B live; `best_combinable` chưa wire consumer; diag_combiner.py hỏng import
+  pre-existing nên bằng chứng WS1 mới ở mức unit test.
+- **Next step:** USER chạy menu-5 nghiệm thu live: (1) combiner ≥1 combo lọt depth +
+  drop_stats["depth"] giảm; (2) ≥60% ý tưởng non-pv_reversal, ≥3 họ được sim; (3) GP p90
+  depth giảm, %core depth≤4 tăng; (4) `calibrate` in ρ submit_score + per-family + cảnh báo
+  n nhỏ. Sau đó quyết merge main + push.
+- **Tests:** 1629 passed / 1 fail psycopg pre-existing; TDD RED→GREEN từng subtask (evidence
+  trong `.superpowers/sdd/20260719/task-*-report.md`).

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from config.thresholds import MAX_DEPTH, MAX_NODES
+from config.thresholds import GP_MAX_CORE_DEPTH, MAX_NODES
 from src.gp.individual import Individual
 from src.gp.init import _random_scalar, random_tree
 from src.lang.ast import Call, Constant, Field, Node
@@ -60,13 +60,18 @@ def _replace_subtree(root: Node, target: Node, replacement: Node) -> Node:
 
 
 def crossover(
-    a: Node, b: Node, rng: np.random.Generator, max_depth: int = MAX_DEPTH,
+    a: Node, b: Node, rng: np.random.Generator, max_depth: int = GP_MAX_CORE_DEPTH,
     max_nodes: int = MAX_NODES,
 ) -> tuple[Node, Node]:
     """Tráo 1 subtree PANEL-compatible của ``a`` với 1 của ``b`` (typed). Cả hai cây kết
     quả phải <= max_depth VÀ <= max_nodes (RC5: ràng buộc số node ngay khi sinh, tránh
     generate-then-reject ở PreFilter); hết ``_MAX_CROSSOVER_RETRIES`` lượt vẫn vượt -> trả
-    (a, b) nguyên bản (validity repair tối giản: lùi về không đổi gì)."""
+    (a, b) nguyên bản (validity repair tối giản: lùi về không đổi gì).
+
+    (T2.2) Mặc định ``max_depth`` là ``GP_MAX_CORE_DEPTH`` (4), KHÔNG phải ``MAX_DEPTH`` (7,
+    trần gate bare-core sau backtest) — core GP phải nông sẵn để combiner ghép được, xem
+    ``config/thresholds.py:GP_MAX_CORE_DEPTH``. Truyền tường minh ``max_depth`` khác khi cố
+    ý cần cây sâu hơn (vd test)."""
     registry = default_registry()
     for _ in range(_MAX_CROSSOVER_RETRIES):
         points_a = _panel_compatible_subtrees(a, registry)
@@ -183,7 +188,7 @@ def _find_parent_spec(
 
 def subtree_mutation(
     node: Node, registry: OperatorRegistry, rng: np.random.Generator,
-    fields: tuple[str, ...], max_depth: int = MAX_DEPTH, max_nodes: int = MAX_NODES,
+    fields: tuple[str, ...], max_depth: int = GP_MAX_CORE_DEPTH, max_nodes: int = MAX_NODES,
 ) -> Node:
     """Thay 1 subtree PANEL-compatible bằng cây ngẫu nhiên mới, depth giới hạn theo
     ``remaining`` (đảm bảo cây kết quả không vượt ``max_depth``). Chỉ chọn tâm điểm trong
@@ -192,7 +197,9 @@ def subtree_mutation(
 
     (RC5) Cây kết quả cũng phải <= ``max_nodes``: resample subtree thay thế tối đa
     ``_MAX_MUTATION_NODE_RETRIES`` lần; hết lượt vẫn vượt ngân sách -> trả nguyên ``node``
-    gốc không đổi (validity repair tối giản, không cắt cây tùy tiện). Trả cây mới."""
+    gốc không đổi (validity repair tối giản, không cắt cây tùy tiện). Trả cây mới.
+
+    (T2.2) Mặc định ``max_depth`` là ``GP_MAX_CORE_DEPTH`` (4) — xem lý do ở ``crossover``."""
     targets = _panel_compatible_subtrees(node, registry)
     if not targets:
         return node  # không có vị trí PANEL nào (vd Constant đứng trần) -> giữ nguyên

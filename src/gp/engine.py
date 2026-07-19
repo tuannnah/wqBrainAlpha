@@ -40,6 +40,12 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from config.thresholds import (
+    COMBINER_MAX_COMPONENT_DEPTH,
+    GP_BEST_COMBINABLE_TOP_K,
+    GP_MAX_CORE_DEPTH,
+    MAX_DEPTH,
+)
 from src.backtest.backtester import Backtester
 from src.backtest.config import PortfolioConfig
 from src.backtest.gates import GateEvaluator
@@ -91,8 +97,17 @@ class GPRunResult:
     """Kết quả một lần chạy GPEngine: quần thể cuối + cá thể tốt nhất + thống kê + seed.
 
     ``best_by_sharpe`` là cá thể có ``sharpe_deflated`` cao nhất trong quần thể cuối (chỉ
-    xét cá thể đã đánh giá thành công); ``None`` nếu không có cá thể nào hợp lệ.
-    """
+    xét cá thể đã đánh giá thành công); ``None`` nếu không có cá thể nào hợp lệ. Đây thường
+    là cây SÂU NHẤT/overfit nhất (bối cảnh task-2-brief.md) — giữ nguyên field này CHỈ cho
+    báo cáo/chẩn đoán, KHÔNG dùng để feed combiner/DB-good-signals.
+
+    ``best_combinable`` (T2.1, WS2 task-2-brief.md): trong top-``GP_BEST_COMBINABLE_TOP_K``
+    cá thể theo ``sharpe_deflated``, cá thể sharpe cao NHẤT có depth <=
+    ``COMBINER_MAX_COMPONENT_DEPTH`` (combinable-aware) — ``None`` nếu top-K không có cá
+    thể nào đủ nông. Đây là bản nên dùng khi cần MỘT cá thể đại diện để feed combiner/kho
+    alpha tốt (khác ``generate_many``/``build_shortlist`` — pipeline hiện tại vốn đã duyệt
+    TOÀN BỘ ``final_population`` chứ không chỉ một "best" đơn lẻ, xem report T2.1 để rõ lý
+    do field này chỉ bổ sung, không thay thế đường tiêu thụ hiện có)."""
 
     generations_run: int
     final_population: list[Individual]
@@ -100,6 +115,27 @@ class GPRunResult:
     n_evaluated: int
     n_passed: int
     seed: int
+    best_combinable: Individual | None = None
+
+
+def _select_best_combinable(
+    evaluated: list[Individual],
+    top_k: int = GP_BEST_COMBINABLE_TOP_K,
+    max_component_depth: int = COMBINER_MAX_COMPONENT_DEPTH,
+) -> Individual | None:
+    """(T2.1) Trong top-``top_k`` cá thể ĐÃ EVAL xếp theo ``sharpe_deflated`` giảm dần, trả
+    cá thể sharpe cao NHẤT có ``depth() <= max_component_depth`` (combinable) — KHÔNG đơn
+    thuần cá thể sharpe cao nhất tuyệt đối (đó là ``best_by_sharpe`` ở ``GPRunResult``,
+    thường là cây sâu nhất/overfit nhất khiến combiner chết trần, xem bối cảnh
+    task-2-brief.md). ``None`` nếu top-K không có cá thể nào đủ nông — KHÔNG hạ tiêu chuẩn
+    quét ra ngoài top-K hay lấy đại cá thể quá sâu (phá bất biến combinable của combiner)."""
+    ranked = sorted(
+        evaluated, key=lambda i: i.fitness.sharpe_deflated, reverse=True,  # type: ignore[union-attr]
+    )
+    for ind in ranked[:top_k]:
+        if ind.depth() <= max_component_depth:
+            return ind
+    return None
 
 
 class GPEngine:
@@ -108,7 +144,24 @@ class GPEngine:
     Mọi tham số tinh chỉnh nhận qua keyword-only để gọi rõ ràng; ``data``/``repo``/``config``/
     ``registry`` là phụ thuộc bắt buộc (positional). ``max_depth`` phải <= MAX_DEPTH cấu hình
     trong ``config/thresholds.py`` để không sinh cây vượt trần gate.
-    """
+
+    (T2.2) Mặc định ``max_depth`` là ``GP_MAX_CORE_DEPTH`` (4), KHÔNG phải ``MAX_DEPTH`` (7)
+    như trước Task 2 — mặc định cũ đúng bằng trần gate bare-core (kiểm SAU backtest ở
+    ``GateEvaluator``, xem ``src/backtest/gates.py``) nên GP tự do sinh/biến dị cây sâu tới
+    tận biên gate, không còn dư địa cho 3 tầng wrapper cấu hình cuối
+    (``scale(ts_decay(group_neut(...)))``) lẫn trần combiner (Task 1) — nguồn gốc chính
+    khiến combiner ra ~0 combo (xem task-2-brief.md). Truyền tường minh giá trị khác khi cố
+    ý cần cây sâu hơn (vd một số test cũ dùng max_depth=5/7).
+
+    (Fix review T2.2) ``max_depth`` CHỈ áp cho cây SINH ngẫu nhiên (filler ``init_population``)
+    và BIẾN DỊ (``crossover``/``subtree_mutation``) — KHÔNG áp cho seed thủ công nạp vào
+    quần thể khởi tạo. ``run()`` gọi ``init_population(..., seed_max_depth=MAX_DEPTH)`` tường
+    minh (ngân sách RỘNG, như trước Task 2) để seed sâu (frontier/alt-data, tri thức người
+    viết đã qua kiểm định, phổ biến depth 5-6) không bị lọc rớt oan chỉ vì ``max_depth`` mặc
+    định của GP core đã siết xuống 4 — xem docstring ``init_population``/``config/thresholds.
+    GP_MAX_CORE_DEPTH`` để rõ ranh giới. Chọn lọc seed sâu nào đáng giữ tới cuối là việc của
+    NSGA-II (T2.3, depth đã vào parsimony) + ``_select_best_combinable`` (T2.1), không phải
+    việc của bộ lọc lúc khởi tạo."""
 
     def __init__(
         self,
@@ -119,7 +172,7 @@ class GPEngine:
         *,
         pop_size: int = 50,
         n_generations: int = 5,
-        max_depth: int = 7,
+        max_depth: int = GP_MAX_CORE_DEPTH,
         crossover_rate: float = 0.6,
         mutation_rate: float = 0.3,
         seed: int = 42,
@@ -270,8 +323,11 @@ class GPEngine:
         complexity = ind.expr.accept(ComplexityVisitor())
         # n_trials=1: chưa theo dõi số lần thử per-cá-thể nên không haircut deflation ở đây;
         # đa dạng quần thể đã do NSGA-II + pool_corr_penalty đảm nhiệm (xem fitness_vec).
+        # depth: T2.3 — complexity_penalty giờ lấy max(node-count, depth-ratio), tái dùng
+        # ``depth`` đã tính ở trên cho gate, không tính lại.
         fv = from_metrics(
-            metrics, complexity=complexity, pool_corr=pool_rho, pop_corr=0.0, n_trials=1,
+            metrics, complexity=complexity, depth=depth, pool_corr=pool_rho, pop_corr=0.0,
+            n_trials=1,
         )
 
         if not verdict.passed:
@@ -481,7 +537,8 @@ class GPEngine:
            sinh offspring (crossover/mutation/sao chép), ``dedup_population`` theo
            canonical_hash, ``nsga2_select`` giữ ``pop_size`` cá thể (Pareto + crowding).
         4. Đánh giá thế hệ cuối (offspring chưa eval) → persist.
-        5. Trả ``GPRunResult`` (quần thể cuối + best theo ``sharpe_deflated`` + thống kê).
+        5. Trả ``GPRunResult`` (quần thể cuối + best theo ``sharpe_deflated`` + best
+           combinable-aware (T2.1, ``_select_best_combinable``) + thống kê).
 
         ``pool_corr`` được nạp lại từ DB ở đầu mỗi vòng (pool lớn dần khi có alpha pass)."""
         rng = np.random.default_rng(self.seed)
@@ -502,6 +559,12 @@ class GPEngine:
             fields=fields,
             max_depth=self.max_depth,
             seed_offset=self.seed_offset,
+            # Fix review T2.2: seed thủ công (frontier/alt-data, có thể sâu 5-7) dùng ngân
+            # sách RỘNG seed_max_depth=MAX_DEPTH (7, như trước Task 2) — TÁCH khỏi
+            # self.max_depth (GP_MAX_CORE_DEPTH=4 mặc định) chỉ áp cho cây SINH/BIẾN DỊ.
+            # Seed sâu vào quần thể xong để NSGA-II (T2.3, depth vào parsimony) +
+            # _select_best_combinable (T2.1) lo phần chọn lọc, KHÔNG bị chặn cứng ở đây.
+            seed_max_depth=MAX_DEPTH,
             field_groups=self.field_groups,
         )
 
@@ -542,6 +605,8 @@ class GPEngine:
             key=lambda i: i.fitness.sharpe_deflated,  # type: ignore[union-attr]
             default=None,
         )
+        # T2.1: bản combinable-aware, xem docstring GPRunResult/_select_best_combinable.
+        best_combinable = _select_best_combinable(evaluated_final)
 
         return GPRunResult(
             generations_run=self.n_generations,
@@ -550,4 +615,5 @@ class GPEngine:
             n_evaluated=total_eval,
             n_passed=total_passed,
             seed=self.seed,
+            best_combinable=best_combinable,
         )

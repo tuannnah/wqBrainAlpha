@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from loguru import logger
 
 import src.operators_local  # noqa: F401 — đăng ký operator cho parse/depth
 from src.generation.combiner import SubSignal, build_combined_expression
@@ -104,7 +105,14 @@ def test_khong_du_tin_hieu_khong_combo():
 
 def test_score_fn_factory_uu_tien_loai_thanh_vien_combo_khoi_pool():
     a, b = _two_uncorrelated()
-    c = _sig("ts_rank(close, 20)", np.random.default_rng(3).normal(size=200), 0.1)
+    # ts_delta (KHÔNG thuộc _SORT_STANDARDIZED_OPS = rank/zscore/ts_rank) để không vô tình
+    # thắng bucket ưu tiên sort combinability (T1.3) trước a/b dù điểm thấp hơn nhiều -- c ở
+    # đây chỉ cần là 1 tín hiệu độc lập điểm thấp để làm decoy pool, không liên quan gì T1.3.
+    # Vẫn giữ ts_delta sau review Important #1 (không phục hồi ts_rank(close,20)): fix Important
+    # #1 chỉ thu hẹp tập _STANDARDIZE_SKIP_OPS (rank/zscore, KHÔNG ts_rank) cho _standardize;
+    # tập ưu tiên SORT (_SORT_STANDARDIZED_OPS) vẫn giữ nguyên rank/zscore/ts_rank theo đúng
+    # nguyên văn brief -- ts_rank(close,20) vẫn sẽ va chạm khóa sort y hệt trước fix.
+    c = _sig("ts_delta(close, 20)", np.random.default_rng(3).normal(size=200), 0.1)
     all_sigs = [a, b, c]
     combined_expr = build_combined_expression([a.expr, b.expr]).expr
 
@@ -199,6 +207,59 @@ def test_tin_hieu_qua_sau_bi_loai_truoc_greedy():
     assert out[0].expr == combined_expr  # combo dựng từ a,b — "deep" KHÔNG tham gia
 
 
+# ------------------------- T1.2: thử N nhỏ hơn khi N lớn không lọt -------------------------
+# 2 tín hiệu depth=5 KHÔNG lọt cap(n_max=4)=cap(n_max=3)=4 nhưng LỌT cap(n_max=2)=5
+# (component_depth_cap) -- combine_stage phải tự thử lại greedy với n_max nhỏ hơn (4->3->2)
+# thay vì chỉ bỏ tín hiệu điểm thấp cuối trong build_combined_expression.
+
+
+def test_thu_n_max_nho_hon_khi_n_max_lon_khong_lot_tran():
+    rng = np.random.default_rng(7)
+    deep = [
+        _sig(
+            "ts_rank(ts_mean(ts_std_dev(ts_delta(close, 1), 5), 5), 5)",  # depth 5
+            rng.normal(size=200), 1.0,
+        ),
+        _sig(
+            "ts_rank(ts_mean(ts_std_dev(ts_delta(volume, 1), 5), 5), 5)",  # depth 5
+            rng.normal(size=200), 0.9,
+        ),
+    ]
+    combined_expr = build_combined_expression([s.expr for s in deep]).expr
+    score_fn = _scorer({combined_expr: 2.0})
+
+    out = combine_stage(deep, score_fn, tau=0.5, n_min=2, n_max=4, max_combos=1)
+
+    assert len(out) == 1
+    assert out[0].expr == combined_expr
+
+
+def test_drop_stats_dem_greedy_empty_moi_lan_thu_n_max_khong_lot():
+    """2 tín hiệu depth=5 -> greedy_empty ở CẢ n_max=4 lẫn n_max=3 (cap cùng =4), chỉ lọt ở
+    n_max=2 (cap=5) -> drop_stats phải ghi nhận đúng 2 lần greedy_empty trước khi thành công."""
+    rng = np.random.default_rng(7)
+    deep = [
+        _sig(
+            "ts_rank(ts_mean(ts_std_dev(ts_delta(close, 1), 5), 5), 5)",
+            rng.normal(size=200), 1.0,
+        ),
+        _sig(
+            "ts_rank(ts_mean(ts_std_dev(ts_delta(volume, 1), 5), 5), 5)",
+            rng.normal(size=200), 0.9,
+        ),
+    ]
+    combined_expr = build_combined_expression([s.expr for s in deep]).expr
+    score_fn = _scorer({combined_expr: 2.0})
+    stats: dict[str, int] = {}
+
+    out = combine_stage(
+        deep, score_fn, tau=0.5, n_min=2, n_max=4, max_combos=1, drop_stats=stats,
+    )
+
+    assert len(out) == 1
+    assert stats == {"greedy_empty": 2}
+
+
 def test_score_fn_cu_van_dung_khi_khong_co_factory():
     """Tương thích ngược: không truyền score_fn_factory -> dùng score_fn cũ như trước Fix 2."""
     sigs = _two_uncorrelated()
@@ -255,6 +316,43 @@ def test_drop_stats_dem_dung_not_better():
     )
     assert out == []
     assert stats == {"not_better": 1}
+
+
+# ------------------------- T1.4: log phân bố độ sâu pool combiner -------------------------
+# Bằng chứng khách quan T1.1-T1.3 có thực sự đổi ĐƯỢC phân bố đầu vào combiner, không chỉ
+# đổi code -- 1 dòng INFO/lần chạy combine_stage.
+
+
+def _capture_info(fn) -> list[str]:
+    msgs: list[str] = []
+    hid = logger.add(lambda m: msgs.append(m.record["message"]), level="INFO")
+    try:
+        fn()
+    finally:
+        logger.remove(hid)
+    return msgs
+
+
+def test_log_phan_bo_do_sau_pool_moi_lan_chay():
+    sigs = _two_uncorrelated()
+    msgs = _capture_info(
+        lambda: combine_stage(sigs, _scorer({}), tau=0.5, n_min=2, n_max=2, max_combos=1)
+    )
+    pool_msgs = [m for m in msgs if m.startswith("combiner pool:")]
+    assert len(pool_msgs) == 1
+    assert "n=2" in pool_msgs[0]
+    assert "p50=" in pool_msgs[0]
+    assert "p90=" in pool_msgs[0]
+    assert "shallow(" in pool_msgs[0]
+
+
+def test_log_phan_bo_do_sau_pool_rong():
+    msgs = _capture_info(
+        lambda: combine_stage([], _scorer({}), tau=0.5, n_min=2, n_max=2, max_combos=1)
+    )
+    pool_msgs = [m for m in msgs if m.startswith("combiner pool:")]
+    assert len(pool_msgs) == 1
+    assert "n=0" in pool_msgs[0]
 
 
 def test_diem_nop_thay_fitness_tho_khi_so_vuot_troi():
