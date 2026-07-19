@@ -156,7 +156,13 @@ def _build_by_family(
     """Dựng `FamilyCalibration` mỗi họ (T4.2): ρ Sharpe riêng họ (spearman() tự loại cặp NaN
     khi brain_sharpe thiếu) + hệ số local->Brain ước lượng = MEDIAN(brain_sharpe/local_sharpe)
     trên các cặp có cả hai phía hữu hạn và local_sharpe != 0 (median thay mean: bền hơn trước
-    outlier — chỉ vài chục mẫu mỗi họ nên 1 tỉ lệ dị thường có thể kéo lệch mean nhiều)."""
+    outlier — chỉ vài chục mẫu mỗi họ nên 1 tỉ lệ dị thường có thể kéo lệch mean nhiều).
+
+    GIỚI HẠN CHƯA XỬ LÝ (review T4, Minor #1): điều kiện lọc hiện tại chỉ chặn local_sharpe
+    == 0.0 tuyệt đối — local_sharpe RẤT GẦN 0 (vd 0.001) vẫn lọt qua và có thể làm ratio
+    bùng nổ (chia cho số cực nhỏ). Đây KHÔNG phải bug khi đọc số ratio bất thường trên CLI —
+    là giới hạn CHƯA lọc epsilon, cố ý để lại vì chưa có dữ liệu thật (menu-5) để chọn ngưỡng
+    |local_sharpe| > epsilon hợp lý (đoán số sẽ chỉ che triệu chứng, không giải quyết gốc)."""
     result: dict[str, FamilyCalibration] = {}
     for family, locals_ in family_local.items():
         brains = family_brain[family]

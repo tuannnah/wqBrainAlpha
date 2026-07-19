@@ -68,3 +68,21 @@ def test_floor_fallback_khi_he_so_ho_la_nan():
     coeffs = {"pv_reversal": (math.nan, 50)}  # đủ mẫu nhưng hệ số vô nghĩa (ratio không tính được)
     f = calibrated_floor(0.64, family="pv_reversal", family_coefficients=coeffs)
     assert f == pytest.approx(calibrated_floor(0.64))
+
+
+def test_floor_fallback_khi_he_so_ho_la_0():
+    # Review T4 Important #1: local_to_brain_ratio = median(brain/local) HOÀN TOÀN có thể ra
+    # đúng 0.0 (đa số brain_sharpe=0 trong họ) — 0.0 vẫn "finite" nên guard cũ (chỉ check
+    # isfinite) lọt qua, gây target/0.0 = ZeroDivisionError khi floor này được wire dùng thật.
+    # Phải fallback hệ số chung, KHÔNG raise.
+    coeffs = {"pv_reversal": (0.0, 50)}  # đủ mẫu nhưng hệ số = 0 (vô nghĩa cho phép chia)
+    f = calibrated_floor(0.64, family="pv_reversal", family_coefficients=coeffs)
+    assert f == pytest.approx(calibrated_floor(0.64))
+
+
+def test_floor_fallback_khi_he_so_ho_am():
+    # Hệ số local->Brain ÂM cũng vô nghĩa cho floor (Brain kỳ vọng ngược dấu local -> floor suy
+    # ra không còn ý nghĩa "local càng cao Brain càng cao") -> fallback, không dùng hệ số âm.
+    coeffs = {"pv_reversal": (-1.2, 50)}
+    f = calibrated_floor(0.64, family="pv_reversal", family_coefficients=coeffs)
+    assert f == pytest.approx(calibrated_floor(0.64))

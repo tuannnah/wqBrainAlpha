@@ -188,17 +188,26 @@ def calibrated_floor(
     `FamilyCalibration` có `.local_to_brain_ratio`/`.n`) rồi truyền dict vào, KHÔNG đọc DB/
     import ngược `src.calibration` ở module config này (tránh vòng import ngược + tránh
     thresholds.py phụ thuộc I/O). Chỉ dùng hệ số riêng họ khi n >= CALIBRATION_MIN_SAMPLE_N VÀ
-    hệ số hữu hạn (không NaN — họ có thể chưa đủ dữ liệu để tính ratio dù n >= ngưỡng, vd toàn
-    bộ record thiếu brain_sharpe). Thiếu family, family không có trong bảng, hoặc không đủ điều
-    kiện trên -> fallback CALIBRATION_LOCAL_TO_BRAIN chung — ĐÂY LÀ HÀNH VI CŨ, không đổi khi
-    gọi không truyền 2 tham số mới (mọi call site production hiện tại không truyền chúng).
-    KHÔNG wire floor per-family vào gate pre-sim production trong task này — hàm chỉ SẴN SÀNG,
-    quyết định dùng khi nào là của user sau khi có đủ số liệu (xem task-4-brief.md)."""
+    hệ số hữu hạn VÀ DƯƠNG (không NaN, không 0, không âm — họ có thể chưa đủ dữ liệu để tính
+    ratio dù n >= ngưỡng, vd toàn bộ record thiếu brain_sharpe, hoặc median(brain/local) tình
+    cờ ra đúng 0.0/âm khi đa số brain_sharpe trong họ bằng 0 hoặc trái dấu local — cả hai đều
+    vô nghĩa cho phép chia `target/coefficient`: 0.0 gây ZeroDivisionError, âm đảo ngược ý
+    nghĩa floor "local càng cao thì Brain kỳ vọng càng cao"). Chọn điều kiện `> 0` thay vì
+    `!= 0` để chặn LUÔN CẢ trường hợp âm, không chỉ trường hợp bằng 0. Thiếu family, family
+    không có trong bảng, hoặc không đủ điều kiện trên -> fallback CALIBRATION_LOCAL_TO_BRAIN
+    chung — ĐÂY LÀ HÀNH VI CŨ, không đổi khi gọi không truyền 2 tham số mới (mọi call site
+    production hiện tại không truyền chúng). KHÔNG wire floor per-family vào gate pre-sim
+    production trong task này — hàm chỉ SẴN SÀNG, quyết định dùng khi nào là của user sau khi
+    có đủ số liệu (xem task-4-brief.md)."""
     coefficient = CALIBRATION_LOCAL_TO_BRAIN
     if family is not None and family_coefficients is not None:
         entry = family_coefficients.get(family)
         if entry is not None:
             family_coefficient, n = entry
-            if n >= CALIBRATION_MIN_SAMPLE_N and math.isfinite(family_coefficient):
+            if (
+                n >= CALIBRATION_MIN_SAMPLE_N
+                and math.isfinite(family_coefficient)
+                and family_coefficient > 0
+            ):
                 coefficient = family_coefficient
     return target_brain_sharpe / coefficient
