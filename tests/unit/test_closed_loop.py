@@ -1020,3 +1020,63 @@ def test_closed_loop_frontier_reserve_khong_mat_khi_max_ideas_cat_ngang(repo) ->
     loop.run()
     assert refiner.calls == ["pv0", "nonpv0"]
     assert [c.expr for c in loop.frontier_reserve] == ["nonpv1"]
+
+
+# --- Important #2 (review T3, 2026-07-19): khôi phục lợi ích multi-sim (Task 6) cho candidate
+# rút từ frontier_reserve — ClosedLoop gọi `frontier_presim_fn` (injected, composition root bind
+# `presim_batch_into_cache`) với đúng danh sách expr THÔ sắp lộ ra khỏi reserve, TRƯỚC khi
+# refiner tự sim tuần tự từng cái. Test ở đây CHỈ kiểm hợp đồng gọi callback đúng lúc/đúng
+# tham số — hàm `presim_batch_into_cache` thật (simulate_many + ghi presim_cache) đã có test
+# riêng trong tests/unit/test_closed_loop_adapters.py (trích từ AltDataIdeaSource, Task 6).
+
+
+def test_closed_loop_goi_frontier_presim_fn_khi_topup(repo) -> None:  # noqa: ANN001
+    """Batch toàn PV -> topup rút non-PV từ reserve -> frontier_presim_fn được gọi với ĐÚNG
+    expr sắp thêm vào batch, TRƯỚC khi refiner xử lý chúng."""
+    pv_cands = [_cand(f"pv{i}") for i in range(7)]
+    src = _FakeIdeaSource([pv_cands])
+    reserve = [_cand(f"nonpv{i}", origin="alt_data") for i in range(3)]
+    presim_calls: list[list[str]] = []
+
+    def family_fn(expr: str) -> str:
+        return "fundamental" if expr.startswith("nonpv") else "pv_reversal"
+
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=family_fn, frontier_reserve=reserve,
+                      frontier_presim_fn=presim_calls.append)
+    loop.run()
+    assert presim_calls  # đã gọi ít nhất 1 lần
+    presimmed = [e for call in presim_calls for e in call]
+    assert presimmed  # có expr THẬT được presim
+    # Mọi expr được presim đều thật sự nằm trong danh sách refiner đã xử lý sau đó (không presim
+    # "khống" thứ không bao giờ được dùng tới).
+    assert set(presimmed) <= set(refiner.calls)
+
+
+def test_closed_loop_goi_frontier_presim_fn_khi_dung_not_reserve(repo) -> None:  # noqa: ANN001
+    """idea_source cạn ngay -> nhánh "dùng nốt reserve" cũng phải gọi frontier_presim_fn với
+    TOÀN BỘ candidate sắp lộ ra (không chỉ nhánh topup)."""
+    src = _FakeIdeaSource([])
+    reserve = [_cand("nonpv0", origin="alt_data"), _cand("nonpv1", origin="alt_data")]
+    presim_calls: list[list[str]] = []
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=lambda e: "fundamental", frontier_reserve=reserve,
+                      frontier_presim_fn=presim_calls.append)
+    loop.run()
+    assert presim_calls == [["nonpv0", "nonpv1"]]
+
+
+def test_closed_loop_khong_goi_frontier_presim_fn_khi_none(repo) -> None:  # noqa: ANN001
+    """frontier_presim_fn=None (mặc định) -> không có gì để gọi, không raise — tương thích
+    ngược với mọi composition root chưa nối tính năng này."""
+    pv_cands = [_cand(f"pv{i}") for i in range(4)]
+    src = _FakeIdeaSource([pv_cands])
+    reserve = [_cand("nonpv0", origin="alt_data")]
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=lambda e: "fundamental" if e.startswith("nonpv") else "pv_reversal",
+                      frontier_reserve=reserve, max_gp_sims=None)
+    report = loop.run()
+    assert isinstance(report, ClosedLoopReport)

@@ -268,6 +268,7 @@ class ClosedLoop:
         on_gp_budget_exhausted=None,
         on_epoch_reseed=None,
         frontier_reserve: "list[ShortlistCandidate] | None" = None,
+        frontier_presim_fn=None,
     ) -> None:
         self.idea_source = idea_source
         self.refiner = refiner
@@ -326,6 +327,16 @@ class ClosedLoop:
         # batch (T3.1: bổ sung cho đủ sàn FRONTIER_MIN_FRACTION) thay vì dồn hết vào 1 batch
         # đầu rồi cạn — đúng vấn đề T3.1 muốn sửa (PROGRESS Session 16). deque để popleft() O(1).
         self.frontier_reserve: "deque[ShortlistCandidate]" = deque(frontier_reserve or [])
+        # Review Important #2 (T3, 2026-07-19): callable (list[str]) -> None — gọi với danh
+        # sách expr THÔ sắp được lộ ra khỏi `frontier_reserve` (dùng nốt khi cạn / bổ sung
+        # topup), TRƯỚC khi refiner tự sim tuần tự từng cái. Composition root (build_closed_
+        # loop) bind sẵn `presim_batch_into_cache` (Task 6, DÙNG CHUNG với `AltDataIdeaSource`,
+        # không nhân đôi logic) với simulator/sim_config/presim_cache thật — kết quả ghi vào
+        # CÙNG `presim_cache` mà `LocalTunerRefiner._sim_direct` đọc lại (khoá = expr thô),
+        # khôi phục lợi ích multi-sim (round-trip) đã mất khi T3.1 tách frontier/fundamental/
+        # hypothesis ra khỏi `AltDataIdeaSource`. None (mặc định) -> bỏ qua, refiner tự sim
+        # tuần tự đơn như hiện tại (tương thích ngược, KHÔNG BẮT BUỘC composition root nối).
+        self.frontier_presim_fn = frontier_presim_fn
 
     def run(self) -> ClosedLoopReport:
         """Lặp: next_batch → mỗi ý tưởng refine_and_sim → record_brain_sim → đếm. Dừng khi
@@ -471,6 +482,8 @@ class ClosedLoop:
                 batch = list(self.frontier_reserve)
                 pending_from_reserve = len(batch)
                 used_drain_khi_can = True
+                if self.frontier_presim_fn is not None:
+                    self.frontier_presim_fn([c.expr for c in batch])
                 logger.info(
                     "🌐 idea_source cạn — dùng nốt {} candidate non-PV còn lại trong reserve.",
                     len(batch),
@@ -529,6 +542,8 @@ class ClosedLoop:
                     if topup > 0:
                         # PEEK (không pop) — xem comment "Sửa Important #1" ở đầu vòng lặp.
                         added = list(self.frontier_reserve)[:topup]
+                        if self.frontier_presim_fn is not None:
+                            self.frontier_presim_fn([c.expr for c in added])
                         batch = list(batch) + added
                         pending_from_reserve += topup
                         logger.info(

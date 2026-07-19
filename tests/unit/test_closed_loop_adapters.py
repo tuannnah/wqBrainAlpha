@@ -1036,6 +1036,163 @@ def test_build_closed_loop_noi_simulate_many_xuong_alt_data_source(small_panel, 
     assert outcome.wq_alpha_id == "wq-0"
 
 
+# --- Important #2 (review T3, 2026-07-19): `presim_batch_into_cache` trích từ
+# `AltDataIdeaSource._presim_batch` để DÙNG CHUNG với `ClosedLoop` khi rút candidate từ
+# `frontier_reserve` (WS3 T3.1) — kiểm trực tiếp module-level, độc lập AltDataIdeaSource. ------
+
+
+def _fake_multi_sim():
+    from src.simulation.simulator import SimulationResult
+
+    class _Sim:
+        def __init__(self) -> None:
+            self.multi_calls: list[list] = []
+
+        def simulate_many(self, jobs):
+            self.multi_calls.append(list(jobs))
+            return [
+                SimulationResult(expression=e, alpha_id=f"wq-{i}", status="passed", sharpe=1.0)
+                for i, (e, _s) in enumerate(jobs)
+            ]
+
+    return _Sim()
+
+
+def test_presim_batch_into_cache_ghi_ket_qua_qua_simulate_many() -> None:
+    from src.app.closed_loop_adapters import presim_batch_into_cache
+    from src.lang.registry import default_registry
+    from src.simulation.config import SimConfig
+
+    sim = _fake_multi_sim()
+    cache: dict = {}
+    presim_batch_into_cache(
+        ["rank(close)", "rank(volume)"], simulator=sim, sim_config=SimConfig.default(),
+        presim_cache=cache, registry=default_registry(),
+    )
+    assert len(sim.multi_calls) == 1
+    assert len(sim.multi_calls[0]) == 2
+    assert set(cache.keys()) == {"rank(close)", "rank(volume)"}
+    assert cache["rank(close)"].alpha_id == "wq-0"
+
+
+def test_presim_batch_into_cache_duoi_2_core_khong_goi_simulate_many() -> None:
+    """< 2 core (khớp giới hạn API multi-sim) -> no-op, KHÔNG gọi simulate_many."""
+    from src.app.closed_loop_adapters import presim_batch_into_cache
+    from src.lang.registry import default_registry
+    from src.simulation.config import SimConfig
+
+    sim = _fake_multi_sim()
+    cache: dict = {}
+    presim_batch_into_cache(
+        ["rank(close)"], simulator=sim, sim_config=SimConfig.default(),
+        presim_cache=cache, registry=default_registry(),
+    )
+    assert sim.multi_calls == []
+    assert cache == {}
+
+
+def test_presim_batch_into_cache_thieu_cau_hinh_khong_lam_gi() -> None:
+    """simulator/sim_config/presim_cache thiếu 1 trong 3 -> no-op an toàn (không raise)."""
+    from src.app.closed_loop_adapters import presim_batch_into_cache
+    from src.lang.registry import default_registry
+    from src.simulation.config import SimConfig
+
+    sim = _fake_multi_sim()
+    presim_batch_into_cache(
+        ["rank(close)", "rank(volume)"], simulator=None, sim_config=SimConfig.default(),
+        presim_cache={}, registry=default_registry(),
+    )
+    presim_batch_into_cache(
+        ["rank(close)", "rank(volume)"], simulator=sim, sim_config=None,
+        presim_cache={}, registry=default_registry(),
+    )
+    presim_batch_into_cache(
+        ["rank(close)", "rank(volume)"], simulator=sim, sim_config=SimConfig.default(),
+        presim_cache=None, registry=default_registry(),
+    )
+    assert sim.multi_calls == []  # không nhánh nào gọi tới simulate_many
+
+
+def test_presim_batch_into_cache_loi_simulate_many_khong_cache_gi() -> None:
+    """simulate_many ném lỗi -> log warning, KHÔNG cache gì (refiner tự sim tuần tự sau)."""
+    from src.app.closed_loop_adapters import presim_batch_into_cache
+    from src.lang.registry import default_registry
+    from src.simulation.config import SimConfig
+
+    class _BoomSim:
+        def simulate_many(self, jobs):
+            raise RuntimeError("mat mang")
+
+    cache: dict = {}
+    presim_batch_into_cache(
+        ["rank(close)", "rank(volume)"], simulator=_BoomSim(), sim_config=SimConfig.default(),
+        presim_cache=cache, registry=default_registry(),
+    )
+    assert cache == {}
+
+
+def test_presim_batch_into_cache_cat_tran_presim_cap() -> None:
+    """presim_cap cắt trần TRƯỚC khi gọi simulate_many — chỉ presim_cap core đầu được sim."""
+    from src.app.closed_loop_adapters import presim_batch_into_cache
+    from src.lang.registry import default_registry
+    from src.simulation.config import SimConfig
+
+    sim = _fake_multi_sim()
+    cache: dict = {}
+    presim_batch_into_cache(
+        ["rank(close)", "rank(volume)", "rank(open)"], simulator=sim,
+        sim_config=SimConfig.default(), presim_cache=cache, registry=default_registry(),
+        presim_cap=2,
+    )
+    assert len(sim.multi_calls[0]) == 2
+    assert set(cache.keys()) == {"rank(close)", "rank(volume)"}
+
+
+def test_build_closed_loop_noi_frontier_presim_fn_xuong_closed_loop(small_panel, repo) -> None:  # noqa: ANN001
+    """Important #2 (review T3): build_closed_loop phải gắn `loop.frontier_presim_fn` — gọi nó
+    với 1 nhóm expr fundamental phải presim CẢ NHÓM qua simulate_many + ghi vào ĐÚNG presim_
+    cache mà refiner.presim_cache trỏ tới (cùng dict, không phải bản sao)."""
+    from src.app.closed_loop_adapters import LocalTunerRefiner, build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
+    from src.lang.registry import default_registry
+    from src.simulation.config import SimConfig
+
+    class _AlphaRepo:
+        def save_alpha(self, *a, **k):
+            return "a1"
+
+        def save_simulation(self, *a, **k):
+            return None
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+    sim = _fake_multi_sim()
+    refiner = LocalTunerRefiner(
+        simulator=sim, repo=_AlphaRepo(), data=small_panel,
+        local_config=cfg, sim_config=SimConfig.default(),
+    )
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=10,
+                             curated_seeds=False, include_alt_data=False,
+                             include_hypothesis=False, include_frontier=False,
+                             include_combiner=False, refiner=refiner)
+
+    assert callable(loop.frontier_presim_fn)
+    cores = list(FUNDAMENTAL_CORES[:2])
+    loop.frontier_presim_fn(cores)
+    assert len(sim.multi_calls) == 1
+    assert len(sim.multi_calls[0]) == 2
+    # presim_cache ghi vào ĐÚNG dict mà refiner._sim_direct sẽ đọc lại (cùng object, không copy).
+    assert set(refiner.presim_cache.keys()) == set(cores)
+
+
 def test_build_closed_loop_wire_near_miss_variant_source(small_panel, repo) -> None:  # noqa: ANN001
     """Near-miss variant expander (log 2026-07-16: 389 core bão hoà -> vòng kín rơi về GP
     nhiễu ~6h): build_closed_loop phải chen NearMissVariantSource vào chuỗi — khi alt-data

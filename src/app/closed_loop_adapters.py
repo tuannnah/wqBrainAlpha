@@ -145,6 +145,43 @@ def _neutralization_for(expr: str, pp_allowed: frozenset[str], registry: Any) ->
     return neutralization_for_expr(expr, registry)
 
 
+def presim_batch_into_cache(
+    cores: list[str], *, simulator: Any, sim_config: Any,
+    presim_cache: "dict[str, Any] | None", registry: Any,
+    pp_allowed_neutralizations: frozenset[str] = frozenset(),
+    presim_cap: int | None = None, label: str = "AltData",
+) -> None:
+    """(Task 6, trích từ `AltDataIdeaSource._presim_batch` — review Important #2 T3: DÙNG
+    CHUNG cho cả batch alt-data đầu phiên LẪN mỗi lần `ClosedLoop` rút k candidate từ
+    `frontier_reserve`, WS3 T3.1) Sim NHÓM `cores` (cắt trần `presim_cap`) 1 lần qua
+    `simulator.simulate_many` thay vì N lần tuần tự sau này trong `_sim_direct`, ghi kết quả
+    vào `presim_cache` (khoá = expr thô — cùng khoá `_sim_direct` dùng để tra lại thay vì sim
+    lần 2). CHỈ chạy khi đủ cấu hình (simulator/sim_config/cache không None) VÀ nhóm sau khi
+    cắt trần còn ≥2 core (khớp giới hạn API multi-sim). LỖI BẤT KỲ (multi-sim hỏng, mất mạng,
+    quota cạn...) -> log warning, KHÔNG cache gì — `_sim_direct` tự sim tuần tự từng core như
+    hành vi CŨ (an toàn, không chết phiên)."""
+    if simulator is None or sim_config is None or presim_cache is None:
+        return
+    batch_cores = cores if presim_cap is None else cores[:presim_cap]
+    if len(batch_cores) < 2:
+        return
+    jobs = [
+        (expr, sim_config.with_overrides(
+            neutralization=_neutralization_for(expr, pp_allowed_neutralizations, registry)
+        ).to_settings())
+        for expr in batch_cores
+    ]
+    try:
+        results = simulator.simulate_many(jobs)
+    except Exception as exc:  # noqa: BLE001 - fallback cố ý bắt rộng, xem docstring.
+        logger.warning(
+            "{}: multi-sim batch lỗi ({}) — fallback sim tuần tự từng core.", label, exc,
+        )
+        return
+    for expr, result in zip(batch_cores, results):
+        presim_cache[expr] = result
+
+
 def _submit_score(sharpe: float | None, fitness: float | None) -> float:
     """Điểm-nộp (cùng công thức combine_stage._submit_score, Task 2 Fix 4):
     min(sharpe/SUBMIT_SHARPE_REF, fitness/SUBMIT_FITNESS_REF) — đo một kết quả sim tiến GẦN
@@ -825,41 +862,15 @@ class AltDataIdeaSource:
             self._fallback.reseed_epoch()
 
     def _presim_batch(self, cores: list[str]) -> None:
-        """Task 6: sim NHÓM `cores` (cắt trần `presim_cap` — xem docstring class, Finding #1)
-        1 lần qua `simulate_many` (thay vì N lần tuần tự sau này trong `_sim_direct`), ghi kết
-        quả vào `self._presim_cache` (khoá = expr thô — cùng khoá `_sim_direct` dùng để tra
-        lại). CHỈ chạy khi đủ cấu hình (simulator/sim_config/cache) VÀ nhóm sau khi cắt trần
-        còn ≥2 core (khớp giới hạn API: mảng multi-sim cần ≥2 phần tử — 1 core thì tự
-        `_sim_direct` sim đường đơn như cũ, khỏi tốn thêm 1 lần round-trip vô ích).
-
-        LỖI BẤT KỲ (multi-sim hỏng, mất mạng, quota cạn...) -> log warning, KHÔNG cache gì —
-        `_sim_direct` sẽ tự sim tuần tự từng core như hành vi CŨ (an toàn, không chết phiên;
-        quota cạn thật vẫn được `_sim_direct` phát hiện + báo QuotaExhausted đúng như trước,
-        chỉ trễ hơn 1 nhịp vì phải chạm Brain lại ở đường đơn)."""
-        if self._simulator is None or self._sim_config is None or self._presim_cache is None:
-            return
-        # Finding #1: chỉ sim trước tối đa `presim_cap` core (= max_ideas phiên) — sim vượt
-        # trần sẽ bị ClosedLoop vứt kết quả (không _finalize/avoided_hashes) rồi PHIÊN SAU sim
-        # lại, lãng phí quota lặp. Core bị cắt vẫn nằm trong batch yield (không mất).
-        batch_cores = cores if self._presim_cap is None else cores[: self._presim_cap]
-        if len(batch_cores) < 2:
-            return
-        jobs = [
-            (expr, self._sim_config.with_overrides(
-                neutralization=_neutralization_for(expr, self._pp_allowed_neutralizations, self._registry)
-            ).to_settings())
-            for expr in batch_cores
-        ]
-        try:
-            results = self._simulator.simulate_many(jobs)
-        except Exception as exc:  # noqa: BLE001 - fallback cố ý bắt rộng, xem docstring.
-            logger.warning(
-                "AltDataIdeaSource: multi-sim batch lỗi ({}) — fallback sim tuần tự từng core.",
-                exc,
-            )
-            return
-        for expr, result in zip(batch_cores, results):
-            self._presim_cache[expr] = result
+        """Task 6 (Finding #1: cắt trần `presim_cap`, xem docstring class) — nay UỶ QUYỀN cho
+        `presim_batch_into_cache` module-level (review Important #2 T3: trích ra để dùng
+        CHUNG với `ClosedLoop` khi rút candidate từ `frontier_reserve`, không nhân đôi logic)."""
+        presim_batch_into_cache(
+            cores, simulator=self._simulator, sim_config=self._sim_config,
+            presim_cache=self._presim_cache, registry=self._registry,
+            pp_allowed_neutralizations=self._pp_allowed_neutralizations,
+            presim_cap=self._presim_cap, label="AltData",
+        )
 
     def next_batch(self):
         if not self._served:
@@ -1361,6 +1372,24 @@ def build_closed_loop(
     if hasattr(refiner, "presim_cache"):
         _presim_cache = {}
         refiner.presim_cache = _presim_cache  # type: ignore[attr-defined]
+
+    # Review Important #2 (T3, 2026-07-19): khôi phục lợi ích multi-sim (Task 6) cho candidate
+    # rút từ `frontier_reserve` — T3.1 tách frontier/fundamental/hypothesis khỏi AltDataIdeaSource
+    # (mất presim CẢ NHÓM qua simulate_many, luôn sim tuần tự đơn qua _sim_direct). Bind CÙNG
+    # simulator/sim_config/pp_allowed_neutralizations/_presim_cache mà AltDataIdeaSource dùng ở
+    # dưới (không đảo ngược ai sở hữu chúng) -> ClosedLoop gọi closure này mỗi lần rút k candidate
+    # từ reserve (dùng nốt khi cạn / bổ sung topup), presim_batch_into_cache tự no-op an toàn khi
+    # thiếu simulator/sim_config/presim_cache (refiner LLM không có presim_cache) hoặc < 2 core.
+    def _frontier_presim_fn(exprs: list[str]) -> None:
+        presim_batch_into_cache(
+            exprs, simulator=getattr(refiner, "simulator", None),
+            sim_config=getattr(refiner, "sim_config", None),
+            presim_cache=_presim_cache,
+            pp_allowed_neutralizations=getattr(refiner, "pp_allowed_neutralizations", frozenset()),
+            registry=registry if registry is not None else default_registry(),
+            presim_cap=max_ideas, label="FrontierReserve",
+        )
+
     # Near-miss variant expander (bằng chứng log 2026-07-16: 389 core alt-data bão hoà sau
     # 1 sim/core -> vòng kín rơi về GP nhiễu best Sharpe 0.68 suốt ~6h): chen GIỮA alt-data
     # và curated/GP — khi kho core cạn, sinh biến thể window/wrapper quanh near-miss Brain-sim
@@ -1517,4 +1546,5 @@ def build_closed_loop(
         on_gp_budget_exhausted=on_gp_budget_exhausted,
         on_epoch_reseed=on_epoch_reseed,
         frontier_reserve=frontier_reserve,
+        frontier_presim_fn=_frontier_presim_fn,
     )
