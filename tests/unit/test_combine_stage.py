@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from loguru import logger
 
 import src.operators_local  # noqa: F401 — đăng ký operator cho parse/depth
 from src.generation.combiner import SubSignal, build_combined_expression
@@ -311,6 +312,43 @@ def test_drop_stats_dem_dung_not_better():
     )
     assert out == []
     assert stats == {"not_better": 1}
+
+
+# ------------------------- T1.4: log phân bố độ sâu pool combiner -------------------------
+# Bằng chứng khách quan T1.1-T1.3 có thực sự đổi ĐƯỢC phân bố đầu vào combiner, không chỉ
+# đổi code -- 1 dòng INFO/lần chạy combine_stage.
+
+
+def _capture_info(fn) -> list[str]:
+    msgs: list[str] = []
+    hid = logger.add(lambda m: msgs.append(m.record["message"]), level="INFO")
+    try:
+        fn()
+    finally:
+        logger.remove(hid)
+    return msgs
+
+
+def test_log_phan_bo_do_sau_pool_moi_lan_chay():
+    sigs = _two_uncorrelated()
+    msgs = _capture_info(
+        lambda: combine_stage(sigs, _scorer({}), tau=0.5, n_min=2, n_max=2, max_combos=1)
+    )
+    pool_msgs = [m for m in msgs if m.startswith("combiner pool:")]
+    assert len(pool_msgs) == 1
+    assert "n=2" in pool_msgs[0]
+    assert "p50=" in pool_msgs[0]
+    assert "p90=" in pool_msgs[0]
+    assert "shallow(" in pool_msgs[0]
+
+
+def test_log_phan_bo_do_sau_pool_rong():
+    msgs = _capture_info(
+        lambda: combine_stage([], _scorer({}), tau=0.5, n_min=2, n_max=2, max_combos=1)
+    )
+    pool_msgs = [m for m in msgs if m.startswith("combiner pool:")]
+    assert len(pool_msgs) == 1
+    assert "n=0" in pool_msgs[0]
 
 
 def test_diem_nop_thay_fitness_tho_khi_so_vuot_troi():

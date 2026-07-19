@@ -14,6 +14,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
+from loguru import logger
+
 from config.thresholds import SUBMIT_FITNESS_REF, SUBMIT_SHARPE_REF
 from src.generation.combiner import (
     DEFAULT_MAX_COMBOS,
@@ -55,6 +57,27 @@ def _submit_score(metrics: object) -> float:
 def _bump(drop_stats: dict[str, int] | None, key: str) -> None:
     if drop_stats is not None:
         drop_stats[key] = drop_stats.get(key, 0) + 1
+
+
+def _log_pool_depth_distribution(
+    signals: list[SubSignal], reg: OperatorRegistry, cap: int,
+) -> None:
+    """(T1.4) Log 1 dòng INFO phân bố độ sâu pool ĐẦU VÀO combiner mỗi lần `combine_stage`
+    chạy — bằng chứng KHÁCH QUAN T1.1-T1.3 có thực sự đổi được PHÂN BỐ đầu vào combiner
+    (nhiều tín hiệu nông hơn) hay chỉ đổi code mà đầu vào vẫn y hệt. `cap` = trần component
+    của n_max ĐẦU TIÊN (`component_depth_cap(n_max)`) — mốc tham chiếu để tính % 'đủ nông'."""
+    n = len(signals)
+    if n == 0:
+        logger.info("combiner pool: n=0 (rỗng, bỏ qua thống kê độ sâu)")
+        return
+    depths = sorted(_depth_of(s.expr, reg) for s in signals)
+    p50 = depths[int(0.5 * (n - 1))]
+    p90 = depths[int(0.9 * (n - 1))]
+    shallow_pct = 100.0 * sum(1 for d in depths if d <= cap) / n
+    logger.info(
+        "combiner pool: n={} depth p50={} p90={} shallow(≤cap={})={:.0f}%",
+        n, p50, p90, cap, shallow_pct,
+    )
 
 
 def _n_max_retry_sequence(n_max: int, n_min: int) -> list[int]:
@@ -114,8 +137,12 @@ def combine_stage(
     (4 -> 3 -> 2, xem `_n_max_retry_sequence`) thay vì chỉ bỏ tín hiệu điểm thấp nhất như
     vòng lặp nội bộ cũ của `build_combined_expression` (vẫn giữ nguyên làm phòng vệ thứ hai).
     Dừng thử ngay khi N nào đó dựng được >= 1 combo (không cần N càng nhỏ càng tốt, chỉ cần
-    thoát khỏi bức tường độ sâu)."""
+    thoát khỏi bức tường độ sâu).
+
+    (T1.4) Log 1 dòng INFO phân bố độ sâu pool đầu vào ngay khi hàm bắt đầu chạy — xem
+    `_log_pool_depth_distribution`."""
     reg = registry or default_registry()
+    _log_pool_depth_distribution(signals, reg, component_depth_cap(n_max))
     depth_kw = {} if max_depth is None else {"max_depth": max_depth}
     out: list[ShortlistCandidate] = []
     for attempt_n_max in _n_max_retry_sequence(n_max, n_min):
