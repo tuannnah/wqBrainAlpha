@@ -20,8 +20,6 @@ from config.thresholds import (
     COMBINER_MIN_BRAIN_SHARPE,
     DEGENERATE_SHARPE,
     DEGENERATE_TURNOVER,
-    SUBMIT_FITNESS_REF,
-    SUBMIT_SHARPE_REF,
     calibrated_floor,
 )
 from src.backtest.gate import local_usable
@@ -59,6 +57,7 @@ from src.pipeline.combine_stage import combine_stage
 from src.pipeline.runner import _score_one_full, generate_many
 from src.pipeline.shortlist import ShortlistCandidate
 from src.scoring.filter import passes as _default_filter
+from src.scoring.metrics import submit_score as _submit_score_formula
 from src.scoring.vector import score_vector as _score_vector
 from src.simulation.simulator import AuthExpiredError, QuotaExceededError
 
@@ -186,10 +185,14 @@ def _submit_score(sharpe: float | None, fitness: float | None) -> float:
     """Điểm-nộp (cùng công thức combine_stage._submit_score, Task 2 Fix 4):
     min(sharpe/SUBMIT_SHARPE_REF, fitness/SUBMIT_FITNESS_REF) — đo một kết quả sim tiến GẦN
     NGƯỠNG NỘP thật tới đâu trên CẢ HAI trục. sharpe/fitness None (sim lỗi/presim) -> -inf,
-    không bao giờ được chọn làm 'tốt nhất' khi còn ứng viên có số liệu thật."""
+    không bao giờ được chọn làm 'tốt nhất' khi còn ứng viên có số liệu thật.
+
+    (T4.1) Công thức thuần chuyển sang `src.scoring.metrics.submit_score` (dùng chung, không
+    chép lần 3) — hàm này chỉ còn xử lý fallback -inf khi thiếu dữ liệu (khác None-safe -> NaN
+    của calibration harness vì đây là dùng để RANKING chọn 'tốt nhất', không phải đo tương quan)."""
     if sharpe is None or fitness is None:
         return float("-inf")
-    return min(sharpe / SUBMIT_SHARPE_REF, fitness / SUBMIT_FITNESS_REF)
+    return _submit_score_formula(sharpe, fitness)
 
 
 class RefinementLoopRefiner:

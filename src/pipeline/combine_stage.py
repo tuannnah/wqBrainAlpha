@@ -16,7 +16,6 @@ from typing import Protocol
 
 from loguru import logger
 
-from config.thresholds import SUBMIT_FITNESS_REF, SUBMIT_SHARPE_REF
 from src.generation.combiner import (
     DEFAULT_MAX_COMBOS,
     DEFAULT_N_MAX,
@@ -30,6 +29,7 @@ from src.generation.combiner import (
 )
 from src.lang.registry import OperatorRegistry, default_registry
 from src.pipeline.shortlist import ShortlistCandidate
+from src.scoring.metrics import submit_score as _submit_score_formula
 
 
 class _Scored(Protocol):
@@ -50,8 +50,12 @@ def _submit_score(metrics: object) -> float:
     đo combo tiến GẦN NGƯỠNG NỘP thật (Sharpe~1.58, fitness~1) tới đâu, thay vì so fitness thô
     (`fitness <= best_component` cũ): fitness thô có thể tăng dù sharpe tệ đi (vd combo tăng
     turnover/giảm tập trung mà không tăng risk-adjusted return) -- điểm-nộp buộc combo phải
-    tiến bộ trên CẢ HAI trục mới được coi là 'vượt trội' đáng giữ."""
-    return min(metrics.sharpe / SUBMIT_SHARPE_REF, metrics.fitness / SUBMIT_FITNESS_REF)  # type: ignore[attr-defined]
+    tiến bộ trên CẢ HAI trục mới được coi là 'vượt trội' đáng giữ.
+
+    (T4.1) Công thức thuần chuyển sang `src.scoring.metrics.submit_score` — dùng chung với
+    `closed_loop_adapters._submit_score` và calibration harness, không chép lần 3. Hàm này chỉ
+    còn là adapter lấy .sharpe/.fitness từ `metrics` (object, không phải float trần)."""
+    return _submit_score_formula(metrics.sharpe, metrics.fitness)  # type: ignore[attr-defined]
 
 
 def _bump(drop_stats: dict[str, int] | None, key: str) -> None:

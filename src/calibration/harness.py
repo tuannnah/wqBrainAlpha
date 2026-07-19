@@ -23,6 +23,7 @@ from config.thresholds import SELF_CORR_MAX
 from src.calibration.loader import BrainRecord
 from src.calibration.report import CalibrationReport
 from src.calibration.stats import spearman
+from src.scoring.metrics import submit_score
 
 if TYPE_CHECKING:
     from src.data.market_panel import MarketData
@@ -49,8 +50,10 @@ class CalibrationHarness:
     def run(self, brain_records: list[BrainRecord]) -> CalibrationReport:
         local_sharpes: list[float] = []
         local_fitnesses: list[float] = []
+        local_submit_scores: list[float] = []
         brain_sharpes: list[float] = []
         brain_fitnesses: list[float] = []
+        brain_submit_scores: list[float] = []
         corr_pairs: list[tuple[float, float]] = []
         year_sums: dict[int, list[float]] = {}
 
@@ -60,9 +63,15 @@ class CalibrationHarness:
                 continue
             local_sharpes.append(score.sharpe)
             local_fitnesses.append(score.fitness)
+            # local luôn có sharpe/fitness thật (LocalScore không Optional) -> công thức thuần
+            # an toàn, không cần bọc None-safe như phía Brain.
+            local_submit_scores.append(submit_score(score.sharpe, score.fitness))
             brain_sharpes.append(record.brain_sharpe if record.brain_sharpe is not None else math.nan)
             brain_fitnesses.append(
                 record.brain_fitness if record.brain_fitness is not None else math.nan
+            )
+            brain_submit_scores.append(
+                _submit_score_or_nan(record.brain_sharpe, record.brain_fitness)
             )
             if score.self_corr is not None and record.brain_self_corr is not None:
                 corr_pairs.append((score.self_corr, record.brain_self_corr))
@@ -76,6 +85,7 @@ class CalibrationHarness:
         if n == 0:
             return CalibrationReport(
                 n=0, spearman_sharpe=math.nan, spearman_fitness=math.nan,
+                spearman_submit_score=math.nan,
                 self_corr_agreement=math.nan, decile_hit_rate=math.nan, by_year={},
             )
 
@@ -84,6 +94,10 @@ class CalibrationHarness:
         )
         rho_fitness = spearman(
             np.array(local_fitnesses, dtype=np.float64), np.array(brain_fitnesses, dtype=np.float64)
+        )
+        rho_submit_score = spearman(
+            np.array(local_submit_scores, dtype=np.float64),
+            np.array(brain_submit_scores, dtype=np.float64),
         )
 
         if corr_pairs:
@@ -101,9 +115,21 @@ class CalibrationHarness:
 
         return CalibrationReport(
             n=n, spearman_sharpe=rho_sharpe, spearman_fitness=rho_fitness,
+            spearman_submit_score=rho_submit_score,
             self_corr_agreement=self_corr_agreement, decile_hit_rate=decile_hit_rate,
             by_year=by_year,
         )
+
+
+def _submit_score_or_nan(sharpe: float | None, fitness: float | None) -> float:
+    """Điểm-nộp Brain, None-safe (T4.1): trả NaN nếu THIẾU sharpe HOẶC fitness thay vì đưa
+    None/NaN thẳng vào `submit_score` (Python `min(x, nan)` phụ thuộc THỨ TỰ tham số — vd
+    `min(5.0, nan) == 5.0`, âm thầm nuốt mất NaN thay vì lan truyền). Check tường minh ở đây
+    đảm bảo cặp thiếu dữ liệu luôn bị `spearman()` loại khỏi mẫu (pairwise-complete), không lẫn
+    một số bịa vào rho."""
+    if sharpe is None or fitness is None:
+        return math.nan
+    return submit_score(sharpe, fitness)
 
 
 def _decile_hit_rate(local: list[float], brain: list[float]) -> float:
