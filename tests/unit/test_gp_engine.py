@@ -13,16 +13,38 @@ import pytest
 
 import src.operators_local  # noqa: F401  (side-effect: nạp 27 operator vào registry)
 from src.backtest.config import Neutralization, PortfolioConfig
+from src.backtest.metrics_local import AlphaMetrics
 from src.backtest.pool_corr import PoolCorrelation
-from src.gp.engine import GPEngine, GPRunResult
+from src.gp.engine import GPEngine, GPRunResult, _select_best_combinable
+from src.gp.fitness_vec import from_metrics
 from src.gp.individual import Individual
-from src.lang.ast import Constant
+from src.lang.ast import Call, Constant, Field
 from src.lang.parser import parse
 from src.lang.registry import default_registry
 from src.lang.visitors import CanonicalHasher, DepthVisitor
 from src.storage.db import init_db
 from src.storage.models import EvaluationModel
 from src.storage.repository import MiniBrainRepository
+
+
+def _fv(sharpe_deflated: float):  # noqa: ANN201
+    """FitnessVector tối giản cho test lựa chọn — chỉ ``sharpe_deflated`` khác nhau có
+    ý nghĩa, các chiều khác giữ trung tính (0) qua ``from_metrics`` với AlphaMetrics giả."""
+    metrics = AlphaMetrics(
+        sharpe=sharpe_deflated, annual_return=0.0, turnover=0.3, max_drawdown=0.0,
+        fitness=1.0, per_year_sharpe={}, weight_concentration=0.0,
+    )
+    return from_metrics(
+        metrics, complexity=10, pool_corr=0.0, pop_corr=0.0, n_trials=1,
+    )
+
+
+def _nested_call(op: str, n: int, field: str = "close"):  # noqa: ANN201
+    """Cây ``op`` lồng n lớp quanh ``Field(field)`` -> depth = n + 1 (n=0 -> leaf, depth 1)."""
+    node = Field(field)
+    for _ in range(n):
+        node = Call(op=op, args=(node,))
+    return node
 
 
 @pytest.fixture
@@ -88,6 +110,69 @@ def test_gprunresult_is_frozen_dataclass() -> None:
     )
     with pytest.raises(Exception):  # FrozenInstanceError  # noqa: PT011
         r.generations_run = 99  # type: ignore[misc]
+
+
+# --- T2.1: best-cho-combiner phải combinable (depth <= COMBINER_MAX_COMPONENT_DEPTH), KHÔNG
+# phải đơn thuần sharpe cao nhất tuyệt đối (đó là ``best_by_sharpe``, giữ nguyên cho báo cáo) ---
+
+
+def test_select_best_combinable_uu_tien_ca_the_nong_hon_du_sharpe_thap_hon() -> None:
+    """Đúng ví dụ bối cảnh brief: 1 'monster' sharpe cao nhất nhưng depth 8 (quá sâu, chết
+    trần combiner) và 1 cá thể sharpe hơi thấp hơn nhưng depth 3 (combinable) — best-cho-
+    combiner phải chọn cá thể depth 3, KHÔNG phải monster."""
+    monster = Individual(expr=_nested_call("rank", 7))  # depth 8
+    monster.fitness = _fv(sharpe_deflated=2.0)
+    shallow = Individual(expr=_nested_call("rank", 2))  # depth 3
+    shallow.fitness = _fv(sharpe_deflated=1.8)
+
+    result = _select_best_combinable([monster, shallow])
+    assert result is shallow
+
+
+def test_select_best_combinable_van_uu_tien_sharpe_cao_nhat_trong_so_ca_the_combinable() -> None:
+    """Khi NHIỀU cá thể đều combinable (depth <= trần), vẫn phải chọn sharpe cao nhất trong
+    nhóm đó — hàm không đổi tiêu chí xếp hạng, chỉ thêm điều kiện lọc độ sâu."""
+    a = Individual(expr=_nested_call("rank", 1))  # depth 2
+    a.fitness = _fv(sharpe_deflated=1.2)
+    b = Individual(expr=_nested_call("rank", 2))  # depth 3
+    b.fitness = _fv(sharpe_deflated=1.5)
+
+    result = _select_best_combinable([a, b])
+    assert result is b
+
+
+def test_select_best_combinable_tra_none_khi_top_k_toan_ca_the_qua_sau() -> None:
+    """Nếu MỌI cá thể trong top-K đều vượt trần độ sâu combinable, không có gì để chọn ->
+    None (KHÔNG hạ tiêu chuẩn xuống lấy đại cá thể quá sâu, phá bất biến combiner)."""
+    monster1 = Individual(expr=_nested_call("rank", 7))  # depth 8
+    monster1.fitness = _fv(sharpe_deflated=2.0)
+    monster2 = Individual(expr=_nested_call("rank", 6))  # depth 7
+    monster2.fitness = _fv(sharpe_deflated=1.9)
+
+    result = _select_best_combinable([monster1, monster2])
+    assert result is None
+
+
+def test_select_best_combinable_danh_sach_rong_tra_none() -> None:
+    assert _select_best_combinable([]) is None
+
+
+def test_select_best_combinable_chi_xet_trong_top_k_theo_sharpe() -> None:
+    """Cá thể combinable nhưng sharpe THẤP tới mức rơi ngoài top-K (toàn cá thể sharpe cao
+    hơn đứng trước nó, dù chúng quá sâu) không được xét tới — nhất quán 'top-K theo sharpe
+    trước, lọc combinable sau', không phải 'quét toàn quần thể tìm combinable'."""
+    from config.thresholds import GP_BEST_COMBINABLE_TOP_K
+
+    ca_the_sau: list[Individual] = []
+    for i in range(GP_BEST_COMBINABLE_TOP_K):
+        ind = Individual(expr=_nested_call("rank", 7))  # depth 8, quá sâu
+        ind.fitness = _fv(sharpe_deflated=10.0 - i * 0.01)  # toàn bộ đứng trước combinable
+        ca_the_sau.append(ind)
+    combinable_thap = Individual(expr=_nested_call("rank", 1))  # depth 2, combinable
+    combinable_thap.fitness = _fv(sharpe_deflated=0.01)  # sharpe thấp nhất -> ngoài top-K
+
+    result = _select_best_combinable([*ca_the_sau, combinable_thap])
+    assert result is None
 
 
 def test_engine_init_accepts_required_args(small_panel, repo, cfg) -> None:  # noqa: ANN001
@@ -249,6 +334,25 @@ def test_engine_runs_pop4_gen1_persists_evaluations(small_panel, repo, cfg) -> N
         assert n_rows >= 4
     finally:
         session.close()
+
+
+def test_engine_run_result_co_ca_best_by_sharpe_lan_best_combinable(  # noqa: ANN001
+    small_panel, repo, cfg,
+) -> None:
+    """Nối dây end-to-end (T2.1): ``run()`` phải trả cả ``best_by_sharpe`` (giữ nguyên cho
+    báo cáo) LẪN ``best_combinable`` (field mới) — cả hai cùng tồn tại, không cái nào thay
+    thế cái nào."""
+    eng = GPEngine(
+        data=small_panel, repo=repo, config=cfg, registry=default_registry(),
+        pop_size=6, n_generations=1, seed=42,
+    )
+    result = eng.run()
+    assert result.best_by_sharpe is None or isinstance(result.best_by_sharpe, Individual)
+    assert result.best_combinable is None or isinstance(result.best_combinable, Individual)
+    if result.best_combinable is not None:
+        from config.thresholds import COMBINER_MAX_COMPONENT_DEPTH
+
+        assert result.best_combinable.depth() <= COMBINER_MAX_COMPONENT_DEPTH
 
 
 def test_engine_persists_seed_in_db(small_panel, repo, cfg) -> None:  # noqa: ANN001

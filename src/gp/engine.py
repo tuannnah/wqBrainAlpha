@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from config.thresholds import COMBINER_MAX_COMPONENT_DEPTH, GP_BEST_COMBINABLE_TOP_K
 from src.backtest.backtester import Backtester
 from src.backtest.config import PortfolioConfig
 from src.backtest.gates import GateEvaluator
@@ -91,8 +92,17 @@ class GPRunResult:
     """Kết quả một lần chạy GPEngine: quần thể cuối + cá thể tốt nhất + thống kê + seed.
 
     ``best_by_sharpe`` là cá thể có ``sharpe_deflated`` cao nhất trong quần thể cuối (chỉ
-    xét cá thể đã đánh giá thành công); ``None`` nếu không có cá thể nào hợp lệ.
-    """
+    xét cá thể đã đánh giá thành công); ``None`` nếu không có cá thể nào hợp lệ. Đây thường
+    là cây SÂU NHẤT/overfit nhất (bối cảnh task-2-brief.md) — giữ nguyên field này CHỈ cho
+    báo cáo/chẩn đoán, KHÔNG dùng để feed combiner/DB-good-signals.
+
+    ``best_combinable`` (T2.1, WS2 task-2-brief.md): trong top-``GP_BEST_COMBINABLE_TOP_K``
+    cá thể theo ``sharpe_deflated``, cá thể sharpe cao NHẤT có depth <=
+    ``COMBINER_MAX_COMPONENT_DEPTH`` (combinable-aware) — ``None`` nếu top-K không có cá
+    thể nào đủ nông. Đây là bản nên dùng khi cần MỘT cá thể đại diện để feed combiner/kho
+    alpha tốt (khác ``generate_many``/``build_shortlist`` — pipeline hiện tại vốn đã duyệt
+    TOÀN BỘ ``final_population`` chứ không chỉ một "best" đơn lẻ, xem report T2.1 để rõ lý
+    do field này chỉ bổ sung, không thay thế đường tiêu thụ hiện có)."""
 
     generations_run: int
     final_population: list[Individual]
@@ -100,6 +110,27 @@ class GPRunResult:
     n_evaluated: int
     n_passed: int
     seed: int
+    best_combinable: Individual | None = None
+
+
+def _select_best_combinable(
+    evaluated: list[Individual],
+    top_k: int = GP_BEST_COMBINABLE_TOP_K,
+    max_component_depth: int = COMBINER_MAX_COMPONENT_DEPTH,
+) -> Individual | None:
+    """(T2.1) Trong top-``top_k`` cá thể ĐÃ EVAL xếp theo ``sharpe_deflated`` giảm dần, trả
+    cá thể sharpe cao NHẤT có ``depth() <= max_component_depth`` (combinable) — KHÔNG đơn
+    thuần cá thể sharpe cao nhất tuyệt đối (đó là ``best_by_sharpe`` ở ``GPRunResult``,
+    thường là cây sâu nhất/overfit nhất khiến combiner chết trần, xem bối cảnh
+    task-2-brief.md). ``None`` nếu top-K không có cá thể nào đủ nông — KHÔNG hạ tiêu chuẩn
+    quét ra ngoài top-K hay lấy đại cá thể quá sâu (phá bất biến combinable của combiner)."""
+    ranked = sorted(
+        evaluated, key=lambda i: i.fitness.sharpe_deflated, reverse=True,  # type: ignore[union-attr]
+    )
+    for ind in ranked[:top_k]:
+        if ind.depth() <= max_component_depth:
+            return ind
+    return None
 
 
 class GPEngine:
@@ -481,7 +512,8 @@ class GPEngine:
            sinh offspring (crossover/mutation/sao chép), ``dedup_population`` theo
            canonical_hash, ``nsga2_select`` giữ ``pop_size`` cá thể (Pareto + crowding).
         4. Đánh giá thế hệ cuối (offspring chưa eval) → persist.
-        5. Trả ``GPRunResult`` (quần thể cuối + best theo ``sharpe_deflated`` + thống kê).
+        5. Trả ``GPRunResult`` (quần thể cuối + best theo ``sharpe_deflated`` + best
+           combinable-aware (T2.1, ``_select_best_combinable``) + thống kê).
 
         ``pool_corr`` được nạp lại từ DB ở đầu mỗi vòng (pool lớn dần khi có alpha pass)."""
         rng = np.random.default_rng(self.seed)
@@ -542,6 +574,8 @@ class GPEngine:
             key=lambda i: i.fitness.sharpe_deflated,  # type: ignore[union-attr]
             default=None,
         )
+        # T2.1: bản combinable-aware, xem docstring GPRunResult/_select_best_combinable.
+        best_combinable = _select_best_combinable(evaluated_final)
 
         return GPRunResult(
             generations_run=self.n_generations,
@@ -550,4 +584,5 @@ class GPEngine:
             n_evaluated=total_eval,
             n_passed=total_passed,
             seed=self.seed,
+            best_combinable=best_combinable,
         )

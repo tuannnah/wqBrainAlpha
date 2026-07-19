@@ -91,6 +91,17 @@ COMBINER_MIN_BRAIN_SHARPE: float = 0.8
 # "loại NGAY trước greedy" của combine_stage thật nữa.
 COMBINER_MAX_COMPONENT_DEPTH: int = 4
 
+# --- GP core depth budget (WS2 Task 2 — GP đừng đẻ core sâu/overfit, xem
+# .superpowers/sdd/20260719/task-2-brief.md) ---
+# Số cá thể (xếp theo sharpe_deflated giảm dần) GPEngine xét khi chọn "best-cho-combiner"
+# (T2.1, ``src/gp/engine.py:_select_best_combinable``): trong top-K này, ưu tiên cá thể
+# ĐẦU TIÊN có depth <= COMBINER_MAX_COMPONENT_DEPTH (combinable) thay vì luôn lấy cá thể
+# sharpe cao nhất tuyệt đối (`best_by_sharpe`, vẫn giữ nguyên cho báo cáo — thường là cây
+# sâu nhất/overfit nhất, xem bối cảnh brief). K nhỏ (không quét cả quần thể — mất ý nghĩa
+# "best") nhưng đủ lớn để có cơ hội gặp cá thể nông trong nhóm sharpe cao của quần thể
+# ~50 cá thể mặc định (`GPEngine.pop_size`).
+GP_BEST_COMBINABLE_TOP_K: int = 10
+
 # --- Điểm-nộp (submission score, Task 2 Fix 4) ---
 # combine_stage so combo với thành phần mạnh nhất bằng điểm-nộp
 # min(sharpe/SUBMIT_SHARPE_REF, fitness/SUBMIT_FITNESS_REF) thay vì so fitness thô — buộc
