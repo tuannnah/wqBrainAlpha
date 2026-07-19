@@ -113,6 +113,20 @@ GP_BEST_COMBINABLE_TOP_K: int = 10
 # đúng bằng trần gate bare-core nên GP tự do sinh cây sâu tới tận biên gate, không còn dư
 # địa cho wrapper — nguồn gốc chính khiến combiner ra ~0 combo, xem bối cảnh task-2-brief.md).
 # Vẫn có thể override tường minh (vd test cũ dùng max_depth=7) khi cố ý cần cây sâu hơn.
+#
+# RANH GIỚI QUAN TRỌNG (Fix review T2.2, Important của reviewer): hằng số này CHỈ áp cho
+# cây SINH ngẫu nhiên (filler `ramped_half_and_half`/`random_tree`) và BIẾN DỊ (`crossover`/
+# `subtree_mutation`) — KHÔNG áp cho SEED nạp vào quần thể khởi tạo (`init_population`'s
+# `valid_seeds` filter, xem `src/gp/init.py`). Seed (frontier/alt-data, tri thức người viết
+# đã qua kiểm định kinh tế, phổ biến depth 5-6) dùng ngân sách RIÊNG — tham số
+# `seed_max_depth` của `init_population` (mặc định `MAX_DEPTH`=7, ngân sách RỘNG như trước
+# Task 2). Lý do: seed không phải cây sinh ngẫu nhiên cần ép nông để tránh overfit — chọn
+# lọc "seed sâu nào đáng giữ tới cuối" là việc của NSGA-II (T2.3, depth đã vào parsimony
+# penalty) + `_select_best_combinable` (T2.1), KHÔNG phải việc của bộ lọc lúc khởi tạo. Bug
+# đã fix: trước đây `init_population` dùng CHUNG `max_depth` cho cả seed lẫn filler, nên khi
+# GPEngine đổi default sang GP_MAX_CORE_DEPTH=4 (T2.2), ~38% seed thủ công (đa số seed
+# frontier/alt-data depth 5-6 — nguồn đa dạng chủ lực) bị lọc rớt OAN ngay từ khởi tạo, đồng
+# thời làm best_combinable ≡ best_by_sharpe khi mọi cá thể đều ≤4 (mâu thuẫn T2.1).
 GP_MAX_CORE_DEPTH: int = MAX_DEPTH - 3
 
 # --- Điểm-nộp (submission score, Task 2 Fix 4) ---

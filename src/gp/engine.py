@@ -44,6 +44,7 @@ from config.thresholds import (
     COMBINER_MAX_COMPONENT_DEPTH,
     GP_BEST_COMBINABLE_TOP_K,
     GP_MAX_CORE_DEPTH,
+    MAX_DEPTH,
 )
 from src.backtest.backtester import Backtester
 from src.backtest.config import PortfolioConfig
@@ -150,7 +151,17 @@ class GPEngine:
     tận biên gate, không còn dư địa cho 3 tầng wrapper cấu hình cuối
     (``scale(ts_decay(group_neut(...)))``) lẫn trần combiner (Task 1) — nguồn gốc chính
     khiến combiner ra ~0 combo (xem task-2-brief.md). Truyền tường minh giá trị khác khi cố
-    ý cần cây sâu hơn (vd một số test cũ dùng max_depth=5/7)."""
+    ý cần cây sâu hơn (vd một số test cũ dùng max_depth=5/7).
+
+    (Fix review T2.2) ``max_depth`` CHỈ áp cho cây SINH ngẫu nhiên (filler ``init_population``)
+    và BIẾN DỊ (``crossover``/``subtree_mutation``) — KHÔNG áp cho seed thủ công nạp vào
+    quần thể khởi tạo. ``run()`` gọi ``init_population(..., seed_max_depth=MAX_DEPTH)`` tường
+    minh (ngân sách RỘNG, như trước Task 2) để seed sâu (frontier/alt-data, tri thức người
+    viết đã qua kiểm định, phổ biến depth 5-6) không bị lọc rớt oan chỉ vì ``max_depth`` mặc
+    định của GP core đã siết xuống 4 — xem docstring ``init_population``/``config/thresholds.
+    GP_MAX_CORE_DEPTH`` để rõ ranh giới. Chọn lọc seed sâu nào đáng giữ tới cuối là việc của
+    NSGA-II (T2.3, depth đã vào parsimony) + ``_select_best_combinable`` (T2.1), không phải
+    việc của bộ lọc lúc khởi tạo."""
 
     def __init__(
         self,
@@ -548,6 +559,12 @@ class GPEngine:
             fields=fields,
             max_depth=self.max_depth,
             seed_offset=self.seed_offset,
+            # Fix review T2.2: seed thủ công (frontier/alt-data, có thể sâu 5-7) dùng ngân
+            # sách RỘNG seed_max_depth=MAX_DEPTH (7, như trước Task 2) — TÁCH khỏi
+            # self.max_depth (GP_MAX_CORE_DEPTH=4 mặc định) chỉ áp cho cây SINH/BIẾN DỊ.
+            # Seed sâu vào quần thể xong để NSGA-II (T2.3, depth vào parsimony) +
+            # _select_best_combinable (T2.1) lo phần chọn lọc, KHÔNG bị chặn cứng ở đây.
+            seed_max_depth=MAX_DEPTH,
             field_groups=self.field_groups,
         )
 
