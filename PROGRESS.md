@@ -15,9 +15,13 @@
   T2.1 dừng ở chuẩn bị field, đòn bẩy thật là trần sinh 4; wire là task riêng. (2) T2.3 đổi
   hành vi tiến hóa — A/B 1 phiên live (p90 depth + phân bố node) trước khi tinh chỉnh.
   (3) `tools/diag_combiner.py` hỏng import TỪ TRƯỚC (refactor CLI) → nghiệm thu WS1 định
-  lượng (drop_stats depth) chờ sửa tool này. **Next: USER chạy menu-5 nghiệm thu live**
+  lượng (drop_stats depth) — ĐÃ SỬA (commit 2213031: import theo src/app/* + console UTF-8)
+  và CHẠY THẬT: `drop_stats={'gate': 1}, depth=0` (trước WS1: 3/5 combo chết depth) — nút
+  depth ĐÃ GỠ, còn 1 combo bị gate self-corr trung thực chặn; pool hiện p50=6 shallow≤4=27%
+  (toàn Brain-proven cũ — sẽ nông dần khi WS2 tích core mới). **ĐÃ MERGE MAIN `c07908c` +
+  push origin (main + nhánh feature).** **Next: USER chạy menu-5 nghiệm thu live**
   (≥1 combo lọt depth, ≥60% ý tưởng non-pv_reversal + ≥3 họ sim, `calibrate` in ρ
-  submit_score/per-family + cảnh báo). CHƯA merge/push — chờ user quyết.
+  submit_score/per-family + cảnh báo).
 - **Phase [2026-07-18, Session 17]:** ✅ **ĐÃ NỘP alpha pure PP #3: `omg7mGKE`** (fade firm
   option flow, ts_rank 66, TOP1000/INDUSTRY, Sharpe 1.00/PP-corr 0.4467 PASS — dateSubmitted
   18/07 11:42 ET, stage OS, vòng poll ĐẦU không cần retry, tag PowerPoolSelected + DB row).
