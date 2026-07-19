@@ -19,7 +19,7 @@ from typing import Protocol
 import numpy as np
 from loguru import logger
 
-from config.thresholds import FRONTIER_MIN_FRACTION, SELF_CORR_MAX
+from config.thresholds import FRONTIER_MIN_FRACTION, FRONTIER_SATURATION_K, SELF_CORR_MAX
 from src.calibration.stats import spearman
 from src.pipeline.shortlist import ShortlistCandidate
 from src.storage.repository import MiniBrainRepository
@@ -49,6 +49,53 @@ def compute_frontier_topup(total: int, non_pv: int, min_fraction: float, availab
         (min_fraction * total - non_pv) / (1.0 - min_fraction)
     )
     return max(0, min(needed, available))
+
+
+def compute_family_pool_share(families: list[str]) -> dict[str, float]:
+    """T3.2: tỉ lệ mỗi family trong `families` (mỗi phần tử = family đã classify sẵn của 1
+    alpha trong pool hiện tại). Rỗng -> {} (không family nào bão hoà theo nghĩa nào cả)."""
+    if not families:
+        return {}
+    counts: dict[str, int] = {}
+    for f in families:
+        counts[f] = counts.get(f, 0) + 1
+    total = len(families)
+    return {f: n / total for f, n in counts.items()}
+
+
+def rotate_reserve_by_saturation(
+    reserve: "deque[ShortlistCandidate]", family_fn, family_share: dict[str, float],
+    threshold: float,
+) -> None:
+    """T3.2: đẩy candidate trong `reserve` có family chiếm > `threshold` trong pool (theo
+    `family_share`, từ `compute_family_pool_share`) xuống CUỐI hàng đợi — giữ nguyên thứ tự
+    tương đối trong từng nhóm (giữ/đẩy), KHÔNG xoá candidate nào (chỉ hạ ưu tiên, tránh tiếp
+    tục đào family đã bão hoà; family còn 1 cơ hội khi các family khác cạn trước)."""
+    if not reserve:
+        return
+    keep: list[ShortlistCandidate] = []
+    demote: list[ShortlistCandidate] = []
+    for cand in reserve:
+        share = family_share.get(family_fn(cand.expr), 0.0)
+        (demote if share > threshold else keep).append(cand)
+    reserve.clear()
+    reserve.extend(keep)
+    reserve.extend(demote)
+
+
+def _read_pool_exprs(repo: object) -> list[str]:
+    """T3.2: đọc expr các alpha ĐÃ PASS trong pool hiện tại — "pool" theo nghĩa self-corr/
+    submission của dự án (alpha đã pass mới thật sự cạnh tranh vị trí trong pool). Guard
+    getattr+callable: repo fake/cũ thiếu `load_brain_sims` vẫn chạy được, coi như pool rỗng
+    (tương thích ngược, cùng pattern `submit_ready_alphas` ở `_report` trong `run()`)."""
+    fn = getattr(repo, "load_brain_sims", None)
+    if not callable(fn):
+        return []
+    try:
+        rows = fn()
+    except Exception:  # noqa: BLE001 - đọc pool là phụ, không được phá vòng kín chính
+        return []
+    return [r.expr_string for r in rows if getattr(r, "status", None) == "passed"]
 
 
 def _short(expr: str, n: int = 70) -> str:
@@ -273,7 +320,7 @@ class ClosedLoop:
         # GPIdeaSource.reseed_epoch(). None -> bỏ qua (tương thích ngược, dừng ngay khi rỗng
         # như hành vi trước B1).
         self.on_epoch_reseed = on_epoch_reseed
-        # WS3 T3.1: hàng đợi seed non-PV (frontier/alt-data/fundamental/hypothesis) CHƯA
+        # WS3 T3.1/T3.2: hàng đợi seed non-PV (frontier/alt-data/fundamental/hypothesis) CHƯA
         # được đi thẳng `_sim_direct` trong phiên — build_closed_loop nạp một lần từ direct_
         # cores (đã lọc known_fields/avoided_hashes/verified_fields tại nguồn). Rút dần mỗi
         # batch (T3.1: bổ sung cho đủ sàn FRONTIER_MIN_FRACTION) thay vì dồn hết vào 1 batch
@@ -441,10 +488,22 @@ class ClosedLoop:
                 logger.info("Cạn ý tưởng (batch rỗng) — dừng vòng kín.")
                 return _report("no_more_ideas")
             vua_reseed = False
-            # WS3 T3.1: sàn quota đa dạng mỗi batch — CHỈ áp dụng khi có cả reserve LẪN
+            # WS3 T3.1/T3.2: sàn quota đa dạng mỗi batch — CHỈ áp dụng khi có cả reserve LẪN
             # family_fn (không biết family thì không thể phân biệt PV/non-PV, thà bỏ qua còn
             # hơn đoán sai và tiêu hao reserve vô ích).
             if self.frontier_reserve and self.family_fn is not None:
+                # T3.2: xoay reserve theo độ bão hoà family trong pool (đọc qua repository)
+                # TRƯỚC khi bổ sung — family đang chiếm nhiều pool bị đẩy xuống cuối, batch kế
+                # ưu tiên rút family orthogonal hơn (tránh tiếp tục đào vùng đã mine).
+                pool_exprs = _read_pool_exprs(self.repo)
+                if pool_exprs:
+                    family_share = compute_family_pool_share(
+                        [self.family_fn(e) for e in pool_exprs]
+                    )
+                    rotate_reserve_by_saturation(
+                        self.frontier_reserve, self.family_fn, family_share,
+                        FRONTIER_SATURATION_K,
+                    )
                 non_pv = sum(
                     1 for c in batch if self.family_fn(c.expr) not in _PV_FAMILY_LABELS
                 )

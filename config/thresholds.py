@@ -148,8 +148,8 @@ SUBMIT_FITNESS_REF: float = 1.0  # tham chiếu fitness — khớp docs consulta
 ALT_SWEEP_MIN_ABS_SHARPE: float = 0.5
 
 
-# --- WS3 T3.1 — sàn quota đa dạng mỗi batch (phá family lock-in, xem
-# .superpowers/sdd/20260719/task-3-brief.md) ---
+# --- WS3 T3.1/T3.2 — sàn quota đa dạng + xoay seed theo bão hoà pool (phá family lock-in,
+# xem .superpowers/sdd/20260719/task-3-brief.md) ---
 # Panel local chỉ có 6 field PV -> GP hội tụ về pv_reversal bão hoà; seed frontier/alt-data/
 # fundamental/hypothesis (đi thẳng `_sim_direct`) trước đây bị dồn hết vào 1 batch đầu rồi
 # cạn, mọi batch SAU đó toàn PV suốt phần còn lại phiên (PROGRESS Session 16: "GP local không
@@ -157,6 +157,11 @@ ALT_SWEEP_MIN_ABS_SHARPE: float = 0.5
 # sổ orthogonal (giảm self-corr hàng loạt với pv_reversal), không quá cao để chặn batch khi
 # nguồn non-PV cạn tự nhiên (T3.1: "không chặn batch" khi hàng đợi non-PV không đủ).
 FRONTIER_MIN_FRACTION: float = 0.3
+# T3.2: family chiếm > mức này trong pool ĐÃ PASS (đo qua classify_family) -> seed cùng family
+# bị đẩy xuống CUỐI hàng đợi reserve (không xoá) ở batch kế — tránh tiếp tục đào family đã
+# bão hoà. 0.5: quá nửa pool cùng 1 family là dấu hiệu rõ đã khai thác đủ, chưa tới mức cực
+# đoan để loại hẳn seed đó (vẫn còn cơ hội thử lại khi các family khác cạn trước).
+FRONTIER_SATURATION_K: float = 0.5
 
 
 def calibrated_floor(target_brain_sharpe: float = PRE_SIM_TARGET_BRAIN_SHARPE) -> float:

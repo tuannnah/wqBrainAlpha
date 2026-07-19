@@ -924,3 +924,71 @@ def test_closed_loop_frontier_reserve_dung_not_khi_idea_source_can(repo) -> None
     assert sorted(refiner.calls) == ["nonpv0", "nonpv1"]
     assert report.stop_reason == "no_more_ideas"
 
+
+
+# --- WS3 T3.2 — xoay seed theo độ bão hoà pool (saturation-aware) ---
+
+
+def test_compute_family_pool_share() -> None:
+    from src.pipeline.closed_loop import compute_family_pool_share
+
+    share = compute_family_pool_share(["pv_reversal", "pv_reversal", "fundamental"])
+    assert share["pv_reversal"] == pytest.approx(2 / 3)
+    assert share["fundamental"] == pytest.approx(1 / 3)
+
+
+def test_compute_family_pool_share_rong() -> None:
+    from src.pipeline.closed_loop import compute_family_pool_share
+
+    assert compute_family_pool_share([]) == {}
+
+
+def test_rotate_reserve_by_saturation_day_family_bao_hoa_xuong_cuoi() -> None:
+    from collections import deque
+
+    from src.pipeline.closed_loop import rotate_reserve_by_saturation
+
+    reserve = deque([_cand("pv_a"), _cand("fund_b"), _cand("pv_c")])
+
+    def family_fn(expr: str) -> str:
+        return "pv_reversal" if expr.startswith("pv") else "fundamental"
+
+    rotate_reserve_by_saturation(reserve, family_fn, {"pv_reversal": 0.6}, threshold=0.5)
+    assert [c.expr for c in reserve] == ["fund_b", "pv_a", "pv_c"]
+
+
+def test_rotate_reserve_by_saturation_khong_xoa_gi(repo) -> None:  # noqa: ANN001
+    """Không family nào vượt threshold -> thứ tự giữ nguyên, không mất phần tử nào."""
+    from collections import deque
+
+    from src.pipeline.closed_loop import rotate_reserve_by_saturation
+
+    reserve = deque([_cand("a"), _cand("b")])
+    rotate_reserve_by_saturation(reserve, lambda e: "x", {"x": 0.2}, threshold=0.5)
+    assert [c.expr for c in reserve] == ["a", "b"]
+
+
+def test_closed_loop_seed_rotation_uu_tien_family_it_trong_pool(repo) -> None:  # noqa: ANN001
+    """T3.2: pool (DB) đã có 2 alpha PASSED cùng family 'pv_reversal' (100% pool, > K=0.5) ->
+    reserve seed cùng family bị đẩy xuống cuối -> khi floor chỉ đủ chỗ cho 1 slot, seed family
+    KHÁC (ít bão hoà hơn) được rút TRƯỚC."""
+    repo.record_brain_sim("h1", "rank(close)", wq_alpha_id="W1", region="USA",
+                          universe="TOP3000", sharpe=2.0, fitness=1.5, turnover=0.3,
+                          self_corr=0.1, status="passed")
+    repo.record_brain_sim("h2", "rank(volume)", wq_alpha_id="W2", region="USA",
+                          universe="TOP3000", sharpe=2.0, fitness=1.5, turnover=0.3,
+                          self_corr=0.1, status="passed")
+
+    src = _FakeIdeaSource([[_cand("pv0")]])
+    reserve = [_cand("pv_seed", origin="alt_data"), _cand("fund_seed", origin="alt_data")]
+
+    def family_fn(expr: str) -> str:
+        if expr in ("rank(close)", "rank(volume)", "pv0", "pv_seed"):
+            return "pv_reversal"
+        return "fundamental"
+
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=family_fn, frontier_reserve=reserve, max_ideas=2)
+    loop.run()
+    assert refiner.calls == ["pv0", "fund_seed"]
