@@ -10,17 +10,45 @@ injected qua Protocol structural; việc dựng cụ thể nằm ở `main.py`/a
 
 from __future__ import annotations
 
+import math
 import time
+from collections import deque
 from dataclasses import dataclass, replace
 from typing import Protocol
 
 import numpy as np
 from loguru import logger
 
-from config.thresholds import SELF_CORR_MAX
+from config.thresholds import FRONTIER_MIN_FRACTION, SELF_CORR_MAX
 from src.calibration.stats import spearman
 from src.pipeline.shortlist import ShortlistCandidate
 from src.storage.repository import MiniBrainRepository
+
+# WS3 T3.1/T3.2 (.superpowers/sdd/20260719/task-3-brief.md): 2 nhãn family THUẦN price/volume
+# theo đúng từ vựng `classify_family` (src/reporting/diagnostics.py) — lặp lại CHUỖI HẰNG (không
+# import module đó) để giữ B1: module này KHÔNG phụ thuộc cụ thể vào tầng phân loại family, chỉ
+# nhận family đã suy sẵn qua `family_fn` injected (như mọi nơi khác trong file này). "pv_reversal"
+# và "momentum" là 2 family DUY NHẤT mà `classify_family` suy được CHỈ TỪ field close/open/high/
+# low/volume/vwap trong panel local 6-field — đây chính xác là tập family "bão hoà vì panel local
+# nghèo field" mà T3.1 muốn đảm bảo không chiếm trọn batch.
+_PV_FAMILY_LABELS: frozenset[str] = frozenset({"pv_reversal", "momentum"})
+
+
+def compute_frontier_topup(total: int, non_pv: int, min_fraction: float, available: int) -> int:
+    """T3.1: số candidate CẦN rút từ `frontier_reserve` để batch (kích thước `total`, đã có
+    `non_pv` candidate non-PV) đạt tỉ lệ non-PV tối thiểu `min_fraction` SAU KHI bổ sung, giới
+    hạn bởi `available` (KHÔNG chặn batch khi reserve không đủ — thiếu thì dùng hết những gì
+    có, trả về đúng `available`).
+
+    Suy từ (non_pv + k) / (total + k) >= min_fraction (min_fraction < 1)
+        => k >= (min_fraction*total - non_pv) / (1 - min_fraction).
+    Batch rỗng/min_fraction<=0/đã đạt sàn sẵn -> 0 (không cần bổ sung gì)."""
+    if total <= 0 or min_fraction <= 0.0 or non_pv >= min_fraction * total:
+        return 0
+    needed = total if min_fraction >= 1.0 else math.ceil(
+        (min_fraction * total - non_pv) / (1.0 - min_fraction)
+    )
+    return max(0, min(needed, available))
 
 
 def _short(expr: str, n: int = 70) -> str:
@@ -192,6 +220,7 @@ class ClosedLoop:
         pp_ready_fn=None,
         on_gp_budget_exhausted=None,
         on_epoch_reseed=None,
+        frontier_reserve: "list[ShortlistCandidate] | None" = None,
     ) -> None:
         self.idea_source = idea_source
         self.refiner = refiner
@@ -244,6 +273,12 @@ class ClosedLoop:
         # GPIdeaSource.reseed_epoch(). None -> bỏ qua (tương thích ngược, dừng ngay khi rỗng
         # như hành vi trước B1).
         self.on_epoch_reseed = on_epoch_reseed
+        # WS3 T3.1: hàng đợi seed non-PV (frontier/alt-data/fundamental/hypothesis) CHƯA
+        # được đi thẳng `_sim_direct` trong phiên — build_closed_loop nạp một lần từ direct_
+        # cores (đã lọc known_fields/avoided_hashes/verified_fields tại nguồn). Rút dần mỗi
+        # batch (T3.1: bổ sung cho đủ sàn FRONTIER_MIN_FRACTION) thay vì dồn hết vào 1 batch
+        # đầu rồi cạn — đúng vấn đề T3.1 muốn sửa (PROGRESS Session 16). deque để popleft() O(1).
+        self.frontier_reserve: "deque[ShortlistCandidate]" = deque(frontier_reserve or [])
 
     def run(self) -> ClosedLoopReport:
         """Lặp: next_batch → mỗi ý tưởng refine_and_sim → record_brain_sim → đếm. Dừng khi
@@ -372,6 +407,16 @@ class ClosedLoop:
             _gen_t0 = time.perf_counter()
             batch = self.idea_source.next_batch()
             gen_batch_ms = (time.perf_counter() - _gen_t0) * 1000.0
+            if not batch and self.frontier_reserve:
+                # T3.1: idea_source cạn NHƯNG hàng đợi non-PV còn — dùng NỐT thay vì dừng
+                # ngay/reseed (đúng "không chặn batch": còn gì thì dùng hết, kể cả khi idea_
+                # source chính đã hết ý tưởng của riêng nó).
+                batch = list(self.frontier_reserve)
+                self.frontier_reserve.clear()
+                logger.info(
+                    "🌐 idea_source cạn — dùng nốt {} candidate non-PV còn lại trong reserve.",
+                    len(batch),
+                )
             if not batch:
                 # B1: batch rỗng chưa chắc đã cạn tuyệt đối — thử mở epoch mới (seed mới +
                 # xoay dataset field ưu tiên) MỘT LẦN; rỗng NGAY SAU reseed đó (vua_reseed vẫn
@@ -396,6 +441,23 @@ class ClosedLoop:
                 logger.info("Cạn ý tưởng (batch rỗng) — dừng vòng kín.")
                 return _report("no_more_ideas")
             vua_reseed = False
+            # WS3 T3.1: sàn quota đa dạng mỗi batch — CHỈ áp dụng khi có cả reserve LẪN
+            # family_fn (không biết family thì không thể phân biệt PV/non-PV, thà bỏ qua còn
+            # hơn đoán sai và tiêu hao reserve vô ích).
+            if self.frontier_reserve and self.family_fn is not None:
+                non_pv = sum(
+                    1 for c in batch if self.family_fn(c.expr) not in _PV_FAMILY_LABELS
+                )
+                topup = compute_frontier_topup(
+                    len(batch), non_pv, FRONTIER_MIN_FRACTION, len(self.frontier_reserve),
+                )
+                if topup > 0:
+                    added = [self.frontier_reserve.popleft() for _ in range(topup)]
+                    batch = list(batch) + added
+                    logger.info(
+                        "🌐 Sàn quota đa dạng: bổ sung {} candidate non-PV từ reserve "
+                        "(còn lại {}).", topup, len(self.frontier_reserve),
+                    )
             # Chi phí sinh (GP/decorrelate) là của CẢ batch; phân bổ đều cho mỗi ứng viên để
             # điền gen_ms (refiner không biết chi phí này). Xấp xỉ đủ tốt cho funnel timing.
             gen_ms_each = gen_batch_ms / len(batch)

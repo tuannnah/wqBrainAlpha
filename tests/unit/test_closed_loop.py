@@ -822,3 +822,105 @@ def test_batch_rong_goi_reseed_roi_chay_tiep():
     report = _chay_loop_voi_batches(batches=[[], []], on_epoch_reseed=lambda: goi.append(1) or True)
     assert goi == [1]
     assert report.stop_reason == "no_more_ideas"
+
+
+# --- WS3 T3.1 — sàn quota đa dạng mỗi batch (phá family lock-in PV-reversal bão hoà) ---
+# GP local chỉ có panel PV 6 field -> mọi ý tưởng hội tụ về pv_reversal; seed frontier/alt-
+# data/fundamental/hypothesis (đi thẳng _sim_direct) phải được đảm bảo ≥ FRONTIER_MIN_FRACTION
+# slot mỗi batch qua `frontier_reserve` (xem .superpowers/sdd/20260719/task-3-brief.md).
+
+
+def test_compute_frontier_topup_batch_toan_pv_can_bo_sung() -> None:
+    from src.pipeline.closed_loop import compute_frontier_topup
+
+    k = compute_frontier_topup(total=10, non_pv=0, min_fraction=0.3, available=10)
+    assert k > 0
+    assert k / (10 + k) >= 0.3 - 1e-9
+
+
+def test_compute_frontier_topup_da_dat_san_khong_bo_sung() -> None:
+    from src.pipeline.closed_loop import compute_frontier_topup
+
+    assert compute_frontier_topup(total=10, non_pv=5, min_fraction=0.3, available=10) == 0
+
+
+def test_compute_frontier_topup_reserve_khong_du_khong_chan_batch() -> None:
+    """available < số cần -> trả đúng available (dùng hết những gì có, không chặn batch)."""
+    from src.pipeline.closed_loop import compute_frontier_topup
+
+    assert compute_frontier_topup(total=10, non_pv=0, min_fraction=0.3, available=1) == 1
+
+
+def test_compute_frontier_topup_batch_rong_tra_0() -> None:
+    from src.pipeline.closed_loop import compute_frontier_topup
+
+    assert compute_frontier_topup(total=0, non_pv=0, min_fraction=0.3, available=5) == 0
+
+
+def test_closed_loop_frontier_floor_bo_sung_non_pv_khi_batch_toan_pv(repo) -> None:  # noqa: ANN001
+    """Batch 7 candidate PV (family 'pv_reversal') + reserve 5 candidate non-PV ('fundamental')
+    -> sau khi bổ sung, >= 30% ứng viên ĐƯỢC REFINE thuộc non-PV."""
+    pv_cands = [_cand(f"pv{i}") for i in range(7)]
+    src = _FakeIdeaSource([pv_cands])
+    reserve = [_cand(f"nonpv{i}", origin="alt_data") for i in range(5)]
+
+    def family_fn(expr: str) -> str:
+        return "fundamental" if expr.startswith("nonpv") else "pv_reversal"
+
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=family_fn, frontier_reserve=reserve)
+    loop.run()
+    non_pv_refined = sum(1 for e in refiner.calls if e.startswith("nonpv"))
+    assert non_pv_refined > 0
+    assert non_pv_refined / len(refiner.calls) >= 0.3 - 1e-9
+
+
+def test_closed_loop_frontier_floor_khong_chan_batch_khi_reserve_rong(repo) -> None:  # noqa: ANN001
+    """reserve rỗng -> batch toàn PV vẫn refine bình thường, không bị chặn/treo.
+    max_gp_sims=None: cô lập khỏi cap ngân sách GP (Task 3), không liên quan tới T3.1."""
+    pv_cands = [_cand(f"pv{i}") for i in range(4)]
+    src = _FakeIdeaSource([pv_cands])
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=lambda e: "pv_reversal", frontier_reserve=[],
+                      max_gp_sims=None)
+    report = loop.run()
+    assert refiner.calls == ["pv0", "pv1", "pv2", "pv3"]
+    assert report.ideas_tried == 4
+
+
+def test_closed_loop_frontier_floor_bo_qua_khi_khong_co_family_fn(repo) -> None:  # noqa: ANN001
+    """Không có family_fn -> không phân biệt được PV/non-PV -> floor KHÔNG áp dụng (an toàn,
+    thà bỏ qua còn hơn đoán sai); reserve không bị tiêu thụ oan. idea_source VÔ HẠN (không bao
+    giờ trả batch rỗng) + max_ideas=1 để dừng NGAY sau ứng viên đầu, cô lập khỏi nhánh KHÁC của
+    T3.1 "dùng nốt reserve khi idea_source cạn" (không phải cái test này muốn kiểm)."""
+
+    class _Infinite:
+        def __init__(self) -> None:
+            self.i = 0
+
+        def next_batch(self) -> list[ShortlistCandidate]:
+            self.i += 1
+            return [_cand(f"pv{self.i}")]
+
+    reserve = [_cand("nonpv0", origin="alt_data")]
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=_Infinite(), refiner=refiner, repo=repo,
+                      frontier_reserve=reserve, max_ideas=1)
+    loop.run()
+    assert refiner.calls == ["pv1"]
+    assert len(loop.frontier_reserve) == 1  # reserve giữ nguyên, không bị rút oan
+
+
+def test_closed_loop_frontier_reserve_dung_not_khi_idea_source_can(repo) -> None:  # noqa: ANN001
+    """idea_source cạn (batch rỗng) nhưng frontier_reserve còn -> dùng nốt thay vì dừng ngay."""
+    src = _FakeIdeaSource([])
+    reserve = [_cand("nonpv0", origin="alt_data"), _cand("nonpv1", origin="alt_data")]
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=lambda e: "fundamental", frontier_reserve=reserve)
+    report = loop.run()
+    assert sorted(refiner.calls) == ["nonpv0", "nonpv1"]
+    assert report.stop_reason == "no_more_ideas"
+

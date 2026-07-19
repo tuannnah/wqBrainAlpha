@@ -283,8 +283,10 @@ def test_build_closed_loop_noi_on_family_closed_toi_generator(small_panel, repo)
 
 
 def test_build_closed_loop_fundamental_mac_dinh(small_panel, repo) -> None:  # noqa: ANN001
-    """Pha 2.1: fundamental cores có mặt trong batch đầu khi include_fundamental (mặc định True).
-    Field fundamental ngoài panel local -> refiner sim thẳng Brain (như alt-data)."""
+    """Pha 2.1: fundamental cores có mặt (mặc định include_fundamental=True). Field fundamental
+    ngoài panel local -> refiner sim thẳng Brain (như alt-data). WS3 T3.1: fundamental/
+    hypothesis/frontier nay nạp vào `ClosedLoop.frontier_reserve` (rút DẦN mỗi batch qua sàn
+    quota đa dạng) thay vì dump hết vào batch đầu của `idea_source` như trước T3.1."""
     from src.app.closed_loop_adapters import build_closed_loop
     from src.backtest.config import Neutralization, PortfolioConfig
     from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
@@ -301,7 +303,7 @@ def test_build_closed_loop_fundamental_mac_dinh(small_panel, repo) -> None:  # n
                              registry=default_registry(), loop=_NoopLoop(),
                              pop_size=6, n_generations=0, top_k=3, max_ideas=2,
                              curated_seeds=False)  # KHÔNG truyền include_fundamental
-    exprs = [c.expr for c in loop.idea_source.next_batch()]
+    exprs = [c.expr for c in loop.frontier_reserve]
     for core in FUNDAMENTAL_CORES:
         assert core in exprs
 
@@ -432,7 +434,10 @@ def test_build_closed_loop_on_family_closed_noi_toi_idea_source(small_panel, rep
         def run_from_seed(self, expression, on_progress=None):
             return type("R", (), {"best_candidate": None})()
 
-    # Tắt hết wrapper khác -> idea_source CHÍNH LÀ GPIdeaSource, kiểm tra trực diện dây nối.
+    # Tắt hết wrapper KHÁC NearMissVariantSource (luôn bọc không điều kiện, xem build_closed_
+    # loop) -> idea_source = NearMissVariantSource(fallback=GPIdeaSource); NearMissVariantSource
+    # tự nó chỉ ỦY QUYỀN set_saturated_families xuống fallback (không giữ `_saturated` riêng)
+    # nên kiểm tra dây nối qua `_fallback` (GPIdeaSource, nơi thật sự lọc theo họ đóng).
     loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
                              registry=default_registry(), loop=_NoopLoop(),
                              pop_size=6, n_generations=0, top_k=3, max_ideas=2,
@@ -442,7 +447,7 @@ def test_build_closed_loop_on_family_closed_noi_toi_idea_source(small_panel, rep
     assert loop.on_family_closed is not None
 
     loop.on_family_closed({"pv_reversal"})
-    assert loop.idea_source._saturated == {"pv_reversal"}
+    assert loop.idea_source._fallback._saturated == {"pv_reversal"}
 
     def _fake_generate_many(**_kw):
         return [
@@ -566,8 +571,9 @@ def test_alt_data_idea_source_known_fields_none_khong_loc() -> None:
 
 
 def test_build_closed_loop_known_fields_loc_core_thieu_field(small_panel, repo) -> None:  # noqa: ANN001
-    """build_closed_loop(known_fields=...) phải thread xuống AltDataIdeaSource: core hypothesis
-    tham chiếu field không nằm trong catalog cache KHÔNG BAO GIỜ được idea_source phục vụ."""
+    """build_closed_loop(known_fields=...) phải thread xuống nguồn seed: core hypothesis tham
+    chiếu field không nằm trong catalog cache KHÔNG BAO GIỜ được phục vụ. WS3 T3.1: hypothesis
+    (fundamental/frontier tắt ở test này) nay nạp vào `ClosedLoop.frontier_reserve`."""
     from src.app.closed_loop_adapters import build_closed_loop
     from src.backtest.config import Neutralization, PortfolioConfig
     from src.generation.hypothesis_seeds import HYPOTHESIS_CORES
@@ -589,7 +595,7 @@ def test_build_closed_loop_known_fields_loc_core_thieu_field(small_panel, repo) 
                              curated_seeds=False, include_alt_data=False,
                              include_fundamental=False, include_combiner=False,
                              known_fields=known)
-    exprs = [c.expr for c in loop.idea_source.next_batch()]
+    exprs = [c.expr for c in loop.frontier_reserve]
     # Core value_quality (chỉ dùng field đã verify live) PHẢI có mặt.
     value_quality_core = [e for e in HYPOTHESIS_CORES if "sales_growth" in e][0]
     assert value_quality_core in exprs

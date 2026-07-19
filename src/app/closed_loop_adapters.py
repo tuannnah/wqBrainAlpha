@@ -1367,12 +1367,14 @@ def build_closed_loop(
     )
     # Alt-data đặt NGOÀI CÙNG -> phục vụ ở batch đầu (trước cả curated PV) để phiên ngắn/
     # --max-ideas nhỏ vẫn chạm alt-data (đòn bẩy độ mới), không bị PV core nuốt hết quota.
-    # Alt-data + fundamental: field ngoài panel local -> refiner sim thẳng Brain. GỘP cores vào
-    # MỘT batch đầu (không bọc lồng nhiều tầng) để phiên ngắn (--max-ideas nhỏ) chạm cả hai họ
-    # mới cùng lúc (IMPROVEMENT_SPEC §2.1: thoát cụm PV/VWAP bão hòa bằng nhiều họ orthogonal).
-    direct_cores: tuple[str, ...] = _gather_direct_cores(
-        include_alt_data, include_fundamental, include_hypothesis, include_frontier,
-    )
+    # CHỈ alt-data "thật" (option8/socialmedia8...) đi đường AltDataIdeaSource (giữ nguyên cơ
+    # chế multi-sim theo batch, Task 6) — fundamental/hypothesis/frontier tách ra `frontier_
+    # pool_cores` bên dưới, nạp vào `ClosedLoop.frontier_reserve` (WS3 T3.1) thay vì dồn hết
+    # vào CÙNG một batch đầu rồi cạn: trước T3.1, alt_data+fundamental+hypothesis+frontier
+    # GỘP vào một `direct_cores` duy nhất, AltDataIdeaSource dump TOÀN BỘ ở batch #1 rồi mọi
+    # batch SAU đó (GP/curated) toàn pv_reversal suốt phần còn lại phiên (PROGRESS Session 16)
+    # — đây chính là vấn đề T3.1 sửa: rút DẦN từ reserve mỗi batch thay vì dump 1 lần.
+    direct_cores: tuple[str, ...] = _gather_direct_cores(include_alt_data, False, False, False)
     if direct_cores:
         idea_source = AltDataIdeaSource(
             fallback=idea_source, cores=direct_cores,
@@ -1387,6 +1389,36 @@ def build_closed_loop(
             # sim lại -> lãng phí quota lặp). None = không trần (phiên không giới hạn).
             presim_cap=max_ideas,
         )
+    # WS3 T3.1: frontier/fundamental/hypothesis (field NGOÀI panel local, cùng đi thẳng
+    # `_sim_direct` như alt-data qua `local_usable(...)==False`) — lọc known_fields (cùng guard
+    # RC1/RC2 dùng cho AltDataIdeaSource) rồi avoided_hashes (không nạp lại core đã Brain-sim
+    # phiên trước) TRƯỚC khi đóng gói thành `ShortlistCandidate` cho `ClosedLoop.frontier_
+    # reserve` — origin="alt_data" để refiner nhận diện + route giống hệt alt-data thật.
+    _registry_for_reserve = registry if registry is not None else default_registry()
+    frontier_pool_cores: tuple[str, ...] = _gather_direct_cores(
+        False, include_fundamental, include_hypothesis, include_frontier,
+    )
+    frontier_pool_cores = _filter_known_fields(
+        frontier_pool_cores, known_fields, _registry_for_reserve,
+    )
+    frontier_pool_cores = tuple(
+        _drop_saturated_cores(
+            list(frontier_pool_cores), dedup_key_fn=_dedup_key,
+            avoided_hashes=avoided_hashes, label="FrontierReserve",
+        )
+    )
+    frontier_reserve: list[ShortlistCandidate] = []
+    if frontier_pool_cores:
+        import numpy as _np
+
+        _empty_pnl = _np.zeros(0, dtype=_np.float64)
+        _empty_dates = _np.zeros(0, dtype="datetime64[ns]")
+        frontier_reserve = [
+            ShortlistCandidate(
+                expr=e, metrics=None, pnl=_empty_pnl, dates=_empty_dates, origin="alt_data",
+            )
+            for e in frontier_pool_cores
+        ]
     # Combiner bọc NGOÀI CÙNG: nối tiếp mỗi batch (sau curated/alt-data) bằng alpha ghép từ
     # chính tín hiệu con batch đó + kho DB -> tự động chạy sau mỗi run (spec 2026-07-09).
     if include_combiner:
@@ -1461,4 +1493,5 @@ def build_closed_loop(
         pp_ready_fn=pp_ready_fn,
         on_gp_budget_exhausted=on_gp_budget_exhausted,
         on_epoch_reseed=on_epoch_reseed,
+        frontier_reserve=frontier_reserve,
     )

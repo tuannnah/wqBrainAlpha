@@ -148,6 +148,17 @@ SUBMIT_FITNESS_REF: float = 1.0  # tham chiếu fitness — khớp docs consulta
 ALT_SWEEP_MIN_ABS_SHARPE: float = 0.5
 
 
+# --- WS3 T3.1 — sàn quota đa dạng mỗi batch (phá family lock-in, xem
+# .superpowers/sdd/20260719/task-3-brief.md) ---
+# Panel local chỉ có 6 field PV -> GP hội tụ về pv_reversal bão hoà; seed frontier/alt-data/
+# fundamental/hypothesis (đi thẳng `_sim_direct`) trước đây bị dồn hết vào 1 batch đầu rồi
+# cạn, mọi batch SAU đó toàn PV suốt phần còn lại phiên (PROGRESS Session 16: "GP local không
+# dùng được field alt-data -> hội tụ pv_reversal bão hoà"). Sàn 30%: đủ để mỗi batch còn cửa
+# sổ orthogonal (giảm self-corr hàng loạt với pv_reversal), không quá cao để chặn batch khi
+# nguồn non-PV cạn tự nhiên (T3.1: "không chặn batch" khi hàng đợi non-PV không đủ).
+FRONTIER_MIN_FRACTION: float = 0.3
+
+
 def calibrated_floor(target_brain_sharpe: float = PRE_SIM_TARGET_BRAIN_SHARPE) -> float:
     """Floor local sharpe suy từ mục tiêu Brain: local >= target/1.28 thì Brain kỳ vọng >=
     target. Thay ngưỡng cứng 0.5 (Pha 4) — chỉnh mục tiêu Brain, floor tự suy theo hiệu chỉnh."""
