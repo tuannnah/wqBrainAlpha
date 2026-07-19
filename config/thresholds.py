@@ -77,10 +77,18 @@ DEGENERATE_SHARPE: float = 0.05
 # vẫn qua sàn này, vì Grinold-Kahn √N có thể đẩy nó lên ngưỡng nộp khi ghép với thành phần
 # ít tương quan khác.
 COMBINER_MIN_BRAIN_SHARPE: float = 0.8
-# Trần độ sâu MỘT tín hiệu con được phép làm component combo (Fix 3): MAX_DEPTH(7) trừ 3
-# tầng wrapper build_combined_expression luôn thêm (rank chuẩn hoá + 2 tầng add cân bằng cho
-# N=4). Component sâu hơn mức này chắc chắn vượt trần sau khi bọc -> loại NGAY trước greedy
-# thay vì phát hiện muộn (đo được 3/5 rồi 2/5 combo chết vì depth ở diag 20260712/20260713).
+# Trần độ sâu MỘT tín hiệu con được phép làm component combo (Fix 3, giá trị gốc cho N=4):
+# MAX_DEPTH(7) trừ 3 tầng wrapper build_combined_expression luôn thêm (rank chuẩn hoá + 2
+# tầng add cân bằng cho N=4). Component sâu hơn mức này chắc chắn vượt trần sau khi bọc ->
+# loại NGAY trước greedy thay vì phát hiện muộn (đo được 3/5 rồi 2/5 combo chết vì depth ở
+# diag 20260712/20260713).
+# CẬP NHẬT (Task 1, T1.2 — src/generation/combiner.py:component_depth_cap): `combine_stage`
+# KHÔNG còn dùng hằng số CỐ ĐỊNH này để lọc pool trước greedy nữa — mỗi lần thử n_max
+# (4 -> 3 -> 2) tự suy trần ĐỘNG qua `component_depth_cap(attempt_n_max)` (công thức
+# MAX_DEPTH - 1 - ceil(log2(n_max)), cho đúng N=4 ra lại giá trị 4 dưới đây). Hằng số này VẪN
+# giữ lại làm default của `select_decorrelated_combos(max_component_depth=...)` khi caller
+# không truyền cap tường minh (tương thích ngược, standalone/unit test) — không phải nơi
+# "loại NGAY trước greedy" của combine_stage thật nữa.
 COMBINER_MAX_COMPONENT_DEPTH: int = 4
 
 # --- Điểm-nộp (submission score, Task 2 Fix 4) ---

@@ -189,6 +189,18 @@ def test_ghep_tin_hieu_nong_rank_add():
     parse(res.expr)  # phải parse được
 
 
+def test_ts_rank_van_bi_boc_rank_khong_giong_rank_zscore():
+    """Review Important #1 (fix sau review task-1-report.md): ts_rank là time-series rank
+    riêng từng mã (OpCategory.TIME_SERIES), KHÔNG cross-sectional như rank/zscore -- component
+    gốc ts_rank VẪN phải bị bọc thêm rank() khi build (không được bỏ qua như rank/zscore),
+    nếu không combo sẽ cộng trực tiếp giá trị KHÔNG so sánh được giữa các mã, phá bất biến
+    'chuẩn hóa cross-sectional trọng số đều' của module."""
+    exprs = ["ts_rank(close, 20)", "ts_delta(volume, 5)"]
+    res = build_combined_expression(exprs, max_depth=7)
+    assert res is not None
+    assert "rank(ts_rank(close, 20))" in res.expr  # PHẢI bọc thêm rank(), không bỏ qua
+
+
 def test_fold_can_bang_bon_tin_hieu():
     exprs = [
         "-ts_mean(subtract(close, vwap), 10)",

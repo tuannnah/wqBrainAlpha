@@ -105,9 +105,13 @@ def test_khong_du_tin_hieu_khong_combo():
 
 def test_score_fn_factory_uu_tien_loai_thanh_vien_combo_khoi_pool():
     a, b = _two_uncorrelated()
-    # ts_delta (không phải rank/zscore/ts_rank) để không vô tình thắng bucket "đã chuẩn hóa"
-    # (T1.3) trước a/b dù điểm thấp hơn nhiều -- c ở đây chỉ cần là 1 tín hiệu độc lập điểm
-    # thấp để làm decoy pool, không liên quan gì T1.3.
+    # ts_delta (KHÔNG thuộc _SORT_STANDARDIZED_OPS = rank/zscore/ts_rank) để không vô tình
+    # thắng bucket ưu tiên sort combinability (T1.3) trước a/b dù điểm thấp hơn nhiều -- c ở
+    # đây chỉ cần là 1 tín hiệu độc lập điểm thấp để làm decoy pool, không liên quan gì T1.3.
+    # Vẫn giữ ts_delta sau review Important #1 (không phục hồi ts_rank(close,20)): fix Important
+    # #1 chỉ thu hẹp tập _STANDARDIZE_SKIP_OPS (rank/zscore, KHÔNG ts_rank) cho _standardize;
+    # tập ưu tiên SORT (_SORT_STANDARDIZED_OPS) vẫn giữ nguyên rank/zscore/ts_rank theo đúng
+    # nguyên văn brief -- ts_rank(close,20) vẫn sẽ va chạm khóa sort y hệt trước fix.
     c = _sig("ts_delta(close, 20)", np.random.default_rng(3).normal(size=200), 0.1)
     all_sigs = [a, b, c]
     combined_expr = build_combined_expression([a.expr, b.expr]).expr
