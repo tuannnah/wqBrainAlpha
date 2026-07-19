@@ -1405,20 +1405,24 @@ def build_closed_loop(
             presim_cap=max_ideas,
         )
     # WS3 T3.1: frontier/fundamental/hypothesis (field NGOÀI panel local, cùng đi thẳng
-    # `_sim_direct` như alt-data qua `local_usable(...)==False`) — lọc known_fields (cùng guard
-    # RC1/RC2 dùng cho AltDataIdeaSource) rồi avoided_hashes (không nạp lại core đã Brain-sim
-    # phiên trước) TRƯỚC khi đóng gói thành `ShortlistCandidate` cho `ClosedLoop.frontier_
-    # reserve` — origin="alt_data" để refiner nhận diện + route giống hệt alt-data thật.
+    # `_sim_direct` như alt-data qua `local_usable(...)==False`) — lọc verified_fields rồi
+    # known_fields (cùng guard RC1/RC2 dùng cho AltDataIdeaSource) rồi avoided_hashes (không
+    # nạp lại core đã Brain-sim phiên trước) TRƯỚC khi đóng gói thành `ShortlistCandidate` cho
+    # `ClosedLoop.frontier_reserve` — origin="alt_data" để refiner nhận diện + route giống hệt
+    # alt-data thật. THỨ TỰ verified_fields TRƯỚC known_fields khớp đúng thứ tự hiệu lực của
+    # nhánh `direct_cores` (alt-data thật) ở trên: verified_fields lọc TRƯỚC (build_closed_loop,
+    # ngay khi vừa gom cores) rồi known_fields lọc SAU (bên trong constructor AltDataIdeaSource)
+    # — Minor #3 review: 2 nhánh trước đây áp 2 filter NGƯỢC thứ tự nhau (không đổi kết quả vì
+    # cả hai đều là lọc-giao độc lập, nhưng gây khó đọc/không nhất quán khi review).
     _registry_for_reserve = registry if registry is not None else default_registry()
     frontier_pool_cores: tuple[str, ...] = _gather_direct_cores(
         False, include_fundamental, include_hypothesis, include_frontier,
     )
-    frontier_pool_cores = _filter_known_fields(
-        frontier_pool_cores, known_fields, _registry_for_reserve,
-    )
-    # WS3 T3.3 (cardinal rule #1): cùng guard verified_fields áp cho reserve non-PV.
     frontier_pool_cores = filter_seeds_by_verified_fields(
         frontier_pool_cores, verified_fields, _registry_for_reserve,
+    )
+    frontier_pool_cores = _filter_known_fields(
+        frontier_pool_cores, known_fields, _registry_for_reserve,
     )
     frontier_pool_cores = tuple(
         _drop_saturated_cores(

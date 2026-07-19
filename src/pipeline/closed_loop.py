@@ -454,12 +454,23 @@ class ClosedLoop:
             _gen_t0 = time.perf_counter()
             batch = self.idea_source.next_batch()
             gen_batch_ms = (time.perf_counter() - _gen_t0) * 1000.0
+            # Sửa Important #1 (review T3, 2026-07-19): CHỈ PEEK (không pop) candidate lấy từ
+            # `frontier_reserve` ở cả 2 nhánh dưới (dùng nốt khi cạn / bổ sung topup) —
+            # `pending_from_reserve` đếm số phần tử Ở CUỐI `batch` còn "nợ" một popleft() thật
+            # sự. Việc rút THẬT khỏi hàng đợi chỉ xảy ra trong for-loop bên dưới, ĐÚNG lúc
+            # candidate đã qua gate `max_ideas` (chắc chắn sẽ được xử lý tiếp) — tránh mất
+            # trắng, không log, không dấu vết khi max_ideas chạm NGAY giữa lúc đang rút (trước
+            # fix: `batch = list(reserve); reserve.clear()` xoá NGAY LẬP TỨC, để rồi for-loop
+            # mới phát hiện đã hết ngân sách và trả về mà chưa từng xử lý candidate đó).
+            pending_from_reserve = 0
+            used_drain_khi_can = False
             if not batch and self.frontier_reserve:
                 # T3.1: idea_source cạn NHƯNG hàng đợi non-PV còn — dùng NỐT thay vì dừng
                 # ngay/reseed (đúng "không chặn batch": còn gì thì dùng hết, kể cả khi idea_
-                # source chính đã hết ý tưởng của riêng nó).
+                # source chính đã hết ý tưởng của riêng nó). PEEK toàn bộ — xem comment trên.
                 batch = list(self.frontier_reserve)
-                self.frontier_reserve.clear()
+                pending_from_reserve = len(batch)
+                used_drain_khi_can = True
                 logger.info(
                     "🌐 idea_source cạn — dùng nốt {} candidate non-PV còn lại trong reserve.",
                     len(batch),
@@ -490,7 +501,9 @@ class ClosedLoop:
             vua_reseed = False
             # WS3 T3.1/T3.2: sàn quota đa dạng mỗi batch — CHỈ áp dụng khi có cả reserve LẪN
             # family_fn (không biết family thì không thể phân biệt PV/non-PV, thà bỏ qua còn
-            # hơn đoán sai và tiêu hao reserve vô ích).
+            # hơn đoán sai và tiêu hao reserve vô ích). T3.2 (xoay theo bão hoà) chạy TRƯỚC,
+            # kể cả khi nhánh "dùng nốt" ở trên vừa peek — thứ tự trong reserve vẫn quyết định
+            # candidate nào được for-loop chạm tới TRƯỚC nếu max_ideas cắt ngang giữa chừng.
             if self.frontier_reserve and self.family_fn is not None:
                 # T3.2: xoay reserve theo độ bão hoà family trong pool (đọc qua repository)
                 # TRƯỚC khi bổ sung — family đang chiếm nhiều pool bị đẩy xuống cuối, batch kế
@@ -504,27 +517,41 @@ class ClosedLoop:
                         self.frontier_reserve, self.family_fn, family_share,
                         FRONTIER_SATURATION_K,
                     )
-                non_pv = sum(
-                    1 for c in batch if self.family_fn(c.expr) not in _PV_FAMILY_LABELS
-                )
-                topup = compute_frontier_topup(
-                    len(batch), non_pv, FRONTIER_MIN_FRACTION, len(self.frontier_reserve),
-                )
-                if topup > 0:
-                    added = [self.frontier_reserve.popleft() for _ in range(topup)]
-                    batch = list(batch) + added
-                    logger.info(
-                        "🌐 Sàn quota đa dạng: bổ sung {} candidate non-PV từ reserve "
-                        "(còn lại {}).", topup, len(self.frontier_reserve),
+                # T3.1: chỉ topup khi nhánh "dùng nốt" (đã lấy TOÀN BỘ reserve) chưa chạy —
+                # tránh cộng dồn 2 nguồn cùng lúc.
+                if not used_drain_khi_can:
+                    non_pv = sum(
+                        1 for c in batch if self.family_fn(c.expr) not in _PV_FAMILY_LABELS
                     )
+                    topup = compute_frontier_topup(
+                        len(batch), non_pv, FRONTIER_MIN_FRACTION, len(self.frontier_reserve),
+                    )
+                    if topup > 0:
+                        # PEEK (không pop) — xem comment "Sửa Important #1" ở đầu vòng lặp.
+                        added = list(self.frontier_reserve)[:topup]
+                        batch = list(batch) + added
+                        pending_from_reserve += topup
+                        logger.info(
+                            "🌐 Sàn quota đa dạng: bổ sung {} candidate non-PV từ reserve "
+                            "(sẽ rút thật khi tới lượt xử lý).", topup,
+                        )
             # Chi phí sinh (GP/decorrelate) là của CẢ batch; phân bổ đều cho mỗi ứng viên để
             # điền gen_ms (refiner không biết chi phí này). Xấp xỉ đủ tốt cho funnel timing.
             gen_ms_each = gen_batch_ms / len(batch)
             logger.info("📦 Batch: {} ứng viên qua sàng lọc/decorrelate.", len(batch))
-            for cand in batch:
+            # Vị trí (chỉ số) TỪ ĐÂU trong `batch` là candidate "nợ" một popleft() thật sự —
+            # luôn nằm ở ĐUÔI batch (nhánh dùng-nốt/topup ở trên luôn APPEND vào cuối).
+            _reserve_start_idx = len(batch) - pending_from_reserve
+            for _idx, cand in enumerate(batch):
                 if self.max_ideas is not None and ideas_tried >= self.max_ideas:
                     logger.info("Đạt trần max_ideas={} — dừng.", self.max_ideas)
                     return _report("no_more_ideas")
+                if pending_from_reserve > 0 and _idx >= _reserve_start_idx:
+                    # Đã qua gate max_ideas ở trên -> XÁC NHẬN candidate này sẽ được xử lý
+                    # tiếp (dedup/family-đóng có thể vẫn loại nó, nhưng đó là tiêu thụ CÓ CHỦ
+                    # Ý + có log, khác hẳn mất trắng vì cắt ngang) -> rút THẬT khỏi hàng đợi
+                    # bây giờ (không rút sớm hơn — đó chính là bug Important #1).
+                    self.frontier_reserve.popleft()
                 key = self.dedup_key_fn(cand.expr)
                 if key in seen:
                     logger.info("↩︎ Bỏ ý tưởng trùng phiên/avoid-list: {}", _short(cand.expr))

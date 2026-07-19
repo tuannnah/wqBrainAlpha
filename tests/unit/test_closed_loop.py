@@ -992,3 +992,31 @@ def test_closed_loop_seed_rotation_uu_tien_family_it_trong_pool(repo) -> None:  
                       family_fn=family_fn, frontier_reserve=reserve, max_ideas=2)
     loop.run()
     assert refiner.calls == ["pv0", "fund_seed"]
+    # Important #1 (review T3): pv_seed KHÔNG được refine (max_ideas=2 đã chạm) NHƯNG cũng
+    # KHÔNG được mất — vẫn còn nguyên trong frontier_reserve cho batch/phiên sau.
+    assert [c.expr for c in loop.frontier_reserve] == ["pv_seed"]
+
+
+# --- Important #1 (review T3.1/T3.2, 2026-07-19): max_ideas cắt ĐÚNG lúc reserve đang được
+# rút (topup hoặc "dùng nốt khi idea_source cạn") không được làm MẤT item — item chưa kịp xử
+# lý phải còn nguyên trong frontier_reserve, không bị pop trước khi for-loop XÁC NHẬN sẽ xử lý
+# (trước fix: `batch = list(self.frontier_reserve); self.frontier_reserve.clear()` xoá NGAY,
+# rồi for-loop mới check max_ideas -> mất trắng, không log, không dấu vết).
+
+
+def test_closed_loop_frontier_reserve_khong_mat_khi_max_ideas_cat_ngang(repo) -> None:  # noqa: ANN001
+    """Batch đầu toàn PV (topup rút 1 non-PV) đúng bằng max_ideas=2 -> vòng batch KẾ (idea_
+    source đã cạn) rơi vào nhánh "dùng nốt reserve" nhưng max_ideas đã chạm NGAY candidate đầu
+    -> candidate đó (nonpv1) phải CÒN NGUYÊN trong frontier_reserve, không mất."""
+    src = _FakeIdeaSource([[_cand("pv0")]])
+    reserve = [_cand("nonpv0", origin="alt_data"), _cand("nonpv1", origin="alt_data")]
+    refiner = _FakeRefiner({})
+
+    def family_fn(expr: str) -> str:
+        return "fundamental" if expr.startswith("nonpv") else "pv_reversal"
+
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=family_fn, frontier_reserve=reserve, max_ideas=2)
+    loop.run()
+    assert refiner.calls == ["pv0", "nonpv0"]
+    assert [c.expr for c in loop.frontier_reserve] == ["nonpv1"]

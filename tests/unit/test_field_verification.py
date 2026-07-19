@@ -99,7 +99,7 @@ def test_group_fields_luon_duoc_coi_la_da_verify() -> None:
     assert {"sector", "industry", "subindustry", "market", "country", "exchange"} <= _GROUP_FIELDS
 
 
-def test_filter_seeds_log_warning_1_dong_khi_loai(caplog) -> None:  # noqa: ANN001
+def test_filter_seeds_log_warning_1_dong_khi_loai() -> None:
     from loguru import logger
 
     msgs: list[str] = []
