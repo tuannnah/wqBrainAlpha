@@ -21,6 +21,7 @@ Xem spec docs/superpowers/specs/2026-07-09-alpha-combiner-design.md.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -205,3 +206,20 @@ def _strip_group_neutralize(expr: str, reg: OperatorRegistry) -> str:
 
 def _depth_of(expr: str, reg: OperatorRegistry) -> int:
     return DepthVisitor().visit(parse(expr, registry=reg))
+
+
+def component_depth_cap(n_max: int, *, max_depth: int = MAX_DEPTH) -> int:
+    """(T1.2) Trần độ sâu MỘT tín hiệu con được phép có để combo N=n_max thành viên còn cơ
+    hội lọt trần `max_depth` sau khi `build_combined_expression` bọc: 1 tầng `rank()` chuẩn
+    hóa + cây `add` cân bằng tốn `ceil(log2(n_max))` tầng cho N lá. Thay hằng số cố định
+    `COMBINER_MAX_COMPONENT_DEPTH` (luôn giả định N=4) bằng trần suy theo N THỰC TẾ combo
+    dùng — N nhỏ hơn thì cây add nông hơn, trần được PHÉP nới ra tương ứng.
+
+    N=4 -> ceil(log2(4))=2 tầng add + 1 rank = 3 -> cap = max_depth-3 (khớp hằng số cũ
+    COMBINER_MAX_COMPONENT_DEPTH=4 khi max_depth=7). N=2 -> ceil(log2(2))=1 tầng add + 1
+    rank = 2 -> cap nới ra max_depth-2=5. Dùng bởi `combine_stage` khi thử lại greedy với
+    n_max nhỏ hơn (4 -> 3 -> 2) lúc N lớn không lọt trần (xem `_n_max_retry_sequence`)."""
+    if n_max < 1:
+        raise ValueError(f"n_max phải >= 1, nhận {n_max}")
+    add_levels = math.ceil(math.log2(n_max)) if n_max > 1 else 0
+    return max_depth - 1 - add_levels

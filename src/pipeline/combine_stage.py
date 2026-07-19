@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from config.thresholds import COMBINER_MAX_COMPONENT_DEPTH, SUBMIT_FITNESS_REF, SUBMIT_SHARPE_REF
+from config.thresholds import SUBMIT_FITNESS_REF, SUBMIT_SHARPE_REF
 from src.generation.combiner import (
     DEFAULT_MAX_COMBOS,
     DEFAULT_N_MAX,
@@ -23,6 +23,7 @@ from src.generation.combiner import (
     SubSignal,
     _depth_of,  # tái dùng đúng phép đo depth combiner dùng nội bộ (DepthVisitor)
     build_combined_expression,
+    component_depth_cap,  # T1.2: trần component ĐỘNG theo N thay hằng số cố định
     select_decorrelated_combos,
 )
 from src.lang.registry import OperatorRegistry, default_registry
@@ -54,6 +55,17 @@ def _submit_score(metrics: object) -> float:
 def _bump(drop_stats: dict[str, int] | None, key: str) -> None:
     if drop_stats is not None:
         drop_stats[key] = drop_stats.get(key, 0) + 1
+
+
+def _n_max_retry_sequence(n_max: int, n_min: int) -> list[int]:
+    """(T1.2) Dãy N thử giảm dần khi combo N=n_max không lọt trần: n_max, n_max-1, ..., n_min
+    — thử lại TOÀN BỘ greedy (`select_decorrelated_combos`) với N nhỏ hơn NGAY TỪ ĐẦU, chứ
+    không chỉ bỏ tín hiệu điểm thấp nhất như vòng lặp nội bộ cũ của `build_combined_expression`
+    (vòng đó vẫn giữ nguyên làm phòng vệ thứ hai, không xung đột). N=4 (mặc định) -> [4, 3, 2]
+    đúng thứ tự nêu trong task-1-brief.md."""
+    if n_max <= n_min:
+        return [n_max]
+    return list(range(n_max, n_min - 1, -1))
 
 
 def combine_stage(
@@ -93,58 +105,77 @@ def combine_stage(
     "greedy_empty" (0 combo thô sau greedy, thường vì < n_min tín hiệu đủ shallow/ít tương
     quan), "depth" (build_combined_expression không lọt trần), "gate" (verdict fail — vd
     self_corr pool), "not_better" (điểm-nộp combo không vượt thành phần mạnh nhất). Để mặc
-    định None nếu caller không cần chẩn đoán (không tốn gì thêm)."""
+    định None nếu caller không cần chẩn đoán (không tốn gì thêm).
+
+    (T1.2) Trần component KHÔNG còn là hằng số cố định `COMBINER_MAX_COMPONENT_DEPTH`: mỗi
+    lần thử được suy ĐỘNG qua `component_depth_cap(attempt_n_max)` — N nhỏ hơn thì cây add
+    nông hơn, trần được nới ra tương ứng. Nếu greedy rỗng HOẶC mọi combo đều chết trần ở
+    n_max yêu cầu, `combine_stage` tự thử lại TOÀN BỘ (lọc pool + greedy) với n_max nhỏ hơn
+    (4 -> 3 -> 2, xem `_n_max_retry_sequence`) thay vì chỉ bỏ tín hiệu điểm thấp nhất như
+    vòng lặp nội bộ cũ của `build_combined_expression` (vẫn giữ nguyên làm phòng vệ thứ hai).
+    Dừng thử ngay khi N nào đó dựng được >= 1 combo (không cần N càng nhỏ càng tốt, chỉ cần
+    thoát khỏi bức tường độ sâu)."""
     reg = registry or default_registry()
-    # Fix 3 (Task 2): loại tín hiệu quá sâu NGAY TRƯỚC greedy — component depth >
-    # COMBINER_MAX_COMPONENT_DEPTH chắc chắn vượt trần sau khi build_combined_expression bọc
-    # rank+add, đo được 3/5 rồi 2/5 combo chết ở tầng dựng biểu thức (diag 20260712/20260713)
-    # vì greedy chọn nhầm seed quá sâu trước khi biết nó sẽ hỏng. Không đụng `signals` gốc
-    # (score_fn_factory Fix 2 vẫn cần TOÀN BỘ signals để dựng pool "ngoài combo").
-    shallow_signals = [s for s in signals if _depth_of(s.expr, reg) <= COMBINER_MAX_COMPONENT_DEPTH]
-    combos = select_decorrelated_combos(
-        shallow_signals, tau=tau, n_min=n_min, n_max=n_max, max_combos=max_combos
-    )
-    if not combos:
-        _bump(drop_stats, "greedy_empty")
-        return []
     depth_kw = {} if max_depth is None else {"max_depth": max_depth}
     out: list[ShortlistCandidate] = []
-    for combo in combos:
-        built = build_combined_expression(
-            [s.expr for s in combo], registry=reg, **depth_kw
+    for attempt_n_max in _n_max_retry_sequence(n_max, n_min):
+        # (T1.2) Loại tín hiệu quá sâu NGAY TRƯỚC greedy — component depth > cap của N đang
+        # thử chắc chắn vượt trần sau khi build_combined_expression bọc rank+add, đo được
+        # 3/5 rồi 2/5 combo chết ở tầng dựng biểu thức (diag 20260712/20260713) vì greedy
+        # chọn nhầm seed quá sâu trước khi biết nó sẽ hỏng. Không đụng `signals` gốc
+        # (score_fn_factory Fix 2 vẫn cần TOÀN BỘ signals để dựng pool "ngoài combo").
+        cap = component_depth_cap(attempt_n_max)
+        shallow_signals = [s for s in signals if _depth_of(s.expr, reg) <= cap]
+        combos = select_decorrelated_combos(
+            shallow_signals, tau=tau, n_min=n_min, n_max=attempt_n_max, max_combos=max_combos,
+            max_component_depth=cap, registry=reg,
         )
-        if built is None:
-            _bump(drop_stats, "depth")
+        if not combos:
+            _bump(drop_stats, "greedy_empty")
             continue
-        if score_fn_factory is not None:
-            # Finding #3 (review): loại theo CHUỖI expr, không phải id() — `signals` có thể
-            # chứa CÙNG một expr 2 bản (vd 1 bản "run" phiên hiện tại + 1 bản "db" nạp lại từ
-            # kho, khác object/id). Lọc bằng id() để lọt bản sao vào pool "others" dù expr đã
-            # nằm trong combo -> pool tự-so với chính combo (|rho|≈1) -> gate giết oan combo
-            # (đúng loại tự-so Fix 2 phải khử).
-            combo_exprs = {s.expr for s in combo}
-            others = [s for s in signals if s.expr not in combo_exprs]
-            local_score_fn = score_fn_factory(others)
-        else:
-            local_score_fn = score_fn
-        scored = local_score_fn(built.expr)
-        if not scored.verdict.passed:  # type: ignore[attr-defined]
-            _bump(drop_stats, "gate")
-            continue
-        best_component = max(
-            (_submit_score(local_score_fn(e).metrics) for e in built.sub_exprs),  # type: ignore[attr-defined]
-            default=float("-inf"),
-        )
-        if _submit_score(scored.metrics) <= best_component:  # type: ignore[attr-defined]
-            _bump(drop_stats, "not_better")
-            continue
-        out.append(
-            ShortlistCandidate(
-                expr=built.expr,
-                metrics=scored.metrics,  # type: ignore[arg-type]
-                pnl=scored.pnl,  # type: ignore[arg-type]
-                dates=scored.dates,  # type: ignore[arg-type]
-                origin="combiner",
+        produced = False
+        for combo in combos:
+            built = build_combined_expression(
+                [s.expr for s in combo], registry=reg, **depth_kw
             )
-        )
+            if built is None:
+                _bump(drop_stats, "depth")
+                continue
+            produced = True
+            if score_fn_factory is not None:
+                # Finding #3 (review): loại theo CHUỖI expr, không phải id() — `signals` có thể
+                # chứa CÙNG một expr 2 bản (vd 1 bản "run" phiên hiện tại + 1 bản "db" nạp lại từ
+                # kho, khác object/id). Lọc bằng id() để lọt bản sao vào pool "others" dù expr đã
+                # nằm trong combo -> pool tự-so với chính combo (|rho|≈1) -> gate giết oan combo
+                # (đúng loại tự-so Fix 2 phải khử).
+                combo_exprs = {s.expr for s in combo}
+                others = [s for s in signals if s.expr not in combo_exprs]
+                local_score_fn = score_fn_factory(others)
+            else:
+                local_score_fn = score_fn
+            scored = local_score_fn(built.expr)
+            if not scored.verdict.passed:  # type: ignore[attr-defined]
+                _bump(drop_stats, "gate")
+                continue
+            best_component = max(
+                (_submit_score(local_score_fn(e).metrics) for e in built.sub_exprs),  # type: ignore[attr-defined]
+                default=float("-inf"),
+            )
+            if _submit_score(scored.metrics) <= best_component:  # type: ignore[attr-defined]
+                _bump(drop_stats, "not_better")
+                continue
+            out.append(
+                ShortlistCandidate(
+                    expr=built.expr,
+                    metrics=scored.metrics,  # type: ignore[arg-type]
+                    pnl=scored.pnl,  # type: ignore[arg-type]
+                    dates=scored.dates,  # type: ignore[arg-type]
+                    origin="combiner",
+                )
+            )
+        if produced:
+            # (T1.2) Đã vượt bức tường độ sâu ở N này (>= 1 combo build được, bất kể sau đó
+            # có qua gate/điểm-nộp hay không) -> KHÔNG cần thử N nhỏ hơn nữa. Retry chỉ để
+            # giải quyết vấn đề DEPTH, không phải để cứu combo rớt gate/not_better.
+            break
     return out

@@ -14,6 +14,7 @@ from src.generation.combiner import (
     CombinedAlpha,
     SubSignal,
     build_combined_expression,
+    component_depth_cap,
     select_decorrelated_combos,
 )
 from src.lang.parser import parse
@@ -135,6 +136,22 @@ def test_nhieu_combo_khong_trung_seed():
     assert len(combos) == 2
     seeds = {combos[0][0].expr, combos[1][0].expr}
     assert len(seeds) == 2
+
+
+# ------------------------- component_depth_cap (T1.2) -------------------------
+
+def test_component_depth_cap_suy_dung_theo_n():
+    # N=4 -> ceil(log2(4))=2 tầng add + 1 rank = 3 -> cap = 7-3 = 4 (khớp hằng số cũ
+    # COMBINER_MAX_COMPONENT_DEPTH).
+    assert component_depth_cap(4) == 4
+    # N=3 -> ceil(log2(3))=2 (cùng số tầng add như N=4) -> cap vẫn 4.
+    assert component_depth_cap(3) == 4
+    # N=2 -> ceil(log2(2))=1 -> cap nới ra 5.
+    assert component_depth_cap(2) == 5
+    # N=1 -> không cần cây add, chỉ 1 tầng rank -> cap = max_depth-1.
+    assert component_depth_cap(1) == 6
+    # max_depth tùy biến vẫn theo đúng công thức (không hardcode 7).
+    assert component_depth_cap(4, max_depth=10) == 7
 
 
 # ------------------------- build_combined_expression -------------------------

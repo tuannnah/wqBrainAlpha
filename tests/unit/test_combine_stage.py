@@ -199,6 +199,59 @@ def test_tin_hieu_qua_sau_bi_loai_truoc_greedy():
     assert out[0].expr == combined_expr  # combo dựng từ a,b — "deep" KHÔNG tham gia
 
 
+# ------------------------- T1.2: thử N nhỏ hơn khi N lớn không lọt -------------------------
+# 2 tín hiệu depth=5 KHÔNG lọt cap(n_max=4)=cap(n_max=3)=4 nhưng LỌT cap(n_max=2)=5
+# (component_depth_cap) -- combine_stage phải tự thử lại greedy với n_max nhỏ hơn (4->3->2)
+# thay vì chỉ bỏ tín hiệu điểm thấp cuối trong build_combined_expression.
+
+
+def test_thu_n_max_nho_hon_khi_n_max_lon_khong_lot_tran():
+    rng = np.random.default_rng(7)
+    deep = [
+        _sig(
+            "ts_rank(ts_mean(ts_std_dev(ts_delta(close, 1), 5), 5), 5)",  # depth 5
+            rng.normal(size=200), 1.0,
+        ),
+        _sig(
+            "ts_rank(ts_mean(ts_std_dev(ts_delta(volume, 1), 5), 5), 5)",  # depth 5
+            rng.normal(size=200), 0.9,
+        ),
+    ]
+    combined_expr = build_combined_expression([s.expr for s in deep]).expr
+    score_fn = _scorer({combined_expr: 2.0})
+
+    out = combine_stage(deep, score_fn, tau=0.5, n_min=2, n_max=4, max_combos=1)
+
+    assert len(out) == 1
+    assert out[0].expr == combined_expr
+
+
+def test_drop_stats_dem_greedy_empty_moi_lan_thu_n_max_khong_lot():
+    """2 tín hiệu depth=5 -> greedy_empty ở CẢ n_max=4 lẫn n_max=3 (cap cùng =4), chỉ lọt ở
+    n_max=2 (cap=5) -> drop_stats phải ghi nhận đúng 2 lần greedy_empty trước khi thành công."""
+    rng = np.random.default_rng(7)
+    deep = [
+        _sig(
+            "ts_rank(ts_mean(ts_std_dev(ts_delta(close, 1), 5), 5), 5)",
+            rng.normal(size=200), 1.0,
+        ),
+        _sig(
+            "ts_rank(ts_mean(ts_std_dev(ts_delta(volume, 1), 5), 5), 5)",
+            rng.normal(size=200), 0.9,
+        ),
+    ]
+    combined_expr = build_combined_expression([s.expr for s in deep]).expr
+    score_fn = _scorer({combined_expr: 2.0})
+    stats: dict[str, int] = {}
+
+    out = combine_stage(
+        deep, score_fn, tau=0.5, n_min=2, n_max=4, max_combos=1, drop_stats=stats,
+    )
+
+    assert len(out) == 1
+    assert stats == {"greedy_empty": 2}
+
+
 def test_score_fn_cu_van_dung_khi_khong_co_factory():
     """Tương thích ngược: không truyền score_fn_factory -> dùng score_fn cũ như trước Fix 2."""
     sigs = _two_uncorrelated()
