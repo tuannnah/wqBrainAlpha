@@ -61,6 +61,7 @@ def calibrate(
     from config.thresholds import CALIBRATION_RHO_BAR
     from src.calibration.harness import CalibrationHarness, make_local_scorer
     from src.calibration.loader import load_brain_records
+    from src.calibration.report import calibration_warnings
 
     # Nhập trễ: _setup_logging còn ở main.py (chưa tách riêng, dùng chung cho mọi lệnh
     # CLI) — import trễ trong thân hàm để tránh vòng import main<->migrate.
@@ -109,8 +110,11 @@ def calibrate(
     table = Table(title=f"Calibration report (n={report.n})")
     table.add_column("Chỉ số")
     table.add_column("Giá trị", justify="right")
-    table.add_row("spearman_sharpe (ρ)", f"{report.spearman_sharpe:.4f}")
+    table.add_row("spearman_sharpe (ρ, đầu tàu)", f"{report.spearman_sharpe:.4f}")
     table.add_row("spearman_fitness", f"{report.spearman_fitness:.4f}")
+    # T4.1: trục đo THÊM (không thay spearman_sharpe làm đầu tàu gate) — điểm-nộp
+    # min(sharpe/REF, fitness/REF) có thể lệch dù Sharpe thô khớp hạng Brain.
+    table.add_row("spearman_submit_score", f"{report.spearman_submit_score:.4f}")
     table.add_row("self_corr_agreement", f"{report.self_corr_agreement:.4f}")
     table.add_row("decile_hit_rate", f"{report.decile_hit_rate:.4f}")
     console.print(table)
@@ -118,6 +122,21 @@ def calibrate(
         "[dim]Lưu ý: ρ chỉ hợp lệ nếu mọi alpha trong DB được sim với cùng config "
         "(NONE/decay0/trunc0/delay1) mà local re-score.[/dim]"
     )
+
+    # T4.2: breakdown theo họ nhân tố — CHỈ báo cáo, KHÔNG tự wire vào gate pre-sim production
+    # (xem config.thresholds.calibrated_floor, tham số family/family_coefficients tùy chọn).
+    if report.by_family:
+        family_table = Table(title="Calibration theo họ nhân tố (T4.2, chỉ báo cáo)")
+        family_table.add_column("Họ")
+        family_table.add_column("n", justify="right")
+        family_table.add_column("spearman_sharpe (ρ)", justify="right")
+        family_table.add_column("Hệ số local→Brain", justify="right")
+        for family in sorted(report.by_family):
+            fc = report.by_family[family]
+            family_table.add_row(
+                family, str(fc.n), f"{fc.spearman_sharpe:.4f}", f"{fc.local_to_brain_ratio:.4f}",
+            )
+        console.print(family_table)
 
     rho = report.spearman_sharpe
     if math.isnan(rho):
@@ -134,3 +153,9 @@ def calibrate(
         console.print(
             f"[green]ρ={rho:.3f} ≥ {CALIBRATION_RHO_BAR} — ranking local đáng tin cậy.[/green]"
         )
+
+    # T4.3: cảnh báo n nhỏ / ρ thấp (tổng + theo họ) — CHỈ liệt kê, KHÔNG tự siết/hạ ngưỡng nào
+    # (xem src.calibration.report.calibration_warnings). "Thu thập thêm mẫu" là việc USER chạy
+    # menu-5, ngoài phạm vi lệnh CLI này.
+    for warning in calibration_warnings(report):
+        console.print(f"[yellow]⚠ {warning}[/yellow]")

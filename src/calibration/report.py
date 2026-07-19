@@ -16,7 +16,10 @@ gate pre-sim production (xem `config.thresholds.calibrated_floor`, tham số `fa
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
+
+from config.thresholds import CALIBRATION_MIN_SAMPLE_N, CALIBRATION_RHO_BAR
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,3 +42,53 @@ class CalibrationReport:
     decile_hit_rate: float              # của top-decile Brain, bao nhiêu local cũng top-decile
     by_year: dict[int, float]           # spearman_sharpe theo năm (regime robustness)
     by_family: dict[str, FamilyCalibration] = field(default_factory=dict)  # T4.2, mặc định rỗng
+
+
+def _rho_warning(label: str, rho: float) -> str | None:
+    """1 dòng cảnh báo cho một trục ρ (KHÔNG áp n nhỏ — chỗ gọi tự kiểm n riêng trước)."""
+    if math.isnan(rho):
+        return f"{label} không xác định (NaN) — thiếu dữ liệu để tính ρ."
+    if rho < CALIBRATION_RHO_BAR:
+        return (
+            f"{label}={rho:.3f} < CALIBRATION_RHO_BAR={CALIBRATION_RHO_BAR} — "
+            "KHÔNG hạ floor/ngưỡng, chỉ báo cáo."
+        )
+    return None
+
+
+def calibration_warnings(report: CalibrationReport) -> list[str]:
+    """Sinh danh sách cảnh báo TIẾNG VIỆT cho lệnh `calibrate` (T4.3): n nhỏ (<
+    CALIBRATION_MIN_SAMPLE_N -> "ρ chưa đáng tin") và ρ thấp (< CALIBRATION_RHO_BAR ->
+    "KHÔNG hạ floor/ngưỡng, chỉ báo cáo"), cả tổng lẫn theo từng họ (`by_family`). Rỗng khi mọi
+    số liệu khoẻ (n đủ lớn + mọi ρ >= bar).
+
+    KỶ LUẬT (task-4-brief.md): hàm này CHỈ LIỆT KÊ — không tự động hạ/siết bất kỳ ngưỡng/gate
+    nào (CALIBRATION_LOCAL_TO_BRAIN, PRE_SIM_TARGET_BRAIN_SHARPE, CALIBRATION_RHO_BAR...).
+    Quyết định đổi ngưỡng khi có đủ số liệu là của USER, không phải của tool."""
+    warnings: list[str] = []
+
+    if report.n < CALIBRATION_MIN_SAMPLE_N:
+        warnings.append(
+            f"n={report.n} < {CALIBRATION_MIN_SAMPLE_N} — ρ chưa đáng tin (mẫu quá nhỏ)."
+        )
+
+    for label, rho in (
+        ("spearman_sharpe", report.spearman_sharpe),
+        ("spearman_submit_score", report.spearman_submit_score),
+    ):
+        w = _rho_warning(label, rho)
+        if w is not None:
+            warnings.append(w)
+
+    for family in sorted(report.by_family):
+        fc = report.by_family[family]
+        if fc.n < CALIBRATION_MIN_SAMPLE_N:
+            warnings.append(
+                f"family={family}: n={fc.n} < {CALIBRATION_MIN_SAMPLE_N} — ρ chưa đáng tin."
+            )
+            continue
+        w = _rho_warning(f"family={family}: ρ", fc.spearman_sharpe)
+        if w is not None:
+            warnings.append(w)
+
+    return warnings
