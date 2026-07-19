@@ -104,7 +104,10 @@ def test_khong_du_tin_hieu_khong_combo():
 
 def test_score_fn_factory_uu_tien_loai_thanh_vien_combo_khoi_pool():
     a, b = _two_uncorrelated()
-    c = _sig("ts_rank(close, 20)", np.random.default_rng(3).normal(size=200), 0.1)
+    # ts_delta (không phải rank/zscore/ts_rank) để không vô tình thắng bucket "đã chuẩn hóa"
+    # (T1.3) trước a/b dù điểm thấp hơn nhiều -- c ở đây chỉ cần là 1 tín hiệu độc lập điểm
+    # thấp để làm decoy pool, không liên quan gì T1.3.
+    c = _sig("ts_delta(close, 20)", np.random.default_rng(3).normal(size=200), 0.1)
     all_sigs = [a, b, c]
     combined_expr = build_combined_expression([a.expr, b.expr]).expr
 

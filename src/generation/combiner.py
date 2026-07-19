@@ -40,6 +40,10 @@ DEFAULT_N_MIN = 2       # combo phải >= 2 tín hiệu mới có nghĩa
 DEFAULT_N_MAX = 4       # trần số tín hiệu / combo (giữ biểu thức không quá sâu)
 DEFAULT_MAX_COMBOS = 5  # số combo tối đa mỗi run
 
+# (T1.3) Operator gốc coi như ĐÃ chuẩn hóa cross-sectional/bounded [0,1] — _standardize bỏ
+# qua bọc rank() cho các operator này (tiết kiệm đúng 1 tầng độ sâu khi build).
+_ALREADY_STANDARDIZED_OPS = frozenset({"rank", "zscore", "ts_rank"})
+
 
 @dataclass(frozen=True, slots=True)
 class SubSignal:
@@ -87,17 +91,25 @@ def select_decorrelated_combos(
     biểu thức) để chống 'đa dạng giả'. Không sửa đổi `signals` đầu vào.
 
     (T1.1) Xếp theo COMBINABILITY, không phải fitness thô: khóa lexicographic
-    `(depth_bucket_asc, score_desc)` — tín hiệu depth <= `max_component_depth` (bucket 0,
-    "đủ nông, còn cơ hội lọt trần sau khi `build_combined_expression` bọc rank+add") luôn
-    đứng trước tín hiệu sâu hơn (bucket 1, "dễ chết trần"); CHỈ trong CÙNG bucket độ sâu
-    mới so fitness giảm dần. Trước đây `sorted(..., key=score, reverse=True)` chọn đúng
-    các biểu thức GP sâu nhất làm seed (điểm cao nhưng chết trần MAX_DEPTH khi bọc
-    rank+add) — nguyên nhân chính combiner ra ~0 combo (xem Bối cảnh task-1-brief.md)."""
+    `(depth_bucket_asc, standardized_bucket_asc, score_desc)` — tín hiệu depth <=
+    `max_component_depth` (bucket độ sâu 0, "đủ nông, còn cơ hội lọt trần sau khi
+    `build_combined_expression` bọc rank+add") luôn đứng trước tín hiệu sâu hơn (bucket 1,
+    "dễ chết trần"); CHỈ trong CÙNG bucket độ sâu mới xét tiếp. Trước đây
+    `sorted(..., key=score, reverse=True)` chọn đúng các biểu thức GP sâu nhất làm seed
+    (điểm cao nhưng chết trần MAX_DEPTH khi bọc rank+add) — nguyên nhân chính combiner ra
+    ~0 combo (xem Bối cảnh task-1-brief.md).
+
+    (T1.3) Trong CÙNG bucket độ sâu, tín hiệu gốc ĐÃ chuẩn hóa (rank/zscore/ts_rank —
+    `_is_already_standardized`) được ưu tiên trước tín hiệu thô: `_standardize` bỏ qua bọc
+    rank() cho các operator này nên chọn chúng làm thành viên combo tiết kiệm đúng 1 tầng
+    độ sâu khi build, tăng tỉ lệ lọt trần. CHỈ khi cùng bucket độ sâu VÀ cùng trạng thái
+    chuẩn hóa mới so fitness giảm dần."""
     reg = registry or default_registry()
     ranked = sorted(
         signals,
         key=lambda s: (
             0 if _depth_of(s.expr, reg) <= max_component_depth else 1,
+            0 if _is_already_standardized(s.expr, reg) else 1,
             -s.score,
         ),
     )
@@ -161,14 +173,24 @@ def build_combined_expression(
     return None
 
 
-def _standardize(expr: str, reg: OperatorRegistry) -> str:
-    """Bọc rank() để đưa tín hiệu về cùng thang cross-sectional [0,1] (trọng số đều công
-    bằng). Bỏ qua nếu gốc đã là rank/zscore (đã chuẩn hóa) — tiết kiệm ngân sách độ sâu."""
+def _is_already_standardized(expr: str, reg: OperatorRegistry) -> bool:
+    """(T1.3) True nếu node GỐC của expr đã là rank/zscore/ts_rank (`_ALREADY_STANDARDIZED_OPS`)
+    — coi như ĐÃ chuẩn hóa cross-sectional/bounded [0,1], không cần bọc thêm rank() ở
+    `_standardize`. Dùng chung cho cả khâu dựng (tiết kiệm 1 tầng độ sâu) lẫn khóa sort
+    combinability trong `select_decorrelated_combos` (ưu tiên chọn thành viên combo tiết
+    kiệm được tầng này). Parse lỗi -> False (an toàn: vẫn bọc rank() như tín hiệu thô)."""
     try:
         node = parse(expr, registry=reg)
     except ParseError:
-        return f"rank({expr})"
-    if isinstance(node, Call) and node.op in ("rank", "zscore"):
+        return False
+    return isinstance(node, Call) and node.op in _ALREADY_STANDARDIZED_OPS
+
+
+def _standardize(expr: str, reg: OperatorRegistry) -> str:
+    """Bọc rank() để đưa tín hiệu về cùng thang cross-sectional [0,1] (trọng số đều công
+    bằng). Bỏ qua nếu gốc đã là rank/zscore/ts_rank (đã chuẩn hóa/bounded, T1.3 mở rộng
+    thêm ts_rank so với bản gốc chỉ rank/zscore) — tiết kiệm ngân sách độ sâu."""
+    if _is_already_standardized(expr, reg):
         return expr
     return f"rank({expr})"
 

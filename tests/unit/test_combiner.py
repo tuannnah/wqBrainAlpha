@@ -138,6 +138,21 @@ def test_nhieu_combo_khong_trung_seed():
     assert len(seeds) == 2
 
 
+def test_uu_tien_tin_hieu_da_chuan_hoa_cung_bucket_do_sau():
+    """T1.3: cùng bucket độ sâu (đều depth <= cap mặc định) -- bản gốc đã rank() được xếp
+    TRƯỚC bản thô dù điểm THẤP hơn, vì _standardize bỏ qua bọc rank() cho nó -> tiết kiệm
+    đúng 1 tầng độ sâu khi build."""
+    rng = _rng()
+    standardized = _sig("rank(ts_delta(close, 5))", rng.normal(size=200), 0.4)   # đã chuẩn hóa, điểm thấp
+    raw = _sig("ts_delta(volume, 5)", rng.normal(size=200), 0.9)                 # điểm cao hơn, CHƯA chuẩn hóa
+
+    combos = select_decorrelated_combos(
+        [standardized, raw], tau=0.9, n_min=2, n_max=2, max_combos=1,
+    )
+
+    assert [s.expr for s in combos[0]] == [standardized.expr, raw.expr]
+
+
 # ------------------------- component_depth_cap (T1.2) -------------------------
 
 def test_component_depth_cap_suy_dung_theo_n():
