@@ -40,7 +40,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from config.thresholds import COMBINER_MAX_COMPONENT_DEPTH, GP_BEST_COMBINABLE_TOP_K
+from config.thresholds import (
+    COMBINER_MAX_COMPONENT_DEPTH,
+    GP_BEST_COMBINABLE_TOP_K,
+    GP_MAX_CORE_DEPTH,
+)
 from src.backtest.backtester import Backtester
 from src.backtest.config import PortfolioConfig
 from src.backtest.gates import GateEvaluator
@@ -139,7 +143,14 @@ class GPEngine:
     Mọi tham số tinh chỉnh nhận qua keyword-only để gọi rõ ràng; ``data``/``repo``/``config``/
     ``registry`` là phụ thuộc bắt buộc (positional). ``max_depth`` phải <= MAX_DEPTH cấu hình
     trong ``config/thresholds.py`` để không sinh cây vượt trần gate.
-    """
+
+    (T2.2) Mặc định ``max_depth`` là ``GP_MAX_CORE_DEPTH`` (4), KHÔNG phải ``MAX_DEPTH`` (7)
+    như trước Task 2 — mặc định cũ đúng bằng trần gate bare-core (kiểm SAU backtest ở
+    ``GateEvaluator``, xem ``src/backtest/gates.py``) nên GP tự do sinh/biến dị cây sâu tới
+    tận biên gate, không còn dư địa cho 3 tầng wrapper cấu hình cuối
+    (``scale(ts_decay(group_neut(...)))``) lẫn trần combiner (Task 1) — nguồn gốc chính
+    khiến combiner ra ~0 combo (xem task-2-brief.md). Truyền tường minh giá trị khác khi cố
+    ý cần cây sâu hơn (vd một số test cũ dùng max_depth=5/7)."""
 
     def __init__(
         self,
@@ -150,7 +161,7 @@ class GPEngine:
         *,
         pop_size: int = 50,
         n_generations: int = 5,
-        max_depth: int = 7,
+        max_depth: int = GP_MAX_CORE_DEPTH,
         crossover_rate: float = 0.6,
         mutation_rate: float = 0.3,
         seed: int = 42,

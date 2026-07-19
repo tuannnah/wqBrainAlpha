@@ -102,6 +102,19 @@ COMBINER_MAX_COMPONENT_DEPTH: int = 4
 # ~50 cá thể mặc định (`GPEngine.pop_size`).
 GP_BEST_COMBINABLE_TOP_K: int = 10
 
+# Trần độ sâu CORE lúc GP SINH/BIẾN DỊ (T2.2): MAX_DEPTH(7) trừ 3 tầng wrapper
+# `scale(ts_decay(group_neut(...)))` LUÔN cộng thêm ở tầng cấu hình alpha cuối (stage
+# separation B5, ngoài phạm vi tìm kiếm GP) — khớp trần combiner mặc định
+# COMBINER_MAX_COMPONENT_DEPTH ở trên để core GP sinh ra LUÔN có cơ hội được combiner ghép,
+# thay vì chỉ bị `GateEvaluator` (đã có từ trước, kiểm depth<=MAX_DEPTH=7 SAU KHI backtest —
+# xem `src/backtest/gates.py`) phát hiện muộn, tốn cả 1 lượt backtest cho cây chắc chắn quá
+# sâu để combiner dùng được. Là TRẦN MẶC ĐỊNH mới của `GPEngine.max_depth`/
+# `src.gp.variation.crossover`/`subtree_mutation` (trước Task 2 mặc định = MAX_DEPTH = 7,
+# đúng bằng trần gate bare-core nên GP tự do sinh cây sâu tới tận biên gate, không còn dư
+# địa cho wrapper — nguồn gốc chính khiến combiner ra ~0 combo, xem bối cảnh task-2-brief.md).
+# Vẫn có thể override tường minh (vd test cũ dùng max_depth=7) khi cố ý cần cây sâu hơn.
+GP_MAX_CORE_DEPTH: int = MAX_DEPTH - 3
+
 # --- Điểm-nộp (submission score, Task 2 Fix 4) ---
 # combine_stage so combo với thành phần mạnh nhất bằng điểm-nộp
 # min(sharpe/SUBMIT_SHARPE_REF, fitness/SUBMIT_FITNESS_REF) thay vì so fitness thô — buộc

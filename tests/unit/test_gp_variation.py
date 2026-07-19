@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from config.thresholds import GP_MAX_CORE_DEPTH
 from src.gp.individual import Individual
 from src.gp.variation import (
     crossover,
@@ -18,6 +19,14 @@ from src.lang.registry import ArgKind, OpCategory, OperatorRegistry, OperatorSpe
 from src.lang.visitors import ComplexityVisitor, DepthVisitor, Serializer
 
 _FIELDS = ("close", "volume", "returns")
+
+
+def _nested_rank(n: int, field: str = "close") -> Node:
+    """Cây ``rank`` lồng n lớp quanh ``Field(field)`` -> depth = n + 1."""
+    node: Node = Field(field)
+    for _ in range(n):
+        node = Call(op="rank", args=(node,))
+    return node
 
 
 def _check_panel_invariant(node: Node, registry: OperatorRegistry) -> None:
@@ -56,6 +65,22 @@ def test_crossover_is_deterministic_for_same_seed():
     assert Serializer().visit(b1) == Serializer().visit(b2)
 
 
+def test_crossover_default_max_depth_la_gp_max_core_depth_khong_phai_max_depth_7():
+    """(T2.2) KHÔNG truyền ``max_depth`` -> hàm phải dùng mặc định GP_MAX_CORE_DEPTH (4),
+    KHÔNG còn MAX_DEPTH (7) như trước Task 2. Với 2 cha mẹ đã ở đúng trần GP_MAX_CORE_DEPTH,
+    tráo điểm gần lá của cây này với điểm gần gốc (cây con đầy đủ) của cây kia CÓ THỂ tạo
+    kết quả sâu tới tận MAX_DEPTH=7 nếu mặc định còn lỏng — mặc định mới phải chặn NGAY LÚC
+    SINH (reject-resample của chính `crossover`), không để lọt qua rồi bị GateEvaluator vứt
+    sau cả một lượt backtest."""
+    a, b = _nested_rank(GP_MAX_CORE_DEPTH - 1), _nested_rank(GP_MAX_CORE_DEPTH - 1)  # depth = GP_MAX_CORE_DEPTH
+    max_seen = 0
+    for seed in range(300):
+        rng = np.random.default_rng(seed)
+        ca, cb = crossover(a, b, rng)  # KHÔNG truyền max_depth -> mặc định hàm
+        max_seen = max(max_seen, DepthVisitor().visit(ca), DepthVisitor().visit(cb))
+    assert max_seen <= GP_MAX_CORE_DEPTH
+
+
 def test_point_mutation_changes_something_or_no_op_safely():
     rng = np.random.default_rng(1)
     registry = default_registry()
@@ -76,6 +101,21 @@ def test_subtree_mutation_respects_max_depth():
     registry = default_registry()
     mutated = subtree_mutation(_tree_a(), registry, rng, fields=_FIELDS, max_depth=5)
     assert DepthVisitor().visit(mutated) <= 5
+
+
+def test_subtree_mutation_default_max_depth_la_gp_max_core_depth_khong_phai_max_depth_7():
+    """(T2.2) Tương tự crossover: KHÔNG truyền ``max_depth`` phải dùng mặc định
+    GP_MAX_CORE_DEPTH (4). Cây cha ở đúng trần GP_MAX_CORE_DEPTH; mutate tại vị trí gần lá
+    (budget còn lại nhỏ theo mặc định MỚI) thay vì gần gốc (mặc định CŨ MAX_DEPTH=7 cho
+    phép budget lớn hơn nhiều -> cây con thay thế có thể sâu tới 4, đẩy tổng độ sâu lên 7)."""
+    registry = default_registry()
+    tree = _nested_rank(GP_MAX_CORE_DEPTH - 1)  # depth = GP_MAX_CORE_DEPTH
+    max_seen = 0
+    for seed in range(300):
+        rng = np.random.default_rng(seed)
+        mutated = subtree_mutation(tree, registry, rng, fields=_FIELDS)  # mặc định hàm
+        max_seen = max(max_seen, DepthVisitor().visit(mutated))
+    assert max_seen <= GP_MAX_CORE_DEPTH
 
 
 def test_hoist_mutation_shrinks_or_keeps_tree_depth():

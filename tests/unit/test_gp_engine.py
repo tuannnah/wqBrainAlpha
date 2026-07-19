@@ -382,6 +382,21 @@ def test_engine_max_depth_enforced(small_panel, repo, cfg) -> None:  # noqa: ANN
         assert ind.expr.accept(DepthVisitor()) <= 5
 
 
+def test_engine_default_max_depth_la_gp_max_core_depth(small_panel, repo, cfg) -> None:  # noqa: ANN001
+    """(T2.2) KHÔNG truyền ``max_depth`` -> GPEngine phải dùng mặc định GP_MAX_CORE_DEPTH (4),
+    KHÔNG còn 7 như trước Task 2 — quần thể cuối (init + variation cùng đường mặc định) phải
+    nông sẵn để combiner (Task 1, trần mặc định COMBINER_MAX_COMPONENT_DEPTH=4) ghép được."""
+    from config.thresholds import GP_MAX_CORE_DEPTH
+
+    eng = GPEngine(
+        data=small_panel, repo=repo, config=cfg, registry=default_registry(),
+        pop_size=8, n_generations=2, seed=42,  # KHÔNG truyền max_depth -> mặc định hàm
+    )
+    result = eng.run()
+    for ind in result.final_population:
+        assert ind.expr.accept(DepthVisitor()) <= GP_MAX_CORE_DEPTH
+
+
 def test_engine_deterministic_for_same_seed(small_panel, cfg) -> None:  # noqa: ANN001
     """Hai GPEngine cùng config + cùng seed (DB sạch riêng) → quần thể cuối có cùng
     canonical_hash theo thứ tự (determinism R8)."""

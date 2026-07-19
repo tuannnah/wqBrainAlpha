@@ -234,3 +234,36 @@ def test_field_groups_none_giu_hanh_vi_cu():
     cu = [_random_leaf(rng1, f).name for _ in range(50)]
     moi = [_random_leaf(rng2, f, field_groups=None).name for _ in range(50)]
     assert cu == moi
+
+
+# --- T2.2: khóa hành vi với GP_MAX_CORE_DEPTH (trần core GP mới, xem config/thresholds.py) ---
+#
+# XÁC MINH (không phải RED->GREEN mới): random_tree/_bounded_random_tree/ramped_half_and_half
+# CẤU TRÚC ĐÃ đảm bảo depth <= tham số truyền vào (đệ quy giảm dần đúng 1 mỗi tầng, không
+# bao giờ vượt) từ trước Task 2 -- không có lỗi nào ở init.py cần sửa cho T2.2. Trần bị lỏng
+# TRƯỚC Task 2 nằm ở GIÁ TRỊ mặc định truyền VÀO các hàm này (GPEngine.max_depth mặc định = 7
+# = MAX_DEPTH, xem T2.2 ở engine.py/variation.py), KHÔNG phải ở init.py. Test dưới đây khóa
+# (regression-lock) hành vi ĐÚNG đã có, buộc tường minh vào hằng số GP_MAX_CORE_DEPTH thay vì
+# số 4 rời rạc — nếu ai đó nới GP_MAX_CORE_DEPTH mà quên nối dây, test này vẫn phản ánh đúng
+# giá trị mới (không phải hardcode).
+def test_ramped_half_and_half_ton_trong_gp_max_core_depth_khi_duoc_truyen():
+    from config.thresholds import GP_MAX_CORE_DEPTH
+
+    rng = np.random.default_rng(15)
+    registry = default_registry()
+    trees = ramped_half_and_half(
+        registry, rng, n=20, min_depth=1, max_depth=GP_MAX_CORE_DEPTH, fields=_FIELDS,
+    )
+    assert all(DepthVisitor().visit(t) <= GP_MAX_CORE_DEPTH for t in trees)
+
+
+def test_init_population_ton_trong_gp_max_core_depth_khi_duoc_truyen():
+    from config.thresholds import GP_MAX_CORE_DEPTH
+
+    rng = np.random.default_rng(16)
+    registry = default_registry()
+    pop = init_population(
+        registry, rng, population_size=15, seed_cores=[], fields=_FIELDS,
+        max_depth=GP_MAX_CORE_DEPTH,
+    )
+    assert all(ind.depth() <= GP_MAX_CORE_DEPTH for ind in pop)
