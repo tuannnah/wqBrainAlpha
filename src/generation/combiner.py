@@ -26,7 +26,7 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-from config.thresholds import MAX_DEPTH
+from config.thresholds import COMBINER_MAX_COMPONENT_DEPTH, MAX_DEPTH
 from src.backtest.pool_corr import pairwise_abs_rho
 from src.lang.ast import Call
 from src.lang.parser import ParseError, parse
@@ -76,13 +76,30 @@ def select_decorrelated_combos(
     n_min: int = DEFAULT_N_MIN,
     n_max: int = DEFAULT_N_MAX,
     max_combos: int = DEFAULT_MAX_COMBOS,
+    max_component_depth: int = COMBINER_MAX_COMPONENT_DEPTH,
+    registry: OperatorRegistry | None = None,
 ) -> list[list[SubSignal]]:
-    """Greedy khử tương quan: mỗi combo bắt đầu từ tín hiệu điểm cao nhất còn lại (seed),
-    lần lượt thêm tín hiệu tiếp theo CHỈ KHI |rho(PnL)| với MỌI thành viên đã chọn < tau,
-    dừng ở n_max. Combo >= n_min mới xuất. Bỏ các tín hiệu đã dùng rồi lặp để tạo thêm
-    combo (tối đa max_combos). Tương quan đo trên PnL local (không phải văn bản biểu thức)
-    để chống 'đa dạng giả'. Không sửa đổi `signals` đầu vào."""
-    ranked = sorted(signals, key=lambda s: s.score, reverse=True)
+    """Greedy khử tương quan: mỗi combo bắt đầu từ tín hiệu ĐỨNG ĐẦU danh sách đã xếp còn
+    lại (seed), lần lượt thêm tín hiệu tiếp theo CHỈ KHI |rho(PnL)| với MỌI thành viên đã
+    chọn < tau, dừng ở n_max. Combo >= n_min mới xuất. Bỏ các tín hiệu đã dùng rồi lặp để
+    tạo thêm combo (tối đa max_combos). Tương quan đo trên PnL local (không phải văn bản
+    biểu thức) để chống 'đa dạng giả'. Không sửa đổi `signals` đầu vào.
+
+    (T1.1) Xếp theo COMBINABILITY, không phải fitness thô: khóa lexicographic
+    `(depth_bucket_asc, score_desc)` — tín hiệu depth <= `max_component_depth` (bucket 0,
+    "đủ nông, còn cơ hội lọt trần sau khi `build_combined_expression` bọc rank+add") luôn
+    đứng trước tín hiệu sâu hơn (bucket 1, "dễ chết trần"); CHỈ trong CÙNG bucket độ sâu
+    mới so fitness giảm dần. Trước đây `sorted(..., key=score, reverse=True)` chọn đúng
+    các biểu thức GP sâu nhất làm seed (điểm cao nhưng chết trần MAX_DEPTH khi bọc
+    rank+add) — nguyên nhân chính combiner ra ~0 combo (xem Bối cảnh task-1-brief.md)."""
+    reg = registry or default_registry()
+    ranked = sorted(
+        signals,
+        key=lambda s: (
+            0 if _depth_of(s.expr, reg) <= max_component_depth else 1,
+            -s.score,
+        ),
+    )
     used: set[int] = set()  # id() các SubSignal đã dùng
     combos: list[list[SubSignal]] = []
 

@@ -105,6 +105,26 @@ def test_pool_rong_hoac_mot_phan_tu_khong_combo():
     assert select_decorrelated_combos(one, tau=0.3, n_min=2, n_max=4, max_combos=5) == []
 
 
+def test_uu_tien_combinability_khong_phai_fitness_tho():
+    """T1.1: 1 tín hiệu depth=6 điểm CAO NHẤT (monster GP) vs 2 tín hiệu depth=2 điểm vừa
+    -- combo phải chọn 2 tín hiệu NÔNG, monster KHÔNG được chọn dù điểm cao nhất (đúng kịch
+    bản khiến greedy cũ luôn chọn nhầm biểu thức chết trần làm seed)."""
+    rng = _rng()
+    monster = _sig(
+        "rank(ts_rank(ts_mean(ts_std_dev(ts_delta(close, 1), 5), 5), 5))",  # depth 6
+        rng.normal(size=200), 100.0,
+    )
+    a = _sig("ts_delta(close, 5)", rng.normal(size=200), 0.6)   # depth 2
+    b = _sig("ts_delta(close, 10)", rng.normal(size=200), 0.5)  # depth 2
+
+    combos = select_decorrelated_combos([monster, a, b], tau=0.9, n_min=2, n_max=2, max_combos=5)
+
+    assert len(combos) >= 1
+    exprs = [s.expr for s in combos[0]]
+    assert monster.expr not in exprs             # monster KHÔNG được chọn dù điểm cao nhất
+    assert set(exprs) == {a.expr, b.expr}         # combo chỉ gồm 2 tín hiệu nông
+
+
 def test_nhieu_combo_khong_trung_seed():
     rng = _rng()
     # 4 tín hiệu đôi một độc lập -> combo1 lấy 4; hết ứng viên -> chỉ 1 combo.
