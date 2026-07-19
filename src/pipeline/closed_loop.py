@@ -465,6 +465,25 @@ class ClosedLoop:
             _gen_t0 = time.perf_counter()
             batch = self.idea_source.next_batch()
             gen_batch_ms = (time.perf_counter() - _gen_t0) * 1000.0
+            # Sửa Important MỚI (re-review T3, vòng 2): T3.2 (xoay reserve theo bão hoà pool)
+            # PHẢI chạy TRƯỚC bất kỳ nhánh nào bên dưới PEEK `frontier_reserve` để build batch
+            # (dùng nốt khi cạn / bổ sung topup) — nếu rotate mutate deque SAU khi đã peek,
+            # snapshot `batch` giữ thứ tự CŨ trong khi `popleft()` trễ ở for-loop rút theo VỊ
+            # TRÍ trên deque đã bị xoay: lệch khỏi `cand` đang xử lý -> candidate ĐÃ refine vẫn
+            # có thể còn trong reserve (tồn tại kép) VÀ candidate CHƯA xử lý bị pop nhầm, mất
+            # vĩnh viễn không log (đúng lớp lỗi Important #1 vừa sửa, tái phát qua đường khác).
+            # Rotate 1 LẦN DUY NHẤT ở đây, TRƯỚC mọi peek — cả 2 nhánh dưới nhìn CÙNG một thứ
+            # tự ổn định, và deque KHÔNG bị mutate lại nữa cho tới khi for-loop tự popleft().
+            if self.frontier_reserve and self.family_fn is not None:
+                pool_exprs = _read_pool_exprs(self.repo)
+                if pool_exprs:
+                    family_share = compute_family_pool_share(
+                        [self.family_fn(e) for e in pool_exprs]
+                    )
+                    rotate_reserve_by_saturation(
+                        self.frontier_reserve, self.family_fn, family_share,
+                        FRONTIER_SATURATION_K,
+                    )
             # Sửa Important #1 (review T3, 2026-07-19): CHỈ PEEK (không pop) candidate lấy từ
             # `frontier_reserve` ở cả 2 nhánh dưới (dùng nốt khi cạn / bổ sung topup) —
             # `pending_from_reserve` đếm số phần tử Ở CUỐI `batch` còn "nợ" một popleft() thật
@@ -512,24 +531,13 @@ class ClosedLoop:
                 logger.info("Cạn ý tưởng (batch rỗng) — dừng vòng kín.")
                 return _report("no_more_ideas")
             vua_reseed = False
-            # WS3 T3.1/T3.2: sàn quota đa dạng mỗi batch — CHỈ áp dụng khi có cả reserve LẪN
+            # WS3 T3.1: sàn quota đa dạng mỗi batch — CHỈ áp dụng khi có cả reserve LẪN
             # family_fn (không biết family thì không thể phân biệt PV/non-PV, thà bỏ qua còn
-            # hơn đoán sai và tiêu hao reserve vô ích). T3.2 (xoay theo bão hoà) chạy TRƯỚC,
-            # kể cả khi nhánh "dùng nốt" ở trên vừa peek — thứ tự trong reserve vẫn quyết định
-            # candidate nào được for-loop chạm tới TRƯỚC nếu max_ideas cắt ngang giữa chừng.
+            # hơn đoán sai và tiêu hao reserve vô ích). T3.2 (xoay theo bão hoà) đã chạy Ở TRÊN
+            # (đầu vòng lặp, TRƯỚC nhánh "dùng nốt") — KHÔNG rotate lại ở đây (xem comment
+            # "Sửa Important MỚI" ở đầu vòng lặp: rotate 2 lần trong cùng 1 batch sẽ lại làm
+            # lệch snapshot batch đã peek TRƯỚC nếu nhánh "dùng nốt" đã chạy).
             if self.frontier_reserve and self.family_fn is not None:
-                # T3.2: xoay reserve theo độ bão hoà family trong pool (đọc qua repository)
-                # TRƯỚC khi bổ sung — family đang chiếm nhiều pool bị đẩy xuống cuối, batch kế
-                # ưu tiên rút family orthogonal hơn (tránh tiếp tục đào vùng đã mine).
-                pool_exprs = _read_pool_exprs(self.repo)
-                if pool_exprs:
-                    family_share = compute_family_pool_share(
-                        [self.family_fn(e) for e in pool_exprs]
-                    )
-                    rotate_reserve_by_saturation(
-                        self.frontier_reserve, self.family_fn, family_share,
-                        FRONTIER_SATURATION_K,
-                    )
                 # T3.1: chỉ topup khi nhánh "dùng nốt" (đã lấy TOÀN BỘ reserve) chưa chạy —
                 # tránh cộng dồn 2 nguồn cùng lúc.
                 if not used_drain_khi_can:

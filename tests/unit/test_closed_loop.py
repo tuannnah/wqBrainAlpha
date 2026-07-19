@@ -1080,3 +1080,58 @@ def test_closed_loop_khong_goi_frontier_presim_fn_khi_none(repo) -> None:  # noq
                       frontier_reserve=reserve, max_gp_sims=None)
     report = loop.run()
     assert isinstance(report, ClosedLoopReport)
+
+
+# --- Important MỚI (re-review T3, vòng 2): rotate_reserve_by_saturation mutate deque SAU KHI
+# nhánh "dùng nốt" đã peek `batch` (snapshot thứ tự CŨ) -> popleft() trễ trong for-loop rút
+# theo VỊ TRÍ trên deque đã bị xoay -> lệch khỏi `cand` đang xử lý: candidate ĐÃ refine có thể
+# vẫn còn trong reserve (tồn tại kép) VÀ candidate CHƯA xử lý có thể bị pop nhầm, mất vĩnh viễn
+# không log. Test hiện có không bắt được vì repo luôn rỗng (_read_pool_exprs() -> [] -> rotate
+# không bao giờ chạy). Tái hiện: repo CÓ 2 bản ghi passed cùng family (>FRONTIER_SATURATION_K)
+# để rotate THẬT SỰ đổi thứ tự, + nhánh "dùng nốt" (idea_source rỗng ngay từ đầu) + max_ideas
+# cắt giữa batch.
+
+
+def test_closed_loop_rotate_khong_lam_lech_pop_o_nhanh_dung_not(repo) -> None:  # noqa: ANN001
+    """Pool đã bão hoà family 'pv_reversal' (2 bản ghi passed, 100% > K=0.5) -> rotate đẩy
+    pv_a, pv_b xuống cuối, fund_c lên đầu. Nhánh "dùng nốt" (idea_source rỗng ngay) + max_ideas
+    =2 cắt giữa batch (3 phần tử) -> không candidate nào được mất hoặc tồn tại kép giữa
+    refiner.calls và frontier_reserve."""
+    repo.record_brain_sim("h1", "rank(close)", wq_alpha_id="W1", region="USA",
+                          universe="TOP3000", sharpe=2.0, fitness=1.5, turnover=0.3,
+                          self_corr=0.1, status="passed")
+    repo.record_brain_sim("h2", "rank(volume)", wq_alpha_id="W2", region="USA",
+                          universe="TOP3000", sharpe=2.0, fitness=1.5, turnover=0.3,
+                          self_corr=0.1, status="passed")
+
+    src = _FakeIdeaSource([])  # idea_source rỗng ngay -> nhánh "dùng nốt" kích hoạt từ batch 1
+    reserve = [
+        _cand("pv_a", origin="alt_data"), _cand("pv_b", origin="alt_data"),
+        _cand("fund_c", origin="alt_data"),
+    ]
+
+    def family_fn(expr: str) -> str:
+        if expr in ("rank(close)", "rank(volume)", "pv_a", "pv_b"):
+            return "pv_reversal"
+        return "fundamental"
+
+    refiner = _FakeRefiner({})
+    loop = ClosedLoop(idea_source=src, refiner=refiner, repo=repo,
+                      family_fn=family_fn, frontier_reserve=reserve, max_ideas=2)
+    loop.run()
+
+    processed = set(refiner.calls)
+    remaining = {c.expr for c in loop.frontier_reserve}
+    # Bất biến bắt buộc (mọi cách fix hợp lệ đều phải thoả, không phụ thuộc thứ tự cụ thể):
+    # (a) không mất item nào — hợp của đã-xử-lý và còn-lại phải đủ cả 3.
+    assert processed | remaining == {"pv_a", "pv_b", "fund_c"}
+    # (b) không tồn tại kép — 1 item không thể vừa đã xử lý vừa còn nằm trong reserve.
+    assert processed & remaining == set()
+    # (c) đúng 2 candidate được xử lý (khớp max_ideas=2), đúng 1 còn lại trong reserve.
+    assert len(refiner.calls) == 2
+    assert len(loop.frontier_reserve) == 1
+    # Hành vi CHÍNH XÁC mong đợi sau fix (rotate chạy TRƯỚC khi peek batch "dùng nốt"): batch
+    # được xây từ thứ tự ĐÃ ROTATE (fund_c lên đầu vì family orthogonal, pv_a/pv_b xuống cuối)
+    # -> xử lý fund_c, pv_a trước; pv_b còn lại.
+    assert refiner.calls == ["fund_c", "pv_a"]
+    assert [c.expr for c in loop.frontier_reserve] == ["pv_b"]
