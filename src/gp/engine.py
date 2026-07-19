@@ -312,8 +312,11 @@ class GPEngine:
         complexity = ind.expr.accept(ComplexityVisitor())
         # n_trials=1: chưa theo dõi số lần thử per-cá-thể nên không haircut deflation ở đây;
         # đa dạng quần thể đã do NSGA-II + pool_corr_penalty đảm nhiệm (xem fitness_vec).
+        # depth: T2.3 — complexity_penalty giờ lấy max(node-count, depth-ratio), tái dùng
+        # ``depth`` đã tính ở trên cho gate, không tính lại.
         fv = from_metrics(
-            metrics, complexity=complexity, pool_corr=pool_rho, pop_corr=0.0, n_trials=1,
+            metrics, complexity=complexity, depth=depth, pool_corr=pool_rho, pop_corr=0.0,
+            n_trials=1,
         )
 
         if not verdict.passed:

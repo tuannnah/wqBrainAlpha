@@ -35,7 +35,7 @@ def _fv(sharpe_deflated: float):  # noqa: ANN201
         fitness=1.0, per_year_sharpe={}, weight_concentration=0.0,
     )
     return from_metrics(
-        metrics, complexity=10, pool_corr=0.0, pop_corr=0.0, n_trials=1,
+        metrics, complexity=10, depth=1, pool_corr=0.0, pop_corr=0.0, n_trials=1,
     )
 
 
