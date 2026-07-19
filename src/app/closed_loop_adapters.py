@@ -31,6 +31,7 @@ from src.generation.alt_data_seeds import (
     neutralization_for_expr,
     pp_neutralization_for_expr,
 )
+from src.generation.field_verification import filter_seeds_by_verified_fields
 from src.generation.frontier_seeds import FRONTIER_CORES
 from src.generation.near_miss_variants import NearMissVariantSource
 from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
@@ -1264,6 +1265,7 @@ def build_closed_loop(
     idea_generator: object | None = None, include_hypothesis: bool = True,
     known_fields: "frozenset[str] | set[str] | None" = None,
     max_gp_sims: int | None = 3, include_frontier: bool = True,
+    verified_fields: "frozenset[str] | None" = None,
 ) -> "ClosedLoop":
     """Ráp vòng kín: GPIdeaSource (sinh ý tưởng) + refiner (mặc định RefinementLoopRefiner
     bọc `loop` AI thật; truyền `refiner` tường minh — vd LocalTunerRefiner (Task 4) — để bỏ
@@ -1279,7 +1281,15 @@ def build_closed_loop(
     `max_gp_sims`: trần sim Brain THẬT/phiên riêng cho candidate origin "gp" (Task 3) — GP là
     nguồn nhiễu (2 phiên gần nhất đốt ~10 sim ra toàn Sharpe ≤0.31, calibration ρ=0.308 không
     đủ tin để lọc trước). Mặc định 3; ưu tiên quota còn lại cho curated/alt_data/combiner
-    (không bị cap này). None = không cap (tương thích ngược)."""
+    (không bị cap này). None = không cap (tương thích ngược).
+
+    `verified_fields` (WS3 T3.3, cardinal rule #1): tập field ĐÃ verify LIVE (vd từ
+    `src.generation.field_verification.load_latest_verified_fields(Path("logs"))`, do CLI/
+    main.py load rồi truyền vào — build_closed_loop KHÔNG tự đọc file, giữ hàm test được).
+    Core alt-data/frontier/fundamental/hypothesis dùng field KHÔNG nằm trong tập này bị loại
+    TRƯỚC khi tới AltDataIdeaSource/frontier_reserve (không bao giờ chạm sim), kèm log WARNING.
+    None (mặc định) -> FAIL-OPEN, không lọc gì (tương thích ngược, khớp quyết định T3.3: thiếu
+    bằng chứng verify không nên chặn oan seed thật)."""
     from src.pipeline.closed_loop import CalibrationTracker, ClosedLoop, compute_avoided_hashes
 
     # Dedup key = canonical hash đã fold scale dương (Pha 1.2). Định nghĩa TRƯỚC khi dựng
@@ -1375,6 +1385,11 @@ def build_closed_loop(
     # batch SAU đó (GP/curated) toàn pv_reversal suốt phần còn lại phiên (PROGRESS Session 16)
     # — đây chính là vấn đề T3.1 sửa: rút DẦN từ reserve mỗi batch thay vì dump 1 lần.
     direct_cores: tuple[str, ...] = _gather_direct_cores(include_alt_data, False, False, False)
+    # WS3 T3.3 (cardinal rule #1): loại core dùng field CHƯA verify LIVE trước khi tới
+    # AltDataIdeaSource — verified_fields=None (không bằng chứng) -> fail-open, không lọc gì.
+    direct_cores = filter_seeds_by_verified_fields(
+        direct_cores, verified_fields, registry if registry is not None else default_registry(),
+    )
     if direct_cores:
         idea_source = AltDataIdeaSource(
             fallback=idea_source, cores=direct_cores,
@@ -1400,6 +1415,10 @@ def build_closed_loop(
     )
     frontier_pool_cores = _filter_known_fields(
         frontier_pool_cores, known_fields, _registry_for_reserve,
+    )
+    # WS3 T3.3 (cardinal rule #1): cùng guard verified_fields áp cho reserve non-PV.
+    frontier_pool_cores = filter_seeds_by_verified_fields(
+        frontier_pool_cores, verified_fields, _registry_for_reserve,
     )
     frontier_pool_cores = tuple(
         _drop_saturated_cores(

@@ -605,6 +605,62 @@ def test_build_closed_loop_known_fields_loc_core_thieu_field(small_panel, repo) 
             assert core not in exprs
 
 
+def test_build_closed_loop_verified_fields_loc_seed_chua_verify_live(small_panel, repo) -> None:  # noqa: ANN001
+    """WS3 T3.3: build_closed_loop(verified_fields=...) phải lọc seed dùng field CHƯA có trong
+    bằng chứng verify LIVE — cùng cơ chế `known_fields` nhưng nguồn sự thật khác (JSON verify
+    thay vì catalog cache). value_quality (operating_income/assets/sales_growth) được coi là
+    ĐÃ verify; các core hypothesis khác (anl4_*/days_to_cover/shares_short) thì KHÔNG."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.generation.hypothesis_seeds import HYPOTHESIS_CORES
+    from src.lang.registry import default_registry
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    verified = frozenset({"operating_income", "assets", "sales_growth", "close", "volume"})
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2,
+                             curated_seeds=False, include_alt_data=False,
+                             include_fundamental=False, include_combiner=False,
+                             verified_fields=verified)
+    exprs = [c.expr for c in loop.frontier_reserve]
+    value_quality_core = [e for e in HYPOTHESIS_CORES if "sales_growth" in e][0]
+    assert value_quality_core in exprs
+    for core in HYPOTHESIS_CORES:
+        if core != value_quality_core:
+            assert core not in exprs
+
+
+def test_build_closed_loop_verified_fields_none_khong_loc_gi(small_panel, repo) -> None:  # noqa: ANN001
+    """verified_fields=None (mặc định, không truyền) -> FAIL-OPEN, không lọc gì — tương thích
+    ngược với mọi test/khách gọi hiện có chưa biết tới tham số này."""
+    from src.app.closed_loop_adapters import build_closed_loop
+    from src.backtest.config import Neutralization, PortfolioConfig
+    from src.generation.fundamental_seeds import FUNDAMENTAL_CORES
+    from src.lang.registry import default_registry
+
+    cfg = PortfolioConfig(neutralization=Neutralization.NONE, decay=0, truncation=0.10,
+                          scale_book=1.0, delay=1)
+
+    class _NoopLoop:
+        def run_from_seed(self, expression, on_progress=None):
+            return type("R", (), {"best_candidate": None})()
+
+    loop = build_closed_loop(data=small_panel, repo=repo, config=cfg,
+                             registry=default_registry(), loop=_NoopLoop(),
+                             pop_size=6, n_generations=0, top_k=3, max_ideas=2,
+                             curated_seeds=False)
+    exprs = [c.expr for c in loop.frontier_reserve]
+    for core in FUNDAMENTAL_CORES:
+        assert core in exprs
+
+
 # --- Task 5: mini-sweep cho đường sim-thẳng alt-data (flip dấu + biến thể decay) ---
 # Mỗi hypothesis alt-data trước đây chỉ được sim ĐÚNG 1 LẦN rồi vứt (bằng chứng: seed social
 # từng SAI DẤU, Sharpe -0.48 -> đáng lẽ +0.48 nếu flip; analyst revision 1-shot 0.64 rồi bỏ).
